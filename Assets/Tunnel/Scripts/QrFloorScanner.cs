@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Unity.XR.CoreUtils;
 using UnityEngine;
+using UnityEngine.XR.ARFoundation;
+using UnityEngine.XR.ARSubsystems;
 using ZXing;
 using ZXing.Common;
 
@@ -163,7 +165,13 @@ public class QrFloorScanner : MonoBehaviour
             }
 
             decodedCount++;
-            float floorY = FloorHeight();
+            float floorY = FloorHeight(out string floorSource);
+            if (floorY > headPose.position.y - 0.3f)
+            {
+                // A floor at head height can't be right (the code would be unreachable); assume a standing user.
+                floorSource += $" at {floorY:0.00} is too high, using head height - 1.6 m";
+                floorY = headPose.position.y - 1.6f;
+            }
             int placedNow = 0;
             for (int i = 0; i < k_OrientationCount; i++)
             {
@@ -189,7 +197,7 @@ public class QrFloorScanner : MonoBehaviour
             }
 
             if (decodedCount <= 3)
-                Log($"sighting {decodedCount}: corners {decoded.Value.points[0]} {decoded.Value.points[1]} {decoded.Value.points[2]}, head {headPose.position} {headPose.rotation.eulerAngles}, floor y {floorY:0.00}, placed under {placedNow} orientation(s)");
+                Log($"sighting {decodedCount}: corners {decoded.Value.points[0]} {decoded.Value.points[1]} {decoded.Value.points[2]}, head {headPose.position} {headPose.rotation.eulerAngles}, floor y {floorY:0.00} ({floorSource}), placed under {placedNow} orientation(s)");
 
             status(placedNow > 0
                 ? $"Seen the code {decodedCount} times. Hold still..."
@@ -447,11 +455,38 @@ public class QrFloorScanner : MonoBehaviour
         return sum / (float)((gray.Length + 96) / 97);
     }
 
-    static float FloorHeight()
+    /// <summary>
+    /// World height of the real floor: the room's floor plane from Space Setup (as the tunnel uses), or else the
+    /// tracking space's floor level. Not the XR Origin itself, which the template's table seating moves around.
+    /// </summary>
+    static float FloorHeight(out string source)
     {
-        // The XR Origin sits on the floor (floor tracking), so its height is the floor's.
+        var planes = FindAnyObjectByType<ARPlaneManager>();
+        if (planes != null)
+        {
+            float? floor = null;
+            foreach (var plane in planes.trackables)
+            {
+                if ((plane.classifications & PlaneClassifications.Floor) != 0)
+                    floor = floor.HasValue ? Mathf.Min(floor.Value, plane.transform.position.y) : plane.transform.position.y;
+            }
+
+            if (floor.HasValue)
+            {
+                source = "floor plane";
+                return floor.Value;
+            }
+        }
+
         var origin = FindAnyObjectByType<XROrigin>();
-        return origin != null ? origin.Origin.transform.position.y : 0f;
+        if (origin != null && origin.CameraFloorOffsetObject != null)
+        {
+            source = "tracking floor";
+            return origin.CameraFloorOffsetObject.transform.position.y;
+        }
+
+        source = "head height - 1.6 m";
+        return Camera.main.transform.position.y - 1.6f;
     }
 
     static void Log(string message) => Debug.Log("[QR] " + message);
