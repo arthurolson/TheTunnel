@@ -261,6 +261,26 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
 
         #endregion
 
+        #region Closing
+
+        /// <summary>Removes this panel for every player.</summary>
+        public void Close()
+        {
+            if (IsSpawned)
+                CloseRpc();
+            else
+                Destroy(gameObject);
+        }
+
+        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+        void CloseRpc()
+        {
+            if (NetworkObject != null && NetworkObject.IsSpawned)
+                NetworkObject.Despawn(true);
+        }
+
+        #endregion
+
         #region Resizing
 
         void OnCornerSelected(int corner, SelectEnterEventArgs args)

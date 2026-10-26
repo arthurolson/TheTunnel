@@ -21,6 +21,11 @@ int _IsOcclusionOn = 1;
 // floor lying on the real floor stay visible while a chair or person standing on it still hides it.
 float _OcclusionDepthBias;
 
+// Tunnel addition: the headset's live depth gets noisy a few meters away, which shows up as holes in large surfaces.
+// Virtual surfaces farther than this (meters) aren't occluded by it (the room mesh occluder handles walls and
+// ceilings at any distance). 0 = no limit.
+float _OcclusionMaxDistance;
+
 float SampleEnvironmentDepth(const float2 uv)
 {
     return SAMPLE_TEXTURE2D_ARRAY(_EnvironmentDepthTexture, sampler_EnvironmentDepthTexture, uv, unity_StereoEyeIndex).r;
@@ -148,7 +153,10 @@ void SetOcclusion_float(const float3 positionWS, float4 color, out float4 result
     const float sceneDepthNDC = clipSpaceDepthRelativePos.z / clipSpaceDepthRelativePos.w;
     const float linearSceneDepth = max(LinearizeDepth(sceneDepthNDC) - _OcclusionDepthBias, 0.01f);
 
-    resultColor.a *= ComputePixelVisibility(environmentDepth, linearSceneDepth);
+    float visibility = ComputePixelVisibility(environmentDepth, linearSceneDepth);
+    if (_OcclusionMaxDistance > 0)
+        visibility = lerp(visibility, 1.0f, saturate((linearSceneDepth - _OcclusionMaxDistance) / 0.5f));
+    resultColor.a *= visibility;
     resultColor.rgb *= resultColor.a;
 }
 
