@@ -22,9 +22,14 @@ int _IsOcclusionOn = 1;
 float _OcclusionDepthBias;
 
 // Tunnel addition: the headset's live depth gets noisy a few meters away, which shows up as holes in large surfaces.
-// Virtual surfaces farther than this (meters) aren't occluded by it (the room mesh occluder handles walls and
-// ceilings at any distance). 0 = no limit.
+// Virtual surfaces farther than this (meters) aren't occluded by it. 0 = no limit.
 float _OcclusionMaxDistance;
+
+// Tunnel addition: real surfaces higher than this above the floor (meters) don't hide the virtual surface, so the
+// tunnel covers a real ceiling that's lower than its arch while people and furniture below still hide it. 0 = off.
+float _OcclusionIgnoreAbove;
+// World height of the real floor, set by the tunnel from the room's floor plane.
+float _TunnelFloorY;
 
 float SampleEnvironmentDepth(const float2 uv)
 {
@@ -156,6 +161,13 @@ void SetOcclusion_float(const float3 positionWS, float4 color, out float4 result
     float visibility = ComputePixelVisibility(environmentDepth, linearSceneDepth);
     if (_OcclusionMaxDistance > 0)
         visibility = lerp(visibility, 1.0f, saturate((linearSceneDepth - _OcclusionMaxDistance) / 0.5f));
+    if (_OcclusionIgnoreAbove > 0)
+    {
+        // Where is the real surface seen at this pixel? Same line of sight, at the real depth instead of ours.
+        const float unbiasedSceneDepth = max(LinearizeDepth(sceneDepthNDC), 0.01f);
+        const float3 realPoint = _WorldSpaceCameraPos + (positionWS - _WorldSpaceCameraPos) * (SampleEnvironmentDepthLinear(uv) / unbiasedSceneDepth);
+        visibility = lerp(visibility, 1.0f, saturate((realPoint.y - _TunnelFloorY - _OcclusionIgnoreAbove) / 0.1f));
+    }
     resultColor.a *= visibility;
     resultColor.rgb *= resultColor.a;
 }

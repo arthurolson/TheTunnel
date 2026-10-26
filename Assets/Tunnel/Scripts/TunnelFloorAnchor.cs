@@ -27,6 +27,8 @@ public class TunnelFloorAnchor : MonoBehaviour
     [Tooltip("Ignore floor changes smaller than this (meters).")]
     float m_Tolerance = 0.01f;
 
+    static readonly int k_FloorYProperty = Shader.PropertyToID("_TunnelFloorY");
+
     ARPlaneManager m_Planes;
     float? m_FloorHeight;
 
@@ -66,7 +68,11 @@ public class TunnelFloorAnchor : MonoBehaviour
         }
 
         if (floor.HasValue)
+        {
             m_FloorHeight = floor;
+            // The occlusion shader measures "real surfaces above 2 m" (the ceiling) from here.
+            Shader.SetGlobalFloat(k_FloorYProperty, floor.Value);
+        }
     }
 
     void LateUpdate()

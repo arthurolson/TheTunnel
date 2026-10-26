@@ -106,6 +106,7 @@ Material:
     - _GlossyReflections: 0
     - _Metallic: 0
     - _OcclusionDepthBias: 0.03
+    - _OcclusionIgnoreAbove: 0
     - _OcclusionMaxDistance: 3.5
     - _OcclusionStrength: 1
     - _Parallax: 0.005

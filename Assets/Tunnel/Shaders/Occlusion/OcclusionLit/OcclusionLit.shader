@@ -62,6 +62,7 @@ Shader "Occlusion/OcclusionLit"
         // Tunnel addition: real objects within this distance (m) in front of the surface don't occlude it
         _OcclusionDepthBias("Occlusion Depth Bias (m)", Float) = 0.0
         _OcclusionMaxDistance("Occlusion Max Distance (m, 0 = none)", Float) = 0.0
+        _OcclusionIgnoreAbove("Ignore Real Surfaces Above Floor (m, 0 = off)", Float) = 0.0
 
         [ToggleUI] _ReceiveShadows("Receive Shadows", Float) = 1.0
         // Editmode props
