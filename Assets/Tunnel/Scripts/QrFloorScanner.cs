@@ -89,6 +89,12 @@ public class QrFloorScanner : MonoBehaviour
 
     public bool isScanning => m_Scanning;
 
+    /// <summary>The code was just seen here (centre on the floor, yaw of its top edge), for on-floor feedback.</summary>
+    public event Action<Vector3, float> sighted;
+
+    /// <summary>Scanning ended with this measurement (null if it failed).</summary>
+    public event Action<Measurement?> finished;
+
     public void Scan(Action<string> status, Action<Measurement?> done)
     {
         if (!m_Scanning)
@@ -106,6 +112,7 @@ public class QrFloorScanner : MonoBehaviour
             Log("camera didn't start: " + m_Camera.error);
             status(m_Camera.error ?? "The camera didn't start.");
             m_Scanning = false;
+            finished?.Invoke(null);
             done(null);
             yield break;
         }
@@ -173,6 +180,14 @@ public class QrFloorScanner : MonoBehaviour
                 }
             }
 
+            // Show where it was seen, as placed under the most likely orientation so far.
+            int leading = m_KnownOrientation ?? Leading(placements);
+            if (leading >= 0 && placements[leading].Count > 0 && placedNow > 0)
+            {
+                var latest = placements[leading][placements[leading].Count - 1];
+                sighted?.Invoke(latest.position, Mathf.Atan2(latest.forward.x, latest.forward.z) * Mathf.Rad2Deg);
+            }
+
             if (decodedCount <= 3)
                 Log($"sighting {decodedCount}: corners {decoded.Value.points[0]} {decoded.Value.points[1]} {decoded.Value.points[2]}, head {headPose.position} {headPose.rotation.eulerAngles}, floor y {floorY:0.00}, placed under {placedNow} orientation(s)");
 
@@ -194,6 +209,7 @@ public class QrFloorScanner : MonoBehaviour
                     ? "Saw a QR code, but not the tunnel's. Use the code from Printables/TheTunnel-floor-QR.pdf."
                     : "Couldn't see the QR code. Stand next to it, look down at it from about 1 m, and try again.")
                 : $"Saw the code {decodedCount} times but couldn't place it on the floor reliably. Hold still, look down at it, and try again.");
+            finished?.Invoke(null);
             done(null);
             yield break;
         }
@@ -201,7 +217,20 @@ public class QrFloorScanner : MonoBehaviour
         m_KnownOrientation = best;
         var result = Average(placements[best]);
         Log($"measured {result.position} yaw {result.yaw:0.0} from {result.samples} sightings, spread {result.spread * 100f:0.0} cm, {new Orientation(best)}");
+        finished?.Invoke(result);
         done(result);
+    }
+
+    static int Leading(List<Placement>[] placements)
+    {
+        int leading = -1;
+        for (int i = 0; i < placements.Length; i++)
+        {
+            if (leading < 0 || placements[i].Count > placements[leading].Count)
+                leading = i;
+        }
+
+        return leading;
     }
 
     bool Enough(List<Placement>[] placements)
