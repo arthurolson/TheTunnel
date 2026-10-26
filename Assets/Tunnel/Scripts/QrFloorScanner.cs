@@ -12,6 +12,8 @@ using ZXing.Common;
 /// centre and the direction its top edge faces, in this headset's world. Each camera image is decoded with ZXing on a
 /// worker thread; the code's three corner finder patterns are turned into rays and dropped onto the floor plane.
 /// Several sightings are averaged. Every headset measures the same printed code, so their measurements can be lined up.
+/// The camera image's exact orientation isn't documented, so every sighting is placed under each possible
+/// orientation; the right one is the one whose placements stay put as the head moves and come out at the printed size.
 /// </summary>
 public class QrFloorScanner : MonoBehaviour
 {
@@ -33,6 +35,15 @@ public class QrFloorScanner : MonoBehaviour
     [Tooltip("Sightings further than this from the average (meters) are left out.")]
     float m_OutlierDistance = 0.08f;
 
+    [SerializeField]
+    [Tooltip("Distance between the centres of two corner squares on the printed code (meters): 14 of its 25 modules " +
+        "for the 19 cm print in Printables/.")]
+    float m_FinderSpacing = 0.1064f;
+
+    [SerializeField]
+    [Tooltip("Placements whose corner squares are this far from a right-angled, equal-sided corner are rejected.")]
+    float m_MaxSquarenessError = 0.35f;
+
     public struct Measurement
     {
         public Vector3 position;
@@ -46,11 +57,35 @@ public class QrFloorScanner : MonoBehaviour
     {
         public string text;
         public Vector2[] points; // the three corner finder centres, in image pixels (y down)
+        public int width, height;
+    }
+
+    /// <summary>One way of reading the camera image: mirrored or not along each axis, Android-to-Unity axis turn or not.</summary>
+    readonly struct Orientation
+    {
+        public readonly bool flipX, flipY, flipAxes;
+
+        public Orientation(int index)
+        {
+            flipX = (index & 1) != 0;
+            flipY = (index & 2) != 0;
+            flipAxes = (index & 4) == 0; // Meta's convention first
+        }
+
+        public override string ToString() => $"flipX={flipX} flipY={flipY} axisTurn={flipAxes}";
+    }
+
+    const int k_OrientationCount = 8;
+
+    struct Placement
+    {
+        public Vector3 position, forward;
+        public float size; // measured corner-square spacing (meters)
     }
 
     bool m_Scanning;
     byte[] m_Gray;
-    bool? m_FlipY; // the camera's row order, found from the first good sightings
+    int? m_KnownOrientation; // once found, later scans use it directly
 
     public bool isScanning => m_Scanning;
 
@@ -68,6 +103,7 @@ public class QrFloorScanner : MonoBehaviour
         yield return m_Camera.StartCamera(ok => started = ok);
         if (!started)
         {
+            Log("camera didn't start: " + m_Camera.error);
             status(m_Camera.error ?? "The camera didn't start.");
             m_Scanning = false;
             done(null);
@@ -80,11 +116,15 @@ public class QrFloorScanner : MonoBehaviour
             Options = new DecodingOptions { PossibleFormats = new List<BarcodeFormat> { BarcodeFormat.QR_CODE }, TryHarder = true },
         };
 
-        var samples = new List<(Vector3 position, Vector3 forward)>();
-        float deadline = Time.unscaledTime + m_Timeout;
-        status("Look at the QR code on the floor and hold still...");
+        var placements = new List<Placement>[k_OrientationCount];
+        for (int i = 0; i < k_OrientationCount; i++)
+            placements[i] = new List<Placement>();
 
-        while (samples.Count < m_SamplesNeeded && Time.unscaledTime < deadline)
+        int frames = 0, decodedCount = 0, otherCodes = 0;
+        float deadline = Time.unscaledTime + m_Timeout;
+        status("Look down at the QR code on the floor and hold still...");
+
+        while (Time.unscaledTime < deadline && !Enough(placements))
         {
             var head = Camera.main.transform;
             var headPose = new Pose(head.position, head.rotation);
@@ -103,34 +143,118 @@ public class QrFloorScanner : MonoBehaviour
             while (!task.IsCompleted)
                 yield return null;
 
+            frames++;
             var decoded = task.Result;
+            if (frames == 1 || (frames % 40 == 0 && decodedCount == 0))
+                Log($"frame {frames}: {w}x{h}, mean brightness {MeanBrightness(gray):0}, {(decoded == null ? "no code" : "code: " + decoded.Value.text)}");
             if (decoded == null)
                 continue;
-
-            float floorY = FloorHeight();
-            var cameraPose = m_Camera.GetCameraPose(headPose);
-            if (TryPlaceOnFloor(decoded.Value, cameraPose, floorY, out var position, out var forward))
+            if (!decoded.Value.text.StartsWith(CodePrefix))
             {
-                samples.Add((position, forward));
-                status($"Seen the code {samples.Count}/{m_SamplesNeeded} times. Hold still...");
+                otherCodes++;
+                continue;
             }
+
+            decodedCount++;
+            float floorY = FloorHeight();
+            int placedNow = 0;
+            for (int i = 0; i < k_OrientationCount; i++)
+            {
+                if (m_KnownOrientation.HasValue && m_KnownOrientation.Value != i)
+                    continue;
+                if (TryPlaceOnFloor(decoded.Value, headPose, new Orientation(i), floorY, out var placement, out string why))
+                {
+                    placements[i].Add(placement);
+                    placedNow++;
+                }
+                else if (decodedCount <= 2)
+                {
+                    Log($"sighting {decodedCount}, {new Orientation(i)}: {why}");
+                }
+            }
+
+            if (decodedCount <= 3)
+                Log($"sighting {decodedCount}: corners {decoded.Value.points[0]} {decoded.Value.points[1]} {decoded.Value.points[2]}, head {headPose.position} {headPose.rotation.eulerAngles}, floor y {floorY:0.00}, placed under {placedNow} orientation(s)");
+
+            status(placedNow > 0
+                ? $"Seen the code {decodedCount} times. Hold still..."
+                : $"Seen the code {decodedCount} times but can't place it on the floor yet. Look more steeply down at it...");
         }
 
         m_Camera.Stop();
         m_Scanning = false;
 
-        if (samples.Count < m_SamplesNeeded / 2)
+        int best = PickOrientation(placements, out string table);
+        Log($"{frames} frames, {decodedCount} sightings of the code, {otherCodes} other codes.{table}");
+
+        if (best < 0)
         {
-            status(samples.Count == 0
-                ? "Couldn't see the QR code. Stand about 1 m from it, look down at it, and try again."
-                : "Only saw the code a few times. Hold still while looking at it and try again.");
+            status(decodedCount == 0
+                ? (otherCodes > 0
+                    ? "Saw a QR code, but not the tunnel's. Use the code from Printables/TheTunnel-floor-QR.pdf."
+                    : "Couldn't see the QR code. Stand next to it, look down at it from about 1 m, and try again.")
+                : $"Saw the code {decodedCount} times but couldn't place it on the floor reliably. Hold still, look down at it, and try again.");
             done(null);
             yield break;
         }
 
-        var result = Average(samples);
-        Debug.Log($"[QR] measured {result.position} yaw {result.yaw:0.0} from {result.samples} sightings, spread {result.spread * 100f:0.0} cm, flipY={m_FlipY}");
+        m_KnownOrientation = best;
+        var result = Average(placements[best]);
+        Log($"measured {result.position} yaw {result.yaw:0.0} from {result.samples} sightings, spread {result.spread * 100f:0.0} cm, {new Orientation(best)}");
         done(result);
+    }
+
+    bool Enough(List<Placement>[] placements)
+    {
+        // Enough sightings for a steady average, and (the first time) for telling the orientations apart.
+        int needed = m_KnownOrientation.HasValue ? m_SamplesNeeded : m_SamplesNeeded + 4;
+        foreach (var list in placements)
+        {
+            if (list.Count >= needed)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>The orientation whose placements agree best with each other and with the printed size; -1 if none.</summary>
+    int PickOrientation(List<Placement>[] placements, out string table)
+    {
+        int best = -1;
+        float bestScore = float.MaxValue;
+        table = "";
+        for (int i = 0; i < k_OrientationCount; i++)
+        {
+            var list = placements[i];
+            if (list.Count == 0)
+                continue;
+
+            Vector3 mean = Vector3.zero;
+            float size = 0f;
+            foreach (var p in list)
+            {
+                mean += p.position;
+                size += p.size;
+            }
+
+            mean /= list.Count;
+            size /= list.Count;
+            float rms = 0f;
+            foreach (var p in list)
+                rms += (p.position - mean).sqrMagnitude;
+            rms = Mathf.Sqrt(rms / list.Count);
+            float sizeError = Mathf.Abs(size - m_FinderSpacing) / m_FinderSpacing;
+            float score = rms + 0.3f * sizeError;
+            table += $"\n  {new Orientation(i)}: {list.Count} placed, spread {rms * 100f:0.0} cm, size {size * 100f:0.0} cm (printed {m_FinderSpacing * 100f:0.0})";
+
+            if (list.Count >= Mathf.Max(3, m_SamplesNeeded / 2) && rms < 0.15f && score < bestScore)
+            {
+                bestScore = score;
+                best = i;
+            }
+        }
+
+        return best;
     }
 
     /// <summary>Worker thread: grey image (rows top to bottom) and ZXing decode.</summary>
@@ -156,55 +280,47 @@ public class QrFloorScanner : MonoBehaviour
             return null;
         }
 
-        if (result == null || result.Text == null || !result.Text.StartsWith(CodePrefix) ||
-            result.ResultPoints == null || result.ResultPoints.Length < 3)
+        if (result == null || result.Text == null || result.ResultPoints == null || result.ResultPoints.Length < 3)
             return null;
 
         var points = new Vector2[3];
         for (int i = 0; i < 3; i++)
             points[i] = new Vector2(result.ResultPoints[i].X, result.ResultPoints[i].Y);
-        return new Decoded { text = result.Text, points = points };
+        return new Decoded { text = result.Text, points = points, width = w, height = h };
     }
 
-    bool TryPlaceOnFloor(Decoded decoded, Pose cameraPose, float floorY, out Vector3 position, out Vector3 forward)
+    bool TryPlaceOnFloor(Decoded decoded, Pose headPose, Orientation orientation, float floorY, out Placement placement, out string why)
     {
-        position = forward = default;
-
-        // Try the camera's row order both ways until one is known: the right one puts a square code on the floor.
-        float bestScore = float.MaxValue;
-        bool bestFlip = false;
-        Vector3[] best = null;
-        foreach (bool flip in m_FlipY.HasValue ? new[] { m_FlipY.Value } : new[] { false, true })
+        placement = default;
+        var cameraPose = m_Camera.GetCameraPose(headPose, orientation.flipAxes);
+        var corners = new Vector3[3];
+        for (int i = 0; i < 3; i++)
         {
-            var corners = new Vector3[3];
-            bool ok = true;
-            for (int i = 0; i < 3 && ok; i++)
-                ok = TryHitFloor(m_Camera.PixelToRay(decoded.points[i], cameraPose, flip), floorY, out corners[i]);
-            if (!ok)
-                continue;
-
-            OrderCorners(corners);
-            float score = SquarenessError(corners[0], corners[1], corners[2]);
-            if (score < bestScore)
+            var ray = m_Camera.PixelToRay(decoded.points[i], cameraPose, orientation.flipX, orientation.flipY);
+            if (!TryHitFloor(ray, floorY, out corners[i]))
             {
-                bestScore = score;
-                bestFlip = flip;
-                best = corners;
+                why = $"corner ray doesn't reach the floor (direction {ray.direction})";
+                return false;
             }
         }
 
-        if (best == null || bestScore > 0.25f)
-            return false;
-        if (!m_FlipY.HasValue)
+        OrderCorners(corners);
+        float squareness = SquarenessError(corners[0], corners[1], corners[2]);
+        if (squareness > m_MaxSquarenessError)
         {
-            m_FlipY = bestFlip;
-            Debug.Log($"[QR] camera rows run {(bestFlip ? "bottom-up" : "top-down")} (squareness error {bestScore:0.000})");
+            why = $"not square on the floor (error {squareness:0.00})";
+            return false;
         }
 
-        Vector3 bottomLeft = best[0], topLeft = best[1], topRight = best[2];
-        position = (bottomLeft + topRight) * 0.5f;
-        forward = Vector3.ProjectOnPlane(topLeft - bottomLeft, Vector3.up).normalized;
-        return forward.sqrMagnitude > 0.5f;
+        Vector3 bottomLeft = corners[0], topLeft = corners[1], topRight = corners[2];
+        placement = new Placement
+        {
+            position = (bottomLeft + topRight) * 0.5f,
+            forward = Vector3.ProjectOnPlane(topLeft - bottomLeft, Vector3.up).normalized,
+            size = ((topLeft - bottomLeft).magnitude + (topRight - topLeft).magnitude) * 0.5f,
+        };
+        why = null;
+        return placement.forward.sqrMagnitude > 0.5f;
     }
 
     /// <summary>
@@ -258,20 +374,20 @@ public class QrFloorScanner : MonoBehaviour
         return Mathf.Abs(1f - Mathf.Min(la, lb) / Mathf.Max(la, lb)) + Mathf.Abs(Vector3.Dot(a / la, b / lb));
     }
 
-    Measurement Average(List<(Vector3 position, Vector3 forward)> samples)
+    Measurement Average(List<Placement> samples)
     {
-        Vector3 Mean(IEnumerable<(Vector3 position, Vector3 forward)> set, out int count, out Vector3 meanForward)
+        Vector3 Mean(IEnumerable<Placement> set, out int count, out Vector3 forwardSum)
         {
-            Vector3 sum = Vector3.zero, fsum = Vector3.zero;
+            Vector3 sum = Vector3.zero;
+            forwardSum = Vector3.zero;
             count = 0;
             foreach (var s in set)
             {
                 sum += s.position;
-                fsum += s.forward;
+                forwardSum += s.forward;
                 count++;
             }
 
-            meanForward = fsum;
             return count > 0 ? sum / count : Vector3.zero;
         }
 
@@ -279,7 +395,7 @@ public class QrFloorScanner : MonoBehaviour
         var kept = samples.FindAll(s => (s.position - mean).magnitude <= m_OutlierDistance);
         if (kept.Count < 3)
             kept = samples;
-        mean = Mean(kept, out int n, out var forwardSum);
+        mean = Mean(kept, out int n, out var forwardTotal);
 
         float spread = 0f;
         foreach (var s in kept)
@@ -288,10 +404,18 @@ public class QrFloorScanner : MonoBehaviour
         return new Measurement
         {
             position = mean,
-            yaw = Mathf.Atan2(forwardSum.x, forwardSum.z) * Mathf.Rad2Deg,
+            yaw = Mathf.Atan2(forwardTotal.x, forwardTotal.z) * Mathf.Rad2Deg,
             samples = n,
             spread = spread,
         };
+    }
+
+    static float MeanBrightness(byte[] gray)
+    {
+        long sum = 0;
+        for (int i = 0; i < gray.Length; i += 97)
+            sum += gray[i];
+        return sum / (float)((gray.Length + 96) / 97);
     }
 
     static float FloorHeight()
@@ -300,4 +424,6 @@ public class QrFloorScanner : MonoBehaviour
         var origin = FindAnyObjectByType<XROrigin>();
         return origin != null ? origin.Origin.transform.position.y : 0f;
     }
+
+    static void Log(string message) => Debug.Log("[QR] " + message);
 }

@@ -121,21 +121,29 @@ public class PassthroughCameraReader : MonoBehaviour
         return m_Texture.GetPixels32(m_Pixels);
     }
 
-    /// <summary>The camera's pose in the world for a given head (main camera) pose.</summary>
-    public Pose GetCameraPose(Pose head)
+    /// <summary>
+    /// The camera's pose in the world for a given head (main camera) pose. <paramref name="flipAxes"/> applies the
+    /// 180-degree turn Meta's sample uses to go from Android's camera axes to Unity's; whether it's needed is checked
+    /// at runtime (see <see cref="QrFloorScanner"/>).
+    /// </summary>
+    public Pose GetCameraPose(Pose head, bool flipAxes = true)
     {
         var position = head.position + head.rotation * m_HeadFromCamera.position;
-        var rotation = head.rotation * m_HeadFromCamera.rotation * Quaternion.Euler(180f, 0f, 0f);
+        var rotation = head.rotation * m_HeadFromCamera.rotation;
+        if (flipAxes)
+            rotation *= Quaternion.Euler(180f, 0f, 0f);
         return new Pose(position, rotation);
     }
 
     /// <summary>
-    /// World ray through an image pixel (x right, y down from the top-left of the texture). With
-    /// <paramref name="flipY"/> the pixel's y is measured from the bottom instead (the camera's row order is checked
-    /// at runtime, see <see cref="QrFloorScanner"/>).
+    /// World ray through an image pixel (x right, y down from the top-left of the texture). <paramref name="flipX"/>
+    /// and <paramref name="flipY"/> mirror the pixel first (the image's orientation is checked at runtime, see
+    /// <see cref="QrFloorScanner"/>).
     /// </summary>
-    public Ray PixelToRay(Vector2 pixel, Pose cameraPose, bool flipY)
+    public Ray PixelToRay(Vector2 pixel, Pose cameraPose, bool flipX, bool flipY)
     {
+        if (flipX)
+            pixel.x = width - pixel.x;
         if (flipY)
             pixel.y = height - pixel.y;
 
