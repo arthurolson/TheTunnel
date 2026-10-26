@@ -1,0 +1,57 @@
+# ---- Unity: generated / cached (rebuilt automatically) ----
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+*_BackUpThisFolder_ButDontShipItWithYourGame/
+*_BurstDebugInformation_DoNotShip/
+/[Aa]ssets/AssetStoreTools*
+
+# ---- IDE / OS ----
+.vs/
+.vscode/
+.idea/
+.gradle/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+sysinfo.txt
+crashlytics-build.properties
+.DS_Store
+
+# ---- Build outputs ----
+*.apk
+*.aab
+*.idsig
+*.unitypackage
+
+# ---- Signing: never commit (public repo) ----
+/Keystore/
+*.keystore
+*.jks
+
+# ---- Local tools, downloads and backups ----
+/.utmp/
+/.claude/
+/.mcp.json
+/tunnel-textures/
+/*.jpg
+/*.hdr
+/Packages/*.bak-*
