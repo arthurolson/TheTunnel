@@ -24,6 +24,10 @@ public class BrowserBookmarks : MonoBehaviour
     [SerializeField]
     BrowserContainer m_Container;
 
+    [SerializeField]
+    [Tooltip("Opens saved pages for every player (optional).")]
+    BrowserSync m_Sync;
+
     [Header("Address bar buttons")]
     [SerializeField]
     Button m_FavoriteButton;
@@ -129,7 +133,9 @@ public class BrowserBookmarks : MonoBehaviour
     {
         if (m_ListPanel != null)
             m_ListPanel.SetActive(false);
-        if (m_Container != null && m_Container.browser != null)
+        if (m_Sync != null)
+            m_Sync.LoadUrl(url);
+        else if (m_Container != null && m_Container.browser != null)
             m_Container.browser.LoadUrl(url);
     }
 

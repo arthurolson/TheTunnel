@@ -8,7 +8,7 @@ using UnityEngine.EventSystems;
 /// the touch-down is sent at the start point, then the movement. If it is released without moving that far, a
 /// quick touch-down + touch-up is sent at the start point, however long it was held, so the page always sees a
 /// clean tap (buttons click, text fields focus) rather than a long-press. Scroll input (controller thumbstick)
-/// scrolls the page.
+/// scrolls the page. Everything goes through <see cref="BrowserSync"/> when there is one, so other players see it.
 /// </summary>
 [RequireComponent(typeof(RectTransform))]
 public class StableBrowserInputListener : MonoBehaviour, IPointerDownHandler, IDragHandler, IPointerUpHandler, IPointerExitHandler, IScrollHandler
@@ -19,6 +19,10 @@ public class StableBrowserInputListener : MonoBehaviour, IPointerDownHandler, ID
 
     [SerializeField]
     BrowserContainer m_Container;
+
+    [SerializeField]
+    [Tooltip("Shares this panel's input with the other players (optional).")]
+    BrowserSync m_Sync;
 
     [SerializeField]
     [Tooltip("Movement (in page pixels) a press may wobble before it counts as a drag instead of a tap.")]
@@ -82,11 +86,11 @@ public class StableBrowserInputListener : MonoBehaviour, IPointerDownHandler, ID
 
             // Became a drag: put the finger down where the press started, then follow the pointer.
             m_Dragging = true;
-            m_DownTime = browser.TouchEvent((int)m_DownPixels.x, (int)m_DownPixels.y, k_ActionDown, m_DownTime);
+            SendTouch(m_DownPixels, k_ActionDown);
             Log($"drag starts at {m_DownPixels}");
         }
 
-        browser.TouchEvent((int)pixels.x, (int)pixels.y, k_ActionDrag, m_DownTime);
+        SendTouch(pixels, k_ActionDrag);
     }
 
     public void OnPointerUp(PointerEventData eventData)
@@ -110,7 +114,10 @@ public class StableBrowserInputListener : MonoBehaviour, IPointerDownHandler, ID
             return;
         Vector2 delta = eventData.scrollDelta * m_ScrollPixelsPerUnit;
         // Pushing the stick up/forward means "scroll up" (content moves down), i.e. a negative page scroll.
-        browser.ScrollBy((int)delta.x, (int)-delta.y);
+        if (m_Sync != null)
+            m_Sync.ScrollBy((int)delta.x, (int)-delta.y);
+        else
+            browser.ScrollBy((int)delta.x, (int)-delta.y);
     }
 
     void Release()
@@ -120,13 +127,27 @@ public class StableBrowserInputListener : MonoBehaviour, IPointerDownHandler, ID
         {
             // A press that never moved is sent now as a quick tap: down and up at the same spot.
             if (!m_Dragging)
-                m_DownTime = browser.TouchEvent((int)at.x, (int)at.y, k_ActionDown, m_DownTime);
-            browser.TouchEvent((int)at.x, (int)at.y, k_ActionUp, m_DownTime);
+                SendTouch(at, k_ActionDown);
+            SendTouch(at, k_ActionUp);
         }
         Log($"{(m_Dragging ? "drag end" : "tap")} at {at}");
         m_PointerId = null;
         m_Dragging = false;
         m_LastReleaseTime = Time.unscaledTime;
+    }
+
+    void SendTouch(Vector2 pixels, int action)
+    {
+        if (m_Sync != null)
+        {
+            Vector2Int view = browser.viewSize;
+            m_Sync.Touch(new Vector2(pixels.x / view.x, pixels.y / view.y), action);
+            return;
+        }
+
+        long downTime = browser.TouchEvent((int)pixels.x, (int)pixels.y, action, m_DownTime);
+        if (action == k_ActionDown)
+            m_DownTime = downTime;
     }
 
     void Log(string message)

@@ -42,7 +42,9 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
             float currentAngle = GetRotationAngleBasedOnSeatNum(prevSeat);
             float newAngle = GetRotationAngleBasedOnSeatNum(seatNum);
             float rotationAmount = newAngle - currentAngle;
-            m_XROrigin.transform.RotateAround(transform.position, transform.up, rotationAmount);
+            // A player aligned to the shared room stays where they really are.
+            if (!CoLocationState.isAligned)
+                m_XROrigin.transform.RotateAround(transform.position, transform.up, rotationAmount);
             m_OnSeatChanged.Invoke(seatNum);
 
             transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
@@ -68,6 +70,8 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
 
         public void ResetSeatRotation()
         {
+            if (CoLocationState.isAligned)
+                return;
             Vector3 headForward = new Vector3(m_XROrigin.transform.forward.x, 0, m_XROrigin.transform.forward.z);
             Vector3 seatForward = new Vector3(m_TableTop.GetSeat(TableTop.k_CurrentSeat).forward.x, 0, m_TableTop.GetSeat(TableTop.k_CurrentSeat).forward.z);
             float angle = Vector3.SignedAngle(headForward, seatForward, Vector3.up);
@@ -77,6 +81,8 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
 
         public void ResetToSeatDefault()
         {
+            if (CoLocationState.isAligned)
+                return;
             var seat = m_TableTop.GetSeat(TableTop.k_CurrentSeat);
 
             var seatPosition = seat.position;

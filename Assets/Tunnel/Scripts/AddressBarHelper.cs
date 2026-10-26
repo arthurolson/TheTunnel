@@ -4,11 +4,15 @@ using UnityEngine;
 /// <summary>
 /// Makes the browser panel's address bar behave like a normal browser's: it shows the current page address after
 /// each load, and tapping it clears the field and gives it the keyboard so a new address can be typed straight away.
+/// The player typing an address becomes the panel's driver, so the page they open is shared with everyone.
 /// </summary>
 public class AddressBarHelper : MonoBehaviour
 {
     [SerializeField]
     SearchBar m_SearchBar;
+
+    [SerializeField]
+    BrowserSync m_Sync;
 
     /// <summary>Wire to the browser's page-finished event.</summary>
     public void ShowUrl(string url)
@@ -24,6 +28,8 @@ public class AddressBarHelper : MonoBehaviour
     {
         if (m_SearchBar == null)
             return;
+        if (m_Sync != null)
+            m_Sync.MarkInteraction();
         m_SearchBar.m_text = string.Empty;
         m_SearchBar.Display();
         m_SearchBar.OnFocus(true);

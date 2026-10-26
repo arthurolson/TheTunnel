@@ -102,7 +102,9 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
             m_Rigidbody.MovePosition(transform.position);
             m_Rigidbody.MoveRotation(transform.rotation);
 
-            // Update the player's position and rotation
+            // Update the player's position and rotation (not for a player aligned to the shared room)
+            if (CoLocationState.isAligned)
+                return;
             m_XROrigin.transform.position = newPlayerTransform.GetColumn(3);
             m_XROrigin.transform.rotation = Quaternion.LookRotation(
                 newPlayerTransform.GetColumn(2),
