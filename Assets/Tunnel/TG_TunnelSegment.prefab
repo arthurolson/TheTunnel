@@ -1619,6 +1619,7 @@ GameObject:
   - component: {fileID: 3205038885679434311}
   - component: {fileID: 6400463551186351875}
   - component: {fileID: 2806681360398830141}
+  - component: {fileID: 4410724316060288426}
   m_Layer: 0
   m_Name: TG_TunnelSegment
   m_TagString: Untagged
@@ -1975,6 +1976,9 @@ MonoBehaviour:
   ShowTopMostFoldoutHeaderGroup: 1
   m_Prefabs: {fileID: 11400000, guid: f1344fd65db284c9d90286dab1e2abae, type: 2}
   m_Geometry: {fileID: 1285800884983982015}
+  m_Link: {fileID: 4410724316060288426}
+  m_Appearance: {fileID: 7058476660351951034}
+  m_Texture: {fileID: 6400463551186351875}
   m_AddSegmentButton: {fileID: 1279330932821616888}
   m_RemoveSegmentButton: {fileID: 4384830301033204515}
   m_RemoveSegmentLabel: {fileID: 122072063744172784}
@@ -2025,6 +2029,25 @@ MonoBehaviour:
   m_RowSpacing: 58
   m_GapFromList: 0.05
   m_GapFromWall: 0.003
+--- !u!114 &4410724316060288426
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1695236261648112303}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bfec69182c59a43edae29b873e487890, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::TunnelSegmentLink
+  ShowTopMostFoldoutHeaderGroup: 1
+  m_Geometry: {fileID: 1285800884983982015}
+  m_Grab: {fileID: 554650276495189184}
+  m_FloorAnchor: {fileID: 7981609930430811299}
+  m_Handles:
+  - {fileID: 4746794271692519557}
+  - {fileID: 3096914743889537974}
 --- !u!1 &1823973959713484104
 GameObject:
   m_ObjectHideFlags: 0

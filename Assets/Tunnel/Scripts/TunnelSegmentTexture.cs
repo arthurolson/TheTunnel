@@ -56,6 +56,24 @@ public class TunnelSegmentTexture : NetworkBehaviour
 
     public bool isListOpen => m_ListPanel != null && m_ListPanel.activeSelf;
 
+    /// <summary>The texture on this segment's walls (empty for none).</summary>
+    public string textureName => currentName;
+
+    /// <summary>Server (or offline): put this texture on the segment, e.g. the one of the segment that added it.</summary>
+    public void SetTexture(string name)
+    {
+        if (IsSpawned)
+        {
+            if (IsServer)
+                m_TextureName.Value = new FixedString128Bytes(name ?? string.Empty);
+        }
+        else
+        {
+            m_LocalName = name ?? string.Empty;
+            Apply(m_LocalName);
+        }
+    }
+
     void Awake()
     {
         if (m_RowTemplate != null)

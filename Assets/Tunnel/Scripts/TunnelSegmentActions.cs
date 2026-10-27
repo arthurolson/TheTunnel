@@ -8,7 +8,8 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// <summary>
 /// The Tunnel Segment's action buttons. Any player can press them; the server does the spawning and removal so
 /// everyone sees the same tunnel. Works locally when not connected.
-///  - Add Segment: a new segment joined to this one's far (+Z) end, same height and direction.
+///  - Add Segment: a new segment snapped to the far end of this tunnel's last segment and locked to it, with the
+///    colour and texture of the segment the button was pressed on.
 ///  - Remove Segment: deletes this segment (press twice within a few seconds to confirm).
 ///  - New Browser: a browser panel on this segment's wall the viewer is facing, level with their position.
 /// </summary>
@@ -19,6 +20,15 @@ public class TunnelSegmentActions : NetworkBehaviour
 
     [SerializeField]
     TunnelSegmentGeometry m_Geometry;
+
+    [SerializeField]
+    TunnelSegmentLink m_Link;
+
+    [SerializeField]
+    TunnelSegmentAppearance m_Appearance;
+
+    [SerializeField]
+    TunnelSegmentTexture m_Texture;
 
     [SerializeField]
     Button m_AddSegmentButton;
@@ -89,10 +99,21 @@ public class TunnelSegmentActions : NetworkBehaviour
         if (m_Prefabs == null || m_Prefabs.tunnelSegment == null || m_Geometry == null)
             return;
 
-        // The new segment's near end meets this one's far end.
-        Vector3 position = transform.TransformPoint(new Vector3(0f, 0f, m_Geometry.length));
-        var segment = Instantiate(m_Prefabs.tunnelSegment, position, transform.rotation);
+        // The new segment's near end meets the far end of the tunnel's last segment.
+        var tail = m_Link != null ? m_Link.Tail() : null;
+        var pose = tail != null ? tail.farEndPose : new Pose(transform.TransformPoint(new Vector3(0f, 0f, m_Geometry.length)), transform.rotation);
+        var segment = Instantiate(m_Prefabs.tunnelSegment, pose.position, pose.rotation);
+
+        // Same look as the segment the button was pressed on.
+        if (m_Appearance != null && segment.TryGetComponent<TunnelSegmentAppearance>(out var appearance))
+            appearance.SetStartColor(m_Appearance.colorHsva);
+
         SpawnOnNetwork(segment);
+
+        if (tail != null && segment.TryGetComponent<TunnelSegmentLink>(out var link))
+            link.LinkTo(tail);
+        if (m_Texture != null && !string.IsNullOrEmpty(m_Texture.textureName) && segment.TryGetComponent<TunnelSegmentTexture>(out var texture))
+            texture.SetTexture(m_Texture.textureName);
     }
 
     #endregion

@@ -173,6 +173,30 @@ static class MoleculeLibraryBuilder
         EditorUtility.SetDirty(list);
     }
 
+    /// <summary>
+    /// After scripts reload (or the Editor starts), catches models that arrived while it was busy: rebuilds the
+    /// library if a molecule folder has no toy yet or the list doesn't match the folders.
+    /// </summary>
+    [InitializeOnLoadMethod]
+    static void CheckAfterReload()
+    {
+        EditorApplication.delayCall += () =>
+        {
+            if (EditorApplication.isPlayingOrWillChangePlaymode || BuildPipeline.isBuildingPlayer)
+                return;
+            var registry = AssetDatabase.LoadAssetAtPath<TunnelPrefabRegistry>(k_RegistryPath);
+            if (registry == null || !AssetDatabase.IsValidFolder(k_Root))
+                return;
+            var folders = AssetDatabase.GetSubFolders(k_Root);
+            bool stale = folders.Length != registry.molecules.Count
+                || registry.molecules.Any(m => m.prefab == null)
+                || folders.Any(f => FindToy(f) == null && AssetDatabase.FindAssets("", new[] { f })
+                    .Any(g => k_ModelExtensions.Contains(Path.GetExtension(AssetDatabase.GUIDToAssetPath(g)).ToLowerInvariant())));
+            if (stale)
+                UpdateLibrary();
+        };
+    }
+
     /// <summary>Rebuilds the library when a model is added to, or anything is removed from, Assets/Molecules.</summary>
     class Watcher : AssetPostprocessor
     {

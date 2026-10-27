@@ -192,6 +192,19 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
             }
         }
 
+        /// <summary>Hue, saturation, value and opacity (0-1 each) of this segment.</summary>
+        public Vector4 colorHsva => currentHsva;
+
+        /// <summary>
+        /// Gives a segment that hasn't been spawned yet its starting colour (e.g. the colour of the segment that
+        /// added it); the server shares it with everyone when the segment spawns.
+        /// </summary>
+        public void SetStartColor(Vector4 hsva)
+        {
+            m_LocalHsva = hsva;
+            ApplyColor(hsva, true);
+        }
+
         /// <summary>Opens or closes the colour chooser (for everyone, when connected).</summary>
         public void SetChooserOpen(bool open)
         {

@@ -257,6 +257,7 @@ GameObject:
   - component: {fileID: 4211494338213552551}
   - component: {fileID: 2594606513141946083}
   - component: {fileID: 5781010237736685847}
+  - component: {fileID: 5822144314901725507}
   m_Layer: 0
   m_Name: Toy_TBSV_Networked
   m_TagString: Untagged
@@ -587,6 +588,21 @@ MonoBehaviour:
   m_AllowCollisionOwnershipExchange: 0
   m_MinExchangeVelocityMagitude: 0.025
   spawnLocked: 1
+--- !u!114 &5822144314901725507
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2683364989508138848}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9e6453f8090e54ed3a0a7f190bb67a02, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MoleculeGravity
+  m_GravityScale: 0.5
+  m_FallingDrag: 0.2
+  m_FallingAngularDrag: 1
 --- !u!1 &3764095547672187423
 GameObject:
   m_ObjectHideFlags: 0
