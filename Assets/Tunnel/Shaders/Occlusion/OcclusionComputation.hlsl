@@ -25,11 +25,10 @@ float _OcclusionDepthBias;
 // Virtual surfaces farther than this (meters) aren't occluded by it. 0 = no limit.
 float _OcclusionMaxDistance;
 
-// Tunnel addition: real surfaces higher than this above the floor (meters) don't hide the virtual surface, so the
-// tunnel covers a real ceiling that's lower than its arch while people and furniture below still hide it. 0 = off.
+// Tunnel addition: parts of the object higher than this above its own origin (meters; the tunnel's origin is on its
+// floor) are never hidden by real surfaces, so the tunnel's upper walls and arch always cover the real ceiling, while
+// people and furniture still hide its lower part. 0 = off.
 float _OcclusionIgnoreAbove;
-// World height of the real floor, set by the tunnel from the room's floor plane.
-float _TunnelFloorY;
 
 float SampleEnvironmentDepth(const float2 uv)
 {
@@ -163,10 +162,8 @@ void SetOcclusion_float(const float3 positionWS, float4 color, out float4 result
         visibility = lerp(visibility, 1.0f, saturate((linearSceneDepth - _OcclusionMaxDistance) / 0.5f));
     if (_OcclusionIgnoreAbove > 0)
     {
-        // Where is the real surface seen at this pixel? Same line of sight, at the real depth instead of ours.
-        const float unbiasedSceneDepth = max(LinearizeDepth(sceneDepthNDC), 0.01f);
-        const float3 realPoint = _WorldSpaceCameraPos + (positionWS - _WorldSpaceCameraPos) * (SampleEnvironmentDepthLinear(uv) / unbiasedSceneDepth);
-        visibility = lerp(visibility, 1.0f, saturate((realPoint.y - _TunnelFloorY - _OcclusionIgnoreAbove) / 0.1f));
+        const float heightAboveOrigin = TransformWorldToObject(positionWS).y;
+        visibility = lerp(visibility, 1.0f, saturate((heightAboveOrigin - _OcclusionIgnoreAbove) / 0.1f));
     }
     resultColor.a *= visibility;
     resultColor.rgb *= resultColor.a;
