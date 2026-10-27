@@ -9,7 +9,8 @@ using XRMultiplayer;
 /// Puts players who share a real room into one shared space, using a QR code on the floor. The host's sighting of
 /// the code defines where it is in the shared world. Every other headset that sees the code moves its XR Origin so
 /// its own sighting lands on the host's, after which tunnels, panels and avatars line up with the real room for
-/// everyone. Avatars of players aligned to the same code are hidden, since they're visible through passthrough.
+/// everyone. Each player's avatar is then drawn where that player really stands, so it overlays them in passthrough
+/// (and shows at a glance how well the headsets are lined up).
 /// One scene object holds the shared anchor; aligning is started from the TS Menu's "Align to QR" button.
 /// </summary>
 public class CoLocation : NetworkBehaviour
@@ -19,7 +20,7 @@ public class CoLocation : NetworkBehaviour
 
     [SerializeField]
     [Tooltip("Hide the avatars of other players aligned to the same QR code (they're visible through passthrough).")]
-    bool m_HideColocatedAvatars = true;
+    bool m_HideColocatedAvatars;
 
     // xyz: the code's centre on the floor in the shared world; w: its yaw in degrees.
     readonly NetworkVariable<Vector4> m_Anchor = new(Vector4.zero, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);

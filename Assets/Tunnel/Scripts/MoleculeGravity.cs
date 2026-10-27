@@ -1,10 +1,14 @@
 using UnityEngine;
+using UnityEngine.XR.Interaction.Toolkit;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
+using XRMultiplayer;
 
 /// <summary>
-/// Lets a molecule follow the sandbox gravity button (which switches <see cref="Physics.gravity"/> for everyone):
+/// Lets a molecule follow the host's palm Gravity button (which switches <see cref="Physics.gravity"/> for everyone):
 /// with gravity on it falls like the other toys (scaled like their small-scale physics) and its drift-stopping drag is
 /// lifted; with gravity off it floats where it's left, held still by heavy drag. A molecule just placed from the TS
-/// Menu stays frozen on the wall until someone first grabs it.
+/// Menu stays frozen on the wall until someone first grabs it, connected or not (in a session the network
+/// interactable's spawn lock does the same for the headset that simulates it).
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
 public class MoleculeGravity : MonoBehaviour
@@ -21,6 +25,7 @@ public class MoleculeGravity : MonoBehaviour
     float m_FallingAngularDrag = 1f;
 
     Rigidbody m_Rigidbody;
+    XRGrabInteractable m_Grab;
     float m_FloatingDrag;
     float m_FloatingAngularDrag;
     bool? m_GravityApplied;
@@ -31,6 +36,29 @@ public class MoleculeGravity : MonoBehaviour
         m_Rigidbody.useGravity = false; // applied below at the chosen scale
         m_FloatingDrag = m_Rigidbody.linearDamping;
         m_FloatingAngularDrag = m_Rigidbody.angularDamping;
+    }
+
+    void Start()
+    {
+        // Parked where it was placed until it's first picked up, unless whoever made it (e.g. the table's object
+        // dispenser) asked for it to move freely straight away.
+        if (TryGetComponent(out NetworkPhysicsInteractable networkPhysics) && !networkPhysics.spawnLocked)
+            return;
+        m_Rigidbody.constraints = RigidbodyConstraints.FreezeAll;
+        if (TryGetComponent(out m_Grab))
+            m_Grab.selectEntered.AddListener(OnGrabbed);
+    }
+
+    void OnDestroy()
+    {
+        if (m_Grab != null)
+            m_Grab.selectEntered.RemoveListener(OnGrabbed);
+    }
+
+    void OnGrabbed(SelectEnterEventArgs args)
+    {
+        m_Rigidbody.constraints = RigidbodyConstraints.None;
+        m_Grab.selectEntered.RemoveListener(OnGrabbed);
     }
 
     void FixedUpdate()

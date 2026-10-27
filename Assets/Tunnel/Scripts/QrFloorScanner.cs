@@ -14,8 +14,8 @@ using ZXing.Common;
 /// centre and the direction its top edge faces, in this headset's world. Each camera image is decoded with ZXing on a
 /// worker thread; the code's three corner finder patterns are turned into rays and dropped onto the floor plane.
 /// Several sightings are averaged. Every headset measures the same printed code, so their measurements can be lined up.
-/// The camera image's exact orientation isn't documented, so every sighting is placed under each possible
-/// orientation; the right one is the one whose placements stay put as the head moves and come out at the printed size.
+/// The image is read the way Meta's samples read it; every sighting is also placed under the other possible
+/// orientations, only for the log, which shows which one stays put and comes out at the printed size.
 /// </summary>
 public class QrFloorScanner : MonoBehaviour
 {
@@ -45,6 +45,12 @@ public class QrFloorScanner : MonoBehaviour
     [SerializeField]
     [Tooltip("Placements whose corner squares are this far from a right-angled, equal-sided corner are rejected.")]
     float m_MaxSquarenessError = 0.35f;
+
+    [SerializeField]
+    [Tooltip("How the camera image is read (see Orientation): 2 is Meta's convention (image y up, Android-to-Unity " +
+        "axis turn). Every headset must use the same one, or their measured directions disagree; -1 guesses it from " +
+        "the sightings instead, which can't tell mirror images apart while the head is still.")]
+    int m_Orientation = 2;
 
     public struct Measurement
     {
@@ -88,6 +94,8 @@ public class QrFloorScanner : MonoBehaviour
     bool m_Scanning;
     byte[] m_Gray;
     int? m_KnownOrientation; // once found, later scans use it directly
+
+    int? fixedOrientation => m_Orientation >= 0 && m_Orientation < k_OrientationCount ? m_Orientation : m_KnownOrientation;
 
     public bool isScanning => m_Scanning;
 
@@ -175,12 +183,11 @@ public class QrFloorScanner : MonoBehaviour
             int placedNow = 0;
             for (int i = 0; i < k_OrientationCount; i++)
             {
-                if (m_KnownOrientation.HasValue && m_KnownOrientation.Value != i)
-                    continue;
                 if (TryPlaceOnFloor(decoded.Value, headPose, new Orientation(i), floorY, out var placement, out string why))
                 {
                     placements[i].Add(placement);
-                    placedNow++;
+                    if (fixedOrientation == null || fixedOrientation == i)
+                        placedNow++;
                 }
                 else if (decodedCount <= 2)
                 {
@@ -189,7 +196,7 @@ public class QrFloorScanner : MonoBehaviour
             }
 
             // Show where it was seen, as placed under the most likely orientation so far.
-            int leading = m_KnownOrientation ?? Leading(placements);
+            int leading = fixedOrientation ?? Leading(placements);
             if (leading >= 0 && placements[leading].Count > 0 && placedNow > 0)
             {
                 var latest = placements[leading][placements[leading].Count - 1];
@@ -207,8 +214,11 @@ public class QrFloorScanner : MonoBehaviour
         m_Camera.Stop();
         m_Scanning = false;
 
-        int best = PickOrientation(placements, out string table);
-        Log($"{frames} frames, {decodedCount} sightings of the code, {otherCodes} other codes.{table}");
+        int guessed = PickOrientation(placements, out string table);
+        Log($"{frames} frames, {decodedCount} sightings of the code, {otherCodes} other codes. Steadiest: {(guessed >= 0 ? new Orientation(guessed).ToString() : "none")}{table}");
+        int best = guessed;
+        if (fixedOrientation.HasValue)
+            best = placements[fixedOrientation.Value].Count >= 3 ? fixedOrientation.Value : -1;
 
         if (best < 0)
         {
@@ -243,11 +253,12 @@ public class QrFloorScanner : MonoBehaviour
 
     bool Enough(List<Placement>[] placements)
     {
-        // Enough sightings for a steady average, and (the first time) for telling the orientations apart.
-        int needed = m_KnownOrientation.HasValue ? m_SamplesNeeded : m_SamplesNeeded + 4;
+        // Enough sightings for a steady average, and (when guessing, the first time) for telling the orientations apart.
+        if (fixedOrientation.HasValue)
+            return placements[fixedOrientation.Value].Count >= m_SamplesNeeded;
         foreach (var list in placements)
         {
-            if (list.Count >= needed)
+            if (list.Count >= m_SamplesNeeded + 4)
                 return true;
         }
 
