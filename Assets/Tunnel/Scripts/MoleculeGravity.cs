@@ -40,6 +40,9 @@ public class MoleculeGravity : MonoBehaviour
 
     void Start()
     {
+        if (TryGetComponent(out Unity.Netcode.NetworkObject networkObject))
+            Debug.Log($"[Molecules] {name} appeared at {transform.position:F2} (networked {networkObject.IsSpawned}, owner {networkObject.OwnerClientId})");
+
         // Parked where it was placed until it's first picked up, unless whoever made it (e.g. the table's object
         // dispenser) asked for it to move freely straight away.
         if (TryGetComponent(out NetworkPhysicsInteractable networkPhysics) && !networkPhysics.spawnLocked)

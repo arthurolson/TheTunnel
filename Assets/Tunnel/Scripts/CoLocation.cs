@@ -87,7 +87,11 @@ public class CoLocation : NetworkBehaviour
                 m_Anchor.Value = new Vector4(m.position.x, m.position.y, m.position.z, m.yaw);
                 m_HasAnchor.Value = true;
                 MarkAligned();
-                SetStatus($"Aligned: this headset sets the shared room ({m.samples} sightings, within {m.spread * 100f:0} cm). Others can align now.");
+                int players = NetworkManager.ConnectedClientsIds.Count;
+                SetStatus($"Aligned: this headset sets the shared room ({m.samples} sightings, within {m.spread * 100f:0} cm). " +
+                    (players > 1
+                        ? $"{players} players are in this session; the others can align now."
+                        : "You're the only player in this session: other headsets must join it before they align."));
                 return;
             }
 
@@ -128,7 +132,8 @@ public class CoLocation : NetworkBehaviour
 
         MarkAligned();
         Debug.Log($"[QR] aligned: moved {(sharedPosition - measured.position).magnitude * 100f:0} cm, turned {turn:0.0} deg");
-        SetStatus($"Aligned with the shared room ({measured.samples} sightings, within {measured.spread * 100f:0} cm).");
+        SetStatus($"Aligned with the shared room ({measured.samples} sightings, within {measured.spread * 100f:0} cm), " +
+            $"{NetworkManager.ConnectedClientsIds.Count} players in this session.");
     }
 
     void MarkAligned()

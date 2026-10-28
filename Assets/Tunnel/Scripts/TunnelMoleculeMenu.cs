@@ -138,6 +138,8 @@ public class TunnelMoleculeMenu : NetworkBehaviour
 
         int mag = magnification;
         SetStatus($"Placing {molecules[index].name} at ×{mag}...");
+        Debug.Log($"[Molecules] chose {molecules[index].name} at ×{mag}: " +
+            (IsSpawned ? (IsServer ? "placing it for everyone" : "asking the host to place it") : "not connected, placing it here only"));
         if (IsSpawned)
             SpawnMoleculeRpc(index, mag);
         else
@@ -156,11 +158,17 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         if (prefab == null)
             return;
 
-        var molecule = Instantiate(prefab);
+        // Placed and sized before it wakes up: its network transform takes its pose when it's created, so moving it
+        // afterwards would snap it back to the prefab's own spot and size once it spawns for everyone.
+        var holder = new GameObject("Molecule Holder");
+        holder.SetActive(false);
+        var molecule = Instantiate(prefab, holder.transform);
         // Every molecule toy shares one ångström-to-meter scale, so the same factor keeps them in proportion.
         molecule.transform.localScale = prefab.transform.localScale * mag;
         molecule.transform.rotation = m_Geometry.transform.rotation;
         molecule.transform.position = PlaceOnWall(molecule);
+        molecule.transform.SetParent(null, true);
+        Destroy(holder);
         Debug.Log($"[Molecules] placed {m_Prefabs.molecules[index].name} at ×{mag}, radius {WorldRadius(molecule):F3} m, at {m_Geometry.transform.InverseTransformPoint(molecule.transform.position):F3} in the segment " +
             $"(walls at x = ±{m_Geometry.width * 0.5f:F3})");
 
@@ -223,14 +231,14 @@ public class TunnelMoleculeMenu : NetworkBehaviour
     static float WorldRadius(GameObject molecule)
     {
         // Molecules carry one sphere collider at their outer radius (see Tunnel > Molecules > Update Molecule Library).
-        var sphere = molecule.GetComponentInChildren<SphereCollider>();
+        var sphere = molecule.GetComponentInChildren<SphereCollider>(true);
         if (sphere != null)
         {
             var scale = sphere.transform.lossyScale;
             return sphere.radius * Mathf.Max(scale.x, Mathf.Max(scale.y, scale.z));
         }
 
-        var renderer = molecule.GetComponentInChildren<Renderer>();
+        var renderer = molecule.GetComponentInChildren<Renderer>(true);
         return renderer != null ? renderer.bounds.extents.magnitude : 0.05f;
     }
 
