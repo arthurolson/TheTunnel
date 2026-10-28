@@ -7,8 +7,8 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 
 /// <summary>
 /// The TS Menu's "Molecules" list: one row per molecule in Assets/Molecules (see <see cref="TunnelPrefabRegistry"/>).
-/// Tapping a name places that molecule for everyone on the wall the menu is on, just past the list's far edge, with
-/// its surface touching the wall. Molecules are weightless, so it stays there until someone grabs it.
+/// Tapping a name places that molecule for everyone inside the tunnel, beside the list's far edge at the list's height,
+/// a little out from the wall the menu is on. It stays there until someone grabs it.
 /// Works locally when not connected.
 /// </summary>
 public class TunnelMoleculeMenu : NetworkBehaviour
@@ -41,8 +41,8 @@ public class TunnelMoleculeMenu : NetworkBehaviour
     float m_GapFromList = 0.05f;
 
     [SerializeField]
-    [Tooltip("Gap left between a new molecule's surface and the wall (meters), so it isn't pushed into it.")]
-    float m_GapFromWall = 0.003f;
+    [Tooltip("Gap between a new molecule's surface and the wall (meters), so it's clearly inside the tunnel.")]
+    float m_GapFromWall = 0.1f;
 
     public bool isListOpen => m_ListPanel != null && m_ListPanel.activeSelf;
 
@@ -115,13 +115,15 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         var molecule = Instantiate(prefab);
         molecule.transform.rotation = m_Geometry.transform.rotation;
         molecule.transform.position = PlaceOnWall(molecule);
+        Debug.Log($"[Molecules] placed {m_Prefabs.molecules[index].name} at {m_Geometry.transform.InverseTransformPoint(molecule.transform.position):F3} in the segment " +
+            $"(walls at x = ±{m_Geometry.width * 0.5f:F3})");
 
         var networkObject = molecule.GetComponent<NetworkObject>();
         if (IsSpawned && networkObject != null)
             networkObject.Spawn(true);
     }
 
-    /// <summary>On the menu's wall, at the list's height, just past the list's far edge, touching the wall.</summary>
+    /// <summary>Beside the menu's wall, at the list's height, just past the list's far edge, inside the tunnel.</summary>
     Vector3 PlaceOnWall(GameObject molecule)
     {
         Transform frame = m_Geometry.transform;

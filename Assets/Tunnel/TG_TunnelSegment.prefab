@@ -2028,7 +2028,7 @@ MonoBehaviour:
   m_StatusText: {fileID: 1274812310373996980}
   m_RowSpacing: 58
   m_GapFromList: 0.05
-  m_GapFromWall: 0.003
+  m_GapFromWall: 0.1
 --- !u!114 &4410724316060288426
 MonoBehaviour:
   m_ObjectHideFlags: 0

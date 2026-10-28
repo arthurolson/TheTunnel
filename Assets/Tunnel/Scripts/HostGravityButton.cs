@@ -8,7 +8,7 @@ using UnityEngine.XR.Hands;
 /// The shared gravity switch: a "Gravity" button that floats over the host's right palm while the palm faces them
 /// (poke it with the left index finger). Only the host sees it; it switches <see cref="Physics.gravity"/> on or off
 /// for everyone, so all toys and molecules fall or float together. It doesn't depend on the game table, and works
-/// locally when not connected.
+/// locally when not connected. Gravity starts off, so everything floats until the host turns it on.
 /// </summary>
 public class HostGravityButton : NetworkBehaviour
 {
@@ -33,12 +33,12 @@ public class HostGravityButton : NetworkBehaviour
     [SerializeField]
     float m_HideFacing = 0.45f;
 
-    readonly NetworkVariable<bool> m_GravityOn = new(true, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<bool> m_GravityOn = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
     static Vector3 s_DefaultGravity;
     static bool s_DefaultGravityCaptured;
 
-    bool m_LocalGravityOn = true;
+    bool m_LocalGravityOn;
     bool m_ButtonShown;
 
     bool gravityOn => IsSpawned ? m_GravityOn.Value : m_LocalGravityOn;
