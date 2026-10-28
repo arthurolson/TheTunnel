@@ -9,6 +9,9 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// The TS Menu's "Molecules" list: one row per molecule in Assets/Molecules (see <see cref="TunnelPrefabRegistry"/>).
 /// Tapping a name places that molecule for everyone inside the tunnel, beside the list's far edge at the list's height,
 /// a little out from the wall the menu is on. It stays there until someone grabs it.
+/// The Magnification slider (1 to 10) under the list sets how large new molecules are: every molecule keeps its true
+/// size relative to the others (one ångström-to-meter scale for all), times the magnification, so two molecules placed
+/// at the same magnification are in proportion. Each player's slider applies to the molecules they place.
 /// Works locally when not connected.
 /// </summary>
 public class TunnelMoleculeMenu : NetworkBehaviour
@@ -44,7 +47,22 @@ public class TunnelMoleculeMenu : NetworkBehaviour
     [Tooltip("Gap between a new molecule's surface and the wall (meters), so it's clearly inside the tunnel.")]
     float m_GapFromWall = 0.1f;
 
+    [Header("Magnification")]
+    [SerializeField]
+    Slider m_MagnificationSlider;
+
+    [SerializeField]
+    TMP_Text m_MagnificationText;
+
+    const int k_MinMagnification = 1;
+    const int k_MaxMagnification = 10;
+    const float k_FreeSpotStep = 0.05f; // meters along the tunnel between tries for a free spot
+
     public bool isListOpen => m_ListPanel != null && m_ListPanel.activeSelf;
+
+    int magnification => m_MagnificationSlider != null
+        ? Mathf.Clamp(Mathf.RoundToInt(m_MagnificationSlider.value), k_MinMagnification, k_MaxMagnification)
+        : k_MinMagnification;
 
     void Awake()
     {
@@ -52,6 +70,30 @@ public class TunnelMoleculeMenu : NetworkBehaviour
             m_RowTemplate.gameObject.SetActive(false);
         if (m_ListPanel != null)
             m_ListPanel.SetActive(false);
+
+        if (m_MagnificationSlider != null)
+        {
+            m_MagnificationSlider.minValue = k_MinMagnification;
+            m_MagnificationSlider.maxValue = k_MaxMagnification;
+            m_MagnificationSlider.wholeNumbers = true;
+            m_MagnificationSlider.SetValueWithoutNotify(k_MinMagnification);
+            m_MagnificationSlider.onValueChanged.AddListener(_ => ShowMagnification());
+        }
+
+        ShowMagnification();
+    }
+
+    public override void OnDestroy()
+    {
+        base.OnDestroy();
+        if (m_MagnificationSlider != null)
+            m_MagnificationSlider.onValueChanged.RemoveAllListeners();
+    }
+
+    void ShowMagnification()
+    {
+        if (m_MagnificationText != null)
+            m_MagnificationText.text = $"Magnification: ×{magnification}";
     }
 
     public void ShowList(bool show)
@@ -85,7 +127,7 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         m_ListContent.sizeDelta = new Vector2(m_ListContent.sizeDelta.x, Mathf.Max(1, molecules.Count) * m_RowSpacing);
         SetStatus(molecules.Count == 0
             ? "No molecules yet. Add a folder with a model to Assets/Molecules and rebuild the app."
-            : "Tap a molecule to place it on the wall beside this list.");
+            : "Set the magnification, then tap a molecule to place it beside this list.");
     }
 
     void Choose(int index)
@@ -94,18 +136,20 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         if (molecules == null || index < 0 || index >= molecules.Count)
             return;
 
-        SetStatus($"Placing {molecules[index].name}...");
+        int mag = magnification;
+        SetStatus($"Placing {molecules[index].name} at ×{mag}...");
         if (IsSpawned)
-            SpawnMoleculeRpc(index);
+            SpawnMoleculeRpc(index, mag);
         else
-            SpawnMolecule(index);
+            SpawnMolecule(index, mag);
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    void SpawnMoleculeRpc(int index) => SpawnMolecule(index);
+    void SpawnMoleculeRpc(int index, int mag) => SpawnMolecule(index, mag);
 
-    void SpawnMolecule(int index)
+    void SpawnMolecule(int index, int mag)
     {
+        mag = Mathf.Clamp(mag, k_MinMagnification, k_MaxMagnification);
         if (m_Prefabs == null || index < 0 || index >= m_Prefabs.molecules.Count || m_Geometry == null)
             return;
         var prefab = m_Prefabs.molecules[index].prefab;
@@ -113,9 +157,11 @@ public class TunnelMoleculeMenu : NetworkBehaviour
             return;
 
         var molecule = Instantiate(prefab);
+        // Every molecule toy shares one ångström-to-meter scale, so the same factor keeps them in proportion.
+        molecule.transform.localScale = prefab.transform.localScale * mag;
         molecule.transform.rotation = m_Geometry.transform.rotation;
         molecule.transform.position = PlaceOnWall(molecule);
-        Debug.Log($"[Molecules] placed {m_Prefabs.molecules[index].name} at {m_Geometry.transform.InverseTransformPoint(molecule.transform.position):F3} in the segment " +
+        Debug.Log($"[Molecules] placed {m_Prefabs.molecules[index].name} at ×{mag}, radius {WorldRadius(molecule):F3} m, at {m_Geometry.transform.InverseTransformPoint(molecule.transform.position):F3} in the segment " +
             $"(walls at x = ±{m_Geometry.width * 0.5f:F3})");
 
         var networkObject = molecule.GetComponent<NetworkObject>();
@@ -123,7 +169,10 @@ public class TunnelMoleculeMenu : NetworkBehaviour
             networkObject.Spawn(true);
     }
 
-    /// <summary>Beside the menu's wall, at the list's height, just past the list's far edge, inside the tunnel.</summary>
+    /// <summary>
+    /// Beside the menu's wall, at the list's height, just past the list's far edge, inside the tunnel; if another
+    /// molecule is already there, the first free spot further along the tunnel.
+    /// </summary>
     Vector3 PlaceOnWall(GameObject molecule)
     {
         Transform frame = m_Geometry.transform;
@@ -142,9 +191,33 @@ public class TunnelMoleculeMenu : NetworkBehaviour
             farZ = Mathf.Max(farZ, frame.InverseTransformPoint(corner).z);
 
         float halfLength = m_Geometry.length * 0.5f;
-        float z = Mathf.Min(farZ + m_GapFromList + radius, halfLength - radius);
+        float firstZ = Mathf.Min(farZ + m_GapFromList + radius, halfLength - radius);
         float x = side * (m_Geometry.width * 0.5f - radius - m_GapFromWall);
-        return frame.TransformPoint(new Vector3(x, listCenter.y, z));
+
+        Physics.SyncTransforms(); // molecules placed moments ago
+        for (float z = firstZ; z <= halfLength - radius; z += k_FreeSpotStep)
+        {
+            var position = frame.TransformPoint(new Vector3(x, listCenter.y, z));
+            if (!OverlapsOtherMolecule(molecule, position, radius))
+                return position;
+        }
+
+        return frame.TransformPoint(new Vector3(x, listCenter.y, firstZ));
+    }
+
+    static readonly Collider[] s_Overlaps = new Collider[32];
+
+    static bool OverlapsOtherMolecule(GameObject molecule, Vector3 position, float radius)
+    {
+        int count = Physics.OverlapSphereNonAlloc(position, radius + 0.01f, s_Overlaps, ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            var body = s_Overlaps[i].attachedRigidbody;
+            if (body != null && body.gameObject != molecule && body.GetComponent<MoleculeGravity>() != null)
+                return true;
+        }
+
+        return false;
     }
 
     static float WorldRadius(GameObject molecule)
