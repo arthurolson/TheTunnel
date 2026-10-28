@@ -17,6 +17,11 @@ float4 _EnvironmentDepthTexturePreprocessed_TexelSize;
 float4x4 _EnvironmentDepthProjectionMatrices[2];
 int _IsOcclusionOn = 1;
 
+// Tunnel addition: AR Foundation builds the depth matrices from poses in the headset's tracking space, not the world.
+// Once the XR Origin is moved (QR co-location, table seats, teleport) world positions must be taken into tracking
+// space first, or real people and floors hide the wrong parts of the scene. Set every frame by OcclusionSafety.
+float4x4 _OcclusionWorldToTrackingSpace;
+
 // Tunnel addition: real surfaces closer than this (meters) to the virtual surface don't occlude it. Lets a virtual
 // floor lying on the real floor stay visible while a chair or person standing on it still hides it.
 float _OcclusionDepthBias;
@@ -145,7 +150,8 @@ void SetOcclusion_float(const float3 positionWS, float4 color, out float4 result
         return;
     }
 
-    const float4 clipSpaceDepthRelativePos = mul(_EnvironmentDepthProjectionMatrices[unity_StereoEyeIndex], float4(positionWS, 1.0f));
+    const float4 positionTS = mul(_OcclusionWorldToTrackingSpace, float4(positionWS, 1.0f));
+    const float4 clipSpaceDepthRelativePos = mul(_EnvironmentDepthProjectionMatrices[unity_StereoEyeIndex], positionTS);
     const float2 uv = (clipSpaceDepthRelativePos.xy / clipSpaceDepthRelativePos.w + 1.0f) * 0.5f;
 
     if (all(uv < 0.0) || all(uv > 1.0))

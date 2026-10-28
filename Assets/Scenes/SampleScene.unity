@@ -1329,7 +1329,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::CoLocation
   ShowTopMostFoldoutHeaderGroup: 1
   m_Scanner: {fileID: 1076734719}
-  m_HideColocatedAvatars: 0
+  m_HideColocatedAvatars: 1
 --- !u!114 &1076734719
 MonoBehaviour:
   m_ObjectHideFlags: 0

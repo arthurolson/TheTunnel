@@ -1,3 +1,4 @@
+using Unity.XR.CoreUtils;
 using UnityEngine;
 using UnityEngine.XR.ARFoundation;
 
@@ -7,11 +8,14 @@ using UnityEngine.XR.ARFoundation;
 /// depth not started yet) the occlusion shaders would have nothing valid to test against. This keeps the global
 /// switch off until frames arrive, and turns it off again if they stop. Status changes are logged
 /// ("[Occlusion] ...") so the headset log shows whether depth is reaching the shaders.
+/// It also gives the shaders the world-to-tracking-space transform: the depth matrices are in the headset's tracking
+/// space, which stops matching the world as soon as the XR Origin is moved (QR co-location, table seats, teleport).
 /// </summary>
 [RequireComponent(typeof(AROcclusionManager))]
 public class OcclusionSafety : MonoBehaviour
 {
     static readonly int k_IsOcclusionOn = Shader.PropertyToID("_IsOcclusionOn");
+    static readonly int k_WorldToTrackingSpace = Shader.PropertyToID("_OcclusionWorldToTrackingSpace");
 
     [SerializeField]
     [Tooltip("Occlusion is switched off if no depth frame has arrived for this long (seconds).")]
@@ -22,16 +26,22 @@ public class OcclusionSafety : MonoBehaviour
     float m_StatusInterval = 10f;
 
     AROcclusionManager m_Manager;
+    Transform m_TrackingSpace;
     float m_LastFrameTime = float.NegativeInfinity;
     bool m_On;
     int m_Frames;
     float m_NextStatus;
 
-    void Awake() => m_Manager = GetComponent<AROcclusionManager>();
+    void Awake()
+    {
+        m_Manager = GetComponent<AROcclusionManager>();
+        Shader.SetGlobalMatrix(k_WorldToTrackingSpace, Matrix4x4.identity);
+    }
 
     void OnEnable()
     {
         m_Manager.frameReceived += OnFrameReceived;
+        Application.onBeforeRender += UpdateTrackingSpace;
         Debug.Log($"[Occlusion] enabled; requested depth mode {m_Manager.requestedEnvironmentDepthMode}, " +
             $"subsystem {(m_Manager.subsystem != null ? (m_Manager.subsystem.running ? "running" : "not running") : "missing")}");
     }
@@ -39,7 +49,22 @@ public class OcclusionSafety : MonoBehaviour
     void OnDisable()
     {
         m_Manager.frameReceived -= OnFrameReceived;
+        Application.onBeforeRender -= UpdateTrackingSpace;
         Shader.SetGlobalInteger(k_IsOcclusionOn, 0);
+    }
+
+    /// <summary>The camera's parent (the origin's camera floor offset) is the tracking space the depth poses are in.</summary>
+    void UpdateTrackingSpace()
+    {
+        if (m_TrackingSpace == null)
+        {
+            var origin = GetComponentInParent<XROrigin>();
+            m_TrackingSpace = origin != null && origin.CameraFloorOffsetObject != null
+                ? origin.CameraFloorOffsetObject.transform
+                : transform.parent;
+        }
+
+        Shader.SetGlobalMatrix(k_WorldToTrackingSpace, m_TrackingSpace != null ? m_TrackingSpace.worldToLocalMatrix : Matrix4x4.identity);
     }
 
     void OnFrameReceived(AROcclusionFrameEventArgs args)
@@ -69,6 +94,7 @@ public class OcclusionSafety : MonoBehaviour
 
     void LateUpdate()
     {
+        UpdateTrackingSpace();
         bool depthFlowing = Time.unscaledTime - m_LastFrameTime < m_Timeout;
         Shader.SetGlobalInteger(k_IsOcclusionOn, depthFlowing ? 1 : 0);
 

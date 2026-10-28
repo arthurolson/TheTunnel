@@ -116,7 +116,7 @@ Material:
     - _Metallic: 0
     - _OcclusionDepthBias: 0.03
     - _OcclusionIgnoreAbove: 2
-    - _OcclusionMaxDistance: 3.5
+    - _OcclusionMaxDistance: 5
     - _OcclusionStrength: 1
     - _Parallax: 0.005
     - _QueueOffset: 0
