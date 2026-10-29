@@ -12,6 +12,9 @@ using UnityEngine;
 ///    twice as wide as 16:9 (two views side by side).
 ///  - Photos (JPEG): an MPO stereo pair (two pictures in one file, the second for the right eye), else a picture at
 ///    least twice as wide as 16:9. PNG: the same width test.
+///  - The Quest's own captures (Oculus/Screenshots, Oculus/VideoShots) at 2:1 or wider: both eyes side by side, as
+///    recorded with debug.oculus.screenCaptureEye 2 (e.g. 2880 x 1440, 1440 x 1440 per eye). Flat captures are 16:9
+///    or square.
 /// Results are cached by file and modification time.
 /// </summary>
 public static class ViewerMediaProbe
@@ -31,6 +34,7 @@ public static class ViewerMediaProbe
 
     const int k_MaxMoovBytes = 32 * 1024 * 1024;
     const float k_DoubleWideAspect = 3.0f; // two 16:9 views side by side are 3.56; a 16:9 frame is 1.78
+    const float k_QuestStereoCaptureAspect = 1.95f; // two square eye views: 2:1
 
     static readonly Dictionary<string, (long modified, Info info)> s_Cache = new();
 
@@ -51,8 +55,10 @@ public static class ViewerMediaProbe
                 _ => default,
             };
 
-            if (info.layout == ViewerLibrary.StereoLayout.Mono && !info.stereoPair && info.height > 0
-                && (float)info.width / info.height >= k_DoubleWideAspect)
+            float aspect = info.height > 0 ? (float)info.width / info.height : 0f;
+            bool questCapture = path.Replace('\\', '/').Contains("/Oculus/");
+            if (info.layout == ViewerLibrary.StereoLayout.Mono && !info.stereoPair && !info.multiView
+                && (aspect >= k_DoubleWideAspect || (questCapture && aspect >= k_QuestStereoCaptureAspect)))
                 info.layout = ViewerLibrary.StereoLayout.SideBySide;
 
             s_Cache[path] = (modified, info);
