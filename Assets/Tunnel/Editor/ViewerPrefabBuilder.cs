@@ -12,8 +12,8 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// <summary>
 /// Builds the Viewer prefab (Assets/Tunnel/ViewerPanel.prefab) from the browser panel, so it moves, snaps, resizes
 /// and closes exactly like it, then swaps the web page for a media screen, the address bar for the Viewer's menu
-/// (borrowing the TS Menu's list), and adds the video controls. Also gives the browser's keyboard a move handle,
-/// registers the prefab for spawning and adds a New Viewer button to the TS Menu. Safe to run again: the prefab keeps
+/// (borrowing the TS Menu's list), and adds the video controls. Also gives the browser's keyboard a move handle and
+/// its bar a Copy button (for the Viewer's Paste), registers the prefab for spawning and adds a New Viewer button to the TS Menu. Safe to run again: the prefab keeps
 /// its asset (and network) identity. Tunnel > Viewer > Rebuild Viewer Prefab.
 /// </summary>
 static class ViewerPrefabBuilder
@@ -26,11 +26,13 @@ static class ViewerPrefabBuilder
     const string k_HandleMaterialPath = "Assets/Tunnel/Materials/BP_CornerMarker.mat";
     const string k_NetworkPrefabListGuid = "7a0e675f74edc434e8c3591b070157ec";
     const float k_BarScale = 0.0006f;
+    // Above the bar, left of the Close button.
+    static readonly Vector2 k_TopButtonPosition = new(365f, 82f);
 
     [MenuItem("Tunnel/Viewer/Rebuild Viewer Prefab")]
     public static string BuildAll()
     {
-        string log = AddBrowserKeyboardHandle();
+        string log = UpdateBrowser();
         log += "\n" + BuildViewer();
         log += "\n" + Register();
         log += "\n" + AddMenuButton();
@@ -82,7 +84,7 @@ static class ViewerPrefabBuilder
             var controls = BuildControls(root.transform, bar, buttonTemplate);
 
             var viewerMenu = BuildMenu(bar, buttonTemplate, out var refs);
-            foreach (string name in new[] { "Back Button", "Favorite Button", "Sync Button", "Saved Button", "Saved Pages" })
+            foreach (string name in new[] { "Back Button", "Favorite Button", "Sync Button", "Saved Button", "Saved Pages", "Copy Button" })
             {
                 var child = bar.Find(name);
                 if (child != null)
@@ -174,6 +176,10 @@ static class ViewerPrefabBuilder
         var keyboardButtonComponent = keyboardButton.GetComponent<Button>();
         keyboardButtonComponent.onClick = new Button.ButtonClickedEvent();
         Set(menu, "m_KeyboardButton", keyboardButtonComponent);
+
+        // Paste sits above the bar beside Close, where the browser has Copy.
+        var paste = CloneButton(buttonTemplate, bar, "Paste Button", k_TopButtonPosition, new Vector2(130f, 48.5f), 1f, "Paste", 18f);
+        Set(menu, "m_PasteButton", paste);
 
         // The list: the TS Menu's texture list, rescaled to the same physical size on this smaller-scaled canvas.
         var segment = PrefabUtility.LoadPrefabContents(k_SegmentPath);
@@ -383,8 +389,8 @@ static class ViewerPrefabBuilder
         Set(attachment, "m_Handle", handle);
     }
 
-    /// <summary>The browser's keyboard gets the same move handle as the Viewer's.</summary>
-    static string AddBrowserKeyboardHandle()
+    /// <summary>The browser's keyboard gets the same move handle as the Viewer's, and its bar a Copy button.</summary>
+    static string UpdateBrowser()
     {
         var root = PrefabUtility.LoadPrefabContents(k_BrowserPath);
         try
@@ -392,8 +398,19 @@ static class ViewerPrefabBuilder
             var keyboardRoot = root.transform.Find("Keyboard");
             var keys = keyboardRoot.GetComponentInChildren<XRKeyboard>(true).gameObject;
             AddKeyboardHandle(keyboardRoot, root.GetComponent<BrowserPanel>(), keys);
+
+            var bar = root.transform.Find("Address Bar");
+            var old = bar.Find("Copy Button");
+            if (old != null)
+                Object.DestroyImmediate(old.gameObject);
+            var copy = CloneButton(bar.Find("Favorite Button").gameObject, bar, "Copy Button", k_TopButtonPosition, new Vector2(130f, 48.5f), 1f, "Copy", 18f);
+            var copier = copy.gameObject.AddComponent<BrowserCopyButton>();
+            Set(copier, "m_Container", root.GetComponentInChildren<TLab.WebView.BrowserContainer>(true));
+            Set(copier, "m_Button", copy);
+            Set(copier, "m_Label", Label(copy));
+
             PrefabUtility.SaveAsPrefabAsset(root, k_BrowserPath);
-            return "browser keyboard handle added";
+            return "browser: keyboard handle, Copy button";
         }
         finally
         {

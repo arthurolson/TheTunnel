@@ -123,6 +123,12 @@ public class ViewerPanel : NetworkBehaviour
     /// <summary>Something changed that the menu or controls show (content, status, list, playback).</summary>
     public event Action changed;
 
+    /// <summary>A message for the player who asked for something (e.g. what was found on a pasted page).</summary>
+    public event Action<string> notice;
+
+    Coroutine m_LoadRoutine;
+    Coroutine m_PageRoutine;
+
     public bool hasContent => media.id != 0;
     public ViewerMediaKind kind => media.kind;
     public bool isVideo => hasContent && ViewerLibrary.IsVideoKind(media.kind);
@@ -248,10 +254,17 @@ public class ViewerPanel : NetworkBehaviour
         if (ViewerLibrary.IsUrl(text) || text.StartsWith("www.", StringComparison.OrdinalIgnoreCase))
         {
             string url = text.Contains("://") ? text : "https://" + text;
-            var urlKind = ViewerLibrary.KindForUrl(url, preferred);
-            string name = Uri.TryCreate(url, UriKind.Absolute, out var uri) ? Path.GetFileName(uri.LocalPath) : url;
-            Request(urlKind, url, true, string.IsNullOrEmpty(name) ? url : name);
-            return $"Opening {url}";
+            if (ViewerPageMedia.HasMediaExtension(url, out _))
+            {
+                RequestUrl(url, ViewerLibrary.KindForUrl(url, preferred), null);
+                return $"Opening {url}";
+            }
+
+            // A web page (or an address that doesn't say what it is): find out first, then show it for everyone.
+            if (m_PageRoutine != null)
+                StopCoroutine(m_PageRoutine);
+            m_PageRoutine = StartCoroutine(OpenAddress(url, preferred));
+            return $"Opening {url}: looking for its picture or video...";
         }
 
         var entry = ViewerLibrary.Match(text, preferred);
@@ -259,6 +272,37 @@ public class ViewerPanel : NetworkBehaviour
             return $"Nothing called \"{text}\" (or more than one). Pick it from a list, or type more of its name.";
         Open(entry);
         return $"Opening {entry.name}";
+    }
+
+    IEnumerator OpenAddress(string url, ViewerMediaKind? preferred)
+    {
+        ViewerPageMedia.Result found = null;
+        yield return ViewerPageMedia.Resolve(url, result => found = result);
+        m_PageRoutine = null;
+        if (found == null || found.error != null)
+        {
+            notice?.Invoke(found?.error ?? $"Couldn't open {url}");
+            yield break;
+        }
+
+        bool spatial = (preferred.HasValue && ViewerLibrary.IsSpatialKind(preferred.Value))
+            || ViewerLibrary.StereoLayoutFor(found.url, 0, 0) != ViewerLibrary.StereoLayout.Mono;
+        var kind = found.isVideo
+            ? spatial ? ViewerMediaKind.SpatialVideo : ViewerMediaKind.Video
+            : spatial ? ViewerMediaKind.SpatialImage : ViewerMediaKind.Image;
+        Debug.Log($"[Viewer] {url} -> {kind} {found.url}");
+        RequestUrl(found.url, kind, found.title);
+        notice?.Invoke(found.videoOnlyInPage
+            ? "Showing the page's picture: its video only plays in its own player (use the browser for that)."
+            : $"Showing {(found.isVideo ? "the video" : "the picture")} from that page.");
+    }
+
+    void RequestUrl(string url, ViewerMediaKind urlKind, string pageTitle)
+    {
+        string name = pageTitle;
+        if (string.IsNullOrWhiteSpace(name))
+            name = Uri.TryCreate(url, UriKind.Absolute, out var uri) ? Uri.UnescapeDataString(Path.GetFileName(uri.LocalPath)) : url;
+        Request(urlKind, url, true, string.IsNullOrEmpty(name) ? url : name);
     }
 
     void Request(ViewerMediaKind newKind, string source, bool isUrl, string newTitle)
@@ -480,8 +524,9 @@ public class ViewerPanel : NetworkBehaviour
         if (state.id == 0 || state.id == m_LoadedId)
             return;
         m_LoadedId = state.id;
-        StopAllCoroutines();
-        StartCoroutine(Load(state));
+        if (m_LoadRoutine != null)
+            StopCoroutine(m_LoadRoutine);
+        m_LoadRoutine = StartCoroutine(Load(state));
     }
 
     IEnumerator Load(MediaState state)

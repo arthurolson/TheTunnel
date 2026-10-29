@@ -10,6 +10,8 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 /// a scrollable list of what's in that kind's folder (built in and on this headset; see <see cref="ViewerLibrary"/>).
 /// Tap a name to show it. The name field and Keyboard button bring up the keyboard: type a name (or part of one) or an
 /// address and press Enter to show it; while typing, the open list only shows names containing the text.
+/// Paste shows an address copied in the browser (its Copy button); with the keyboard open it adds the address to
+/// the typed text instead, to edit before pressing Enter.
 /// The open list is shared, like the TS Menu: whoever opens or closes it does so for everyone.
 /// </summary>
 public class ViewerMenu : MonoBehaviour
@@ -61,6 +63,9 @@ public class ViewerMenu : MonoBehaviour
     Button m_KeyboardButton;
 
     [SerializeField]
+    Button m_PasteButton;
+
+    [SerializeField]
     XRKeyboard m_Keyboard;
 
     const string k_FieldPlaceholder = "<color=#999>Name or address</color>";
@@ -69,6 +74,8 @@ public class ViewerMenu : MonoBehaviour
     string m_Typed = string.Empty;
     string m_Message;
     Coroutine m_BuildRoutine;
+    string m_Notice;
+    float m_NoticeUntil;
 
     ViewerMediaKind? openKind => m_Viewer != null && m_Viewer.openList >= 0 ? (ViewerMediaKind)m_Viewer.openList : null;
 
@@ -92,12 +99,18 @@ public class ViewerMenu : MonoBehaviour
             m_Field.onClick.AddListener(ToggleKeyboard);
         if (m_KeyboardButton != null)
             m_KeyboardButton.onClick.AddListener(ToggleKeyboard);
+        if (m_PasteButton != null)
+            m_PasteButton.onClick.AddListener(Paste);
     }
 
     void OnEnable()
     {
         if (m_Viewer != null)
+        {
             m_Viewer.changed += OnViewerChanged;
+            m_Viewer.notice += ShowNotice;
+        }
+
         if (m_Keyboard != null)
         {
             m_Keyboard.onTextUpdated.AddListener(OnTextUpdated);
@@ -111,7 +124,11 @@ public class ViewerMenu : MonoBehaviour
     void OnDisable()
     {
         if (m_Viewer != null)
+        {
             m_Viewer.changed -= OnViewerChanged;
+            m_Viewer.notice -= ShowNotice;
+        }
+
         if (m_Keyboard != null)
         {
             m_Keyboard.onTextUpdated.RemoveListener(OnTextUpdated);
@@ -155,7 +172,9 @@ public class ViewerMenu : MonoBehaviour
     {
         if (m_FieldText == null)
             return;
-        if (m_Typed.Length > 0)
+        if (m_Notice != null && Time.unscaledTime < m_NoticeUntil)
+            m_FieldText.text = $"<size=70%>{m_Notice}</size>";
+        else if (m_Typed.Length > 0)
             m_FieldText.text = m_Typed;
         else if (m_Viewer != null && m_Viewer.hasContent && m_Viewer.title.Length > 0)
             m_FieldText.text = m_Viewer.title;
@@ -231,6 +250,52 @@ public class ViewerMenu : MonoBehaviour
     {
         if (m_ListStatus != null)
             m_ListStatus.text = text;
+    }
+
+    #endregion
+
+    #region Paste and notices
+
+    void Paste()
+    {
+        string text = TunnelClipboard.Paste().Replace("\n", " ").Trim();
+        if (text.Length == 0)
+        {
+            ShowNotice("Nothing to paste: press Copy in a browser first.");
+            return;
+        }
+
+        if (m_Keyboard != null && m_Keyboard.isOpen)
+        {
+            m_Keyboard.UpdateText(m_Keyboard.text + text);
+            return;
+        }
+
+        if (m_Viewer != null)
+            ShowNotice(m_Viewer.OpenTyped(text, openKind));
+    }
+
+    /// <summary>Shown in the name field for a few seconds (and in the open list's status line).</summary>
+    void ShowNotice(string text)
+    {
+        m_Notice = text;
+        m_NoticeUntil = Time.unscaledTime + 5f;
+        if (m_Viewer != null && m_Viewer.openList >= 0)
+        {
+            m_Message = text;
+            SetListStatus(text);
+        }
+
+        UpdateField();
+    }
+
+    void Update()
+    {
+        if (m_Notice != null && Time.unscaledTime >= m_NoticeUntil)
+        {
+            m_Notice = null;
+            UpdateField();
+        }
     }
 
     #endregion
