@@ -14,6 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::TunnelPrefabRegistry
   tunnelSegment: {fileID: 1695236261648112303, guid: 4b2e9a491ffad4e8f8964081979de101, type: 3}
   browserPanel: {fileID: 6974413720160308155, guid: 7bbe0712c3f0846bc9f28abd6f03dff7, type: 3}
+  viewerPanel: {fileID: 7377705050852043259, guid: fb5cff672e7c64c1cb922aff39a79924, type: 3}
   molecules:
   - name: 2PLV
     prefab: {fileID: 592917901370543573, guid: 9ebea7aea0a414c6dbbdec5f8b358726, type: 3}

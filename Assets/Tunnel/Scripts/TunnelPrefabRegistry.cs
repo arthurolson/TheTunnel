@@ -20,6 +20,7 @@ public class TunnelPrefabRegistry : ScriptableObject
 
     public GameObject tunnelSegment;
     public GameObject browserPanel;
+    public GameObject viewerPanel;
 
     [Tooltip("Filled in by Tunnel > Molecules > Update Molecule Library from the folders in Assets/Molecules.")]
     public List<Molecule> molecules = new();

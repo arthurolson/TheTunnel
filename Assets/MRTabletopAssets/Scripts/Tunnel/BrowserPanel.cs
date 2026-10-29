@@ -10,15 +10,19 @@ using UnityLabs.SmartUX.Network;
 namespace UnityEngine.XR.Templates.MRTTabletopAssets
 {
     /// <summary>
-    /// A 16:9 browser panel that is moved by its frame, resized from its corners and, when released, snapped
-    /// onto the nearest Tunnel Segment wall (and then follows that tunnel when it moves).
-    /// Corner markers only appear while a hand or controller is near that corner. The panel always stays upright.
-    /// Size and wall attachment are replicated; the pose is synced while someone holds it (ClaimableNetworkTransform).
+    /// A framed panel (the browser, 16:9, or the Viewer, shaped like what it shows) that is moved by its frame,
+    /// resized from its corners and, when released, snapped onto the nearest Tunnel Segment wall (and then follows
+    /// that tunnel when it moves). Corner markers only appear while a hand or controller is near that corner. The
+    /// panel always stays upright. The bar above it and the keyboard below it can be moved by their handles (see
+    /// <see cref="PanelAttachment"/>); they then keep that spot relative to the panel.
+    /// Size, shape, wall attachment and where the bar and keyboard were moved are replicated; the pose is synced while
+    /// someone holds it (ClaimableNetworkTransform).
     /// </summary>
     public class BrowserPanel : NetworkBehaviour
     {
-        const float k_Aspect = 16f / 9f;
         const float k_WidthSendThreshold = 0.002f;
+        const float k_MinAspect = 0.25f;
+        const float k_MaxAspect = 5f;
 
         [SerializeField]
         XRGrabInteractable m_Grab;
@@ -27,8 +31,12 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         ClaimableNetworkBehaviour m_Claimable;
 
         [SerializeField]
-        [Tooltip("World-space canvas holding the browser view, authored at a fixed 16:9 pixel size.")]
+        [Tooltip("World-space canvas behind the content, authored at a fixed pixel width; its height follows the shape.")]
         RectTransform m_Screen;
+
+        [SerializeField]
+        [Tooltip("Optional quad (1 x 1 m) showing the content, scaled to the screen.")]
+        Transform m_ScreenQuad;
 
         [SerializeField]
         Transform m_FrameTop;
@@ -69,6 +77,18 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         [Tooltip("Keyboard tilt, top edge leaning away from the viewer like a desk keyboard (degrees).")]
         float m_KeyboardTilt = 40f;
 
+        [SerializeField]
+        [Tooltip("Optional bar under the frame (the Viewer's video controls); while shown, the keyboard sits lower.")]
+        Transform m_Controls;
+
+        [SerializeField]
+        [Tooltip("Drop from the bottom of the frame to the centre of the controls (meters).")]
+        float m_ControlsDrop = 0.06f;
+
+        [SerializeField]
+        [Tooltip("How much lower the keyboard sits while the controls are shown (meters).")]
+        float m_ControlsSpace = 0.1f;
+
         [Header("Size (meters)")]
         [SerializeField]
         float m_Width = 1.2f;
@@ -78,6 +98,13 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
 
         [SerializeField]
         float m_MaxWidth = 3.0f;
+
+        [SerializeField]
+        float m_MaxHeight = 2.2f;
+
+        [SerializeField]
+        [Tooltip("Width over height of the screen. The browser stays 16:9; the Viewer takes its content's shape.")]
+        float m_Aspect = 16f / 9f;
 
         [SerializeField]
         float m_FrameThickness = 0.025f;
@@ -107,6 +134,10 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
 
         // Width < 0 means "not set yet"; the server fills in the authored width on spawn.
         readonly NetworkVariable<float> m_NetWidth = new(-1f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+        readonly NetworkVariable<float> m_NetAspect = new(-1f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+        // How far the bar and the keyboard were moved from their usual spots (panel space).
+        readonly NetworkVariable<Vector3> m_NetBarOffset = new(Vector3.zero, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+        readonly NetworkVariable<Vector3> m_NetKeyboardOffset = new(Vector3.zero, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
         readonly NetworkVariable<NetworkObjectReference> m_NetTunnel = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
         // xyz = position in the tunnel's local frame, w = yaw in the tunnel's local frame (degrees).
         readonly NetworkVariable<Vector4> m_NetLocalPose = new(Vector4.zero, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
@@ -131,12 +162,23 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         float m_NextInteractorRefresh;
         readonly bool[] m_CornerVisible = new bool[4];
 
-        float height => m_Width / k_Aspect;
+        PanelAttachment m_BarAttachment;
+        PanelAttachment m_KeyboardAttachment;
+
+        float height => m_Width / m_Aspect;
+
+        /// <summary>Width over height of the screen.</summary>
+        public float aspect => m_Aspect;
 
         static int s_PanelCount;
 
         void Awake()
         {
+            if (m_AddressBar != null)
+                m_BarAttachment = m_AddressBar.GetComponent<PanelAttachment>();
+            if (m_Keyboard != null)
+                m_KeyboardAttachment = m_Keyboard.GetComponent<PanelAttachment>();
+
             // Page scripts call back into Unity by object name, so every panel's browser view needs its own.
             if (m_Screen != null)
             {
@@ -170,14 +212,19 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         {
             base.OnNetworkSpawn();
             m_NetWidth.OnValueChanged += OnNetWidthChanged;
+            m_NetAspect.OnValueChanged += OnNetAspectChanged;
+            m_NetBarOffset.OnValueChanged += OnNetOffsetChanged;
+            m_NetKeyboardOffset.OnValueChanged += OnNetOffsetChanged;
             m_NetAttached.OnValueChanged += OnNetAttachmentChanged;
             m_NetLocalPose.OnValueChanged += OnNetLocalPoseChanged;
 
             if (IsServer && m_NetWidth.Value < 0f)
                 m_NetWidth.Value = m_Width;
+            if (IsServer && m_NetAspect.Value < 0f)
+                m_NetAspect.Value = m_Aspect;
 
-            if (m_NetWidth.Value > 0f)
-                SetWidthLocal(m_NetWidth.Value);
+            ApplyNetSize();
+            ApplyNetOffsets();
 
             // A replicated attachment wins; otherwise the server publishes the one adopted from the scene layout.
             if (m_NetAttached.Value)
@@ -200,6 +247,9 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         {
             base.OnNetworkDespawn();
             m_NetWidth.OnValueChanged -= OnNetWidthChanged;
+            m_NetAspect.OnValueChanged -= OnNetAspectChanged;
+            m_NetBarOffset.OnValueChanged -= OnNetOffsetChanged;
+            m_NetKeyboardOffset.OnValueChanged -= OnNetOffsetChanged;
             m_NetAttached.OnValueChanged -= OnNetAttachmentChanged;
             m_NetLocalPose.OnValueChanged -= OnNetLocalPoseChanged;
         }
@@ -339,9 +389,9 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
             // Fixed aspect: the larger of the two pulls decides the width.
             float alongWidth = Vector3.Dot(fromOpposite, m_DragRight) * sx;
             float alongHeight = Vector3.Dot(fromOpposite, m_DragUp) * sy;
-            float width = Mathf.Clamp(Mathf.Max(alongWidth, alongHeight * k_Aspect), m_MinWidth, m_MaxWidth);
+            float width = ClampWidth(Mathf.Max(alongWidth, alongHeight * m_Aspect));
 
-            transform.position = m_DragOppositeCorner + sx * m_DragRight * (width * 0.5f) + sy * m_DragUp * (width / k_Aspect * 0.5f);
+            transform.position = m_DragOppositeCorner + sx * m_DragRight * (width * 0.5f) + sy * m_DragUp * (width / m_Aspect * 0.5f);
             SetWidthLocal(width);
             SendWidth(false);
         }
@@ -416,8 +466,54 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
 
         void SetWidthLocal(float width)
         {
-            m_Width = Mathf.Clamp(width, m_MinWidth, m_MaxWidth);
+            m_Width = ClampWidth(width);
             ApplyLayout();
+        }
+
+        float ClampWidth(float width) =>
+            Mathf.Clamp(width, Mathf.Min(m_MinWidth, m_MaxHeight * m_Aspect), Mathf.Min(m_MaxWidth, m_MaxHeight * m_Aspect));
+
+        /// <summary>
+        /// Reshapes the screen to the content's width over height, keeping about the same area, and keeps it on its
+        /// wall. Called by the player whose content it is; everyone else gets the new shape from them.
+        /// </summary>
+        public void SetContentAspect(float contentAspect)
+        {
+            contentAspect = Mathf.Clamp(contentAspect, k_MinAspect, k_MaxAspect);
+            if (Mathf.Abs(contentAspect - m_Aspect) < 0.001f)
+                return;
+
+            float area = m_Width * height;
+            m_Aspect = contentAspect;
+            SetWidthLocal(Mathf.Sqrt(area * contentAspect));
+            if (IsSpawned)
+            {
+                m_LastSentWidth = m_Width;
+                SetSizeRpc(m_Width, m_Aspect);
+            }
+
+            RefitToWall();
+        }
+
+        /// <summary>Re-places the bar, controls and keyboard (after the controls are shown or hidden).</summary>
+        public void RefreshLayout() => ApplyLayout();
+
+        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+        void SetSizeRpc(float width, float newAspect)
+        {
+            m_NetAspect.Value = newAspect;
+            m_NetWidth.Value = width;
+        }
+
+        void OnNetAspectChanged(float previous, float current) => ApplyNetSize();
+
+        void ApplyNetSize()
+        {
+            if (m_DragCorner >= 0)
+                return;
+            if (m_NetAspect.Value > 0f)
+                m_Aspect = Mathf.Clamp(m_NetAspect.Value, k_MinAspect, k_MaxAspect);
+            SetWidthLocal(m_NetWidth.Value > 0f ? m_NetWidth.Value : m_Width);
         }
 
         void SendWidth(bool force)
@@ -431,11 +527,7 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
         void SetWidthRpc(float width) => m_NetWidth.Value = width;
 
-        void OnNetWidthChanged(float previous, float current)
-        {
-            if (m_DragCorner < 0 && current > 0f)
-                SetWidthLocal(current);
-        }
+        void OnNetWidthChanged(float previous, float current) => ApplyNetSize();
 
         /// <summary>
         /// Sizes the screen and places the frame bars and corner markers around it. The frame keeps a constant
@@ -444,8 +536,19 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         void ApplyLayout()
         {
             float w = m_Width, h = height, t = m_FrameThickness, d = m_FrameDepth;
-            if (m_Screen != null && m_Screen.rect.width > 0f)
-                m_Screen.localScale = Vector3.one * (w / m_Screen.rect.width);
+            if (m_Screen != null && m_Screen.sizeDelta.x > 0f)
+            {
+                float pixelWidth = m_Screen.sizeDelta.x;
+                m_Screen.sizeDelta = new Vector2(pixelWidth, pixelWidth / m_Aspect);
+                m_Screen.localScale = Vector3.one * (w / pixelWidth);
+            }
+
+            if (m_ScreenQuad != null)
+            {
+                m_ScreenQuad.localPosition = new Vector3(0f, 0f, -0.002f);
+                m_ScreenQuad.localRotation = Quaternion.identity;
+                m_ScreenQuad.localScale = new Vector3(w, h, 1f);
+            }
 
             // The frame sits just behind the screen (+Z is towards the wall when snapped).
             float z = d * 0.5f;
@@ -464,17 +567,35 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
             }
 
             if (m_AddressBar != null)
+                Place(m_AddressBar, m_BarAttachment, new Vector3(0f, h * 0.5f + t + m_AddressBarGap, 0f), Quaternion.identity);
+
+            bool controlsShown = m_Controls != null && m_Controls.gameObject.activeSelf;
+            if (m_Controls != null)
             {
-                m_AddressBar.localPosition = new Vector3(0f, h * 0.5f + t + m_AddressBarGap, 0f);
-                m_AddressBar.localRotation = Quaternion.identity;
+                m_Controls.localPosition = new Vector3(0f, -(h * 0.5f + t) - m_ControlsDrop, -0.005f);
+                m_Controls.localRotation = Quaternion.identity;
             }
 
             if (m_Keyboard != null)
             {
                 // -Z is towards the viewer; tilting about +X leans the top edge back.
-                m_Keyboard.localPosition = new Vector3(0f, -(h * 0.5f + t) - m_KeyboardDrop, -m_KeyboardForward);
-                m_Keyboard.localRotation = Quaternion.Euler(m_KeyboardTilt, 0f, 0f);
+                float drop = m_KeyboardDrop + (controlsShown ? m_ControlsSpace : 0f);
+                Place(m_Keyboard, m_KeyboardAttachment, new Vector3(0f, -(h * 0.5f + t) - drop, -m_KeyboardForward),
+                    Quaternion.Euler(m_KeyboardTilt, 0f, 0f));
             }
+        }
+
+        /// <summary>Puts the bar or keyboard at its usual spot, or where it was moved to relative to that spot.</summary>
+        static void Place(Transform item, PanelAttachment attachment, Vector3 localPosition, Quaternion localRotation)
+        {
+            if (attachment != null)
+            {
+                attachment.SetDefaultPose(localPosition, localRotation);
+                return;
+            }
+
+            item.localPosition = localPosition;
+            item.localRotation = localRotation;
         }
 
         static void SetBar(Transform bar, Vector3 position, Vector3 size)
@@ -484,6 +605,40 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
             bar.localPosition = position;
             bar.localRotation = Quaternion.identity;
             bar.localScale = size;
+        }
+
+        #endregion
+
+        #region Moving the bar and keyboard
+
+        /// <summary>Called by a <see cref="PanelAttachment"/> as it is moved; shares where it is now.</summary>
+        internal void OnAttachmentMoved(PanelAttachment attachment)
+        {
+            if (!IsSpawned)
+                return;
+            if (attachment == m_BarAttachment)
+                SetOffsetRpc(0, attachment.offset);
+            else if (attachment == m_KeyboardAttachment)
+                SetOffsetRpc(1, attachment.offset);
+        }
+
+        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+        void SetOffsetRpc(int which, Vector3 offset)
+        {
+            if (which == 0)
+                m_NetBarOffset.Value = offset;
+            else
+                m_NetKeyboardOffset.Value = offset;
+        }
+
+        void OnNetOffsetChanged(Vector3 previous, Vector3 current) => ApplyNetOffsets();
+
+        void ApplyNetOffsets()
+        {
+            if (m_BarAttachment != null)
+                m_BarAttachment.SetOffsetFromNetwork(m_NetBarOffset.Value);
+            if (m_KeyboardAttachment != null)
+                m_KeyboardAttachment.SetOffsetFromNetwork(m_NetKeyboardOffset.Value);
         }
 
         #endregion
@@ -504,7 +659,8 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
             float halfPanelW = m_Width * 0.5f + m_FrameThickness;
             float halfPanelH = height * 0.5f + m_FrameThickness;
             // The keyboard hangs below the frame; keep it above the floor. (The address bar may rise into the arch.)
-            float below = halfPanelH + (m_Keyboard != null ? m_KeyboardDrop + 0.08f : 0f);
+            float below = halfPanelH + (m_Keyboard != null ? m_KeyboardDrop + 0.08f : 0f)
+                + (m_Controls != null && m_Controls.gameObject.activeSelf ? m_ControlsSpace : 0f);
 
             var head = Camera.main != null ? Camera.main.transform : null;
             foreach (var tunnel in FindObjectsByType<TunnelSegmentGeometry>(FindObjectsSortMode.None))
@@ -590,6 +746,17 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
             m_SnapRoutine = null;
             m_Snapping = false;
             HoldOwnership(false);
+        }
+
+        /// <summary>After a change of shape: keep the panel on its wall, inside the tunnel's height and length.</summary>
+        void RefitToWall()
+        {
+            if (m_AttachedTunnel == null || m_Moving || m_Snapping || m_DragCorner >= 0 || !TryFindClosestWall(out var target))
+                return;
+            var tunnel = target.tunnel.transform;
+            transform.SetPositionAndRotation(tunnel.TransformPoint(target.localPosition),
+                Quaternion.Euler(0f, tunnel.eulerAngles.y + target.localYaw, 0f));
+            Attach(target.tunnel, target.localPosition, target.localYaw);
         }
 
         void AttachToClosestWallAtCurrentPose()

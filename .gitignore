@@ -55,3 +55,9 @@ crashlytics-build.properties
 /*.jpg
 /*.hdr
 /Packages/*.bak-*
+
+# ---- Viewer media (public repo): keep the folders, README and list, not the media ----
+/Assets/StreamingAssets/Viewer/*/*
+!/Assets/StreamingAssets/Viewer/*/.gitkeep
+/Assets/StreamingAssets/Viewer/index.json
+/Assets/StreamingAssets/Viewer/index.json.meta

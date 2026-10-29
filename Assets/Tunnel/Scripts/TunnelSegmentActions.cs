@@ -12,6 +12,7 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 ///    colour and texture of the segment the button was pressed on.
 ///  - Remove Segment: deletes this segment (press twice within a few seconds to confirm).
 ///  - New Browser: a browser panel on this segment's wall the viewer is facing, level with their position.
+///  - New Viewer: an image and video Viewer, placed the same way.
 /// </summary>
 public class TunnelSegmentActions : NetworkBehaviour
 {
@@ -43,6 +44,9 @@ public class TunnelSegmentActions : NetworkBehaviour
     Button m_NewBrowserButton;
 
     [SerializeField]
+    Button m_NewViewerButton;
+
+    [SerializeField]
     [Tooltip("Seconds the Remove button waits for its confirming second press.")]
     float m_RemoveConfirmTime = 3f;
 
@@ -67,6 +71,8 @@ public class TunnelSegmentActions : NetworkBehaviour
             m_RemoveSegmentButton.onClick.AddListener(OnRemoveSegmentPressed);
         if (m_NewBrowserButton != null)
             m_NewBrowserButton.onClick.AddListener(OnNewBrowserPressed);
+        if (m_NewViewerButton != null)
+            m_NewViewerButton.onClick.AddListener(OnNewViewerPressed);
         SetRemoveLabel(k_RemoveText);
     }
 
@@ -79,6 +85,8 @@ public class TunnelSegmentActions : NetworkBehaviour
             m_RemoveSegmentButton.onClick.RemoveListener(OnRemoveSegmentPressed);
         if (m_NewBrowserButton != null)
             m_NewBrowserButton.onClick.RemoveListener(OnNewBrowserPressed);
+        if (m_NewViewerButton != null)
+            m_NewViewerButton.onClick.RemoveListener(OnNewViewerPressed);
     }
 
     #region Add segment
@@ -163,26 +171,31 @@ public class TunnelSegmentActions : NetworkBehaviour
 
     #endregion
 
-    #region New browser
+    #region New browser or viewer
 
-    void OnNewBrowserPressed()
+    void OnNewBrowserPressed() => OnNewPanelPressed(false);
+
+    void OnNewViewerPressed() => OnNewPanelPressed(true);
+
+    void OnNewPanelPressed(bool viewer)
     {
         var head = Camera.main != null ? Camera.main.transform : null;
         Vector3 headPosition = head != null ? head.position : transform.position;
         Vector3 headForward = head != null ? head.forward : transform.forward;
 
         if (IsSpawned)
-            NewBrowserRpc(headPosition, headForward);
+            NewPanelRpc(viewer, headPosition, headForward);
         else
-            SpawnBrowser(headPosition, headForward);
+            SpawnPanel(viewer, headPosition, headForward);
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    void NewBrowserRpc(Vector3 headPosition, Vector3 headForward) => SpawnBrowser(headPosition, headForward);
+    void NewPanelRpc(bool viewer, Vector3 headPosition, Vector3 headForward) => SpawnPanel(viewer, headPosition, headForward);
 
-    void SpawnBrowser(Vector3 headPosition, Vector3 headForward)
+    void SpawnPanel(bool viewer, Vector3 headPosition, Vector3 headForward)
     {
-        if (m_Prefabs == null || m_Prefabs.browserPanel == null || m_Geometry == null)
+        var prefab = m_Prefabs == null ? null : viewer ? m_Prefabs.viewerPanel : m_Prefabs.browserPanel;
+        if (prefab == null || m_Geometry == null)
             return;
 
         // On the wall the viewer is facing, level with where they stand along the tunnel, facing the interior.
@@ -196,7 +209,7 @@ public class TunnelSegmentActions : NetworkBehaviour
 
         Vector3 position = frame.TransformPoint(localPosition);
         Quaternion rotation = Quaternion.Euler(0f, frame.eulerAngles.y + (side > 0f ? 90f : -90f), 0f);
-        var panel = Instantiate(m_Prefabs.browserPanel, position, rotation);
+        var panel = Instantiate(prefab, position, rotation);
         SpawnOnNetwork(panel);
     }
 
