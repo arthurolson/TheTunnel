@@ -23,7 +23,8 @@ public enum ViewerMediaKind : byte
 ///  - This headset: Android/data/&lt;package&gt;/files/Viewer/&lt;same folders&gt; (push-media.sh copies files there), so new
 ///    media needs no rebuild. Only headsets that have a file can show it, so prefer built-in media or links for sharing.
 ///  - The Quest's own photos and videos: its screenshots and recordings (the Oculus folder) and the Pictures,
-///    Movies, DCIM and Download folders, sorted into the lists by file type (newest first). Reading them needs the
+///    Movies, DCIM and Download folders, sorted into the lists by file type (newest first); spatial ones (by their
+///    name or what the file says, see <see cref="ViewerMediaProbe"/>) go into the Spatial lists. Reading them needs the
 ///    headset's photos-and-videos permission, asked for the first time a list is opened.
 /// A folder can hold the media itself or a link to it: a .url, .webloc or .txt file whose text contains an http(s)
 /// address. Either way the entry's name is the file name without its extension.
@@ -37,7 +38,7 @@ public static class ViewerLibrary
     public static readonly string[] KindFolders = { "Images", "Videos", "Spatial Images", "Spatial Videos" };
     public static readonly string[] KindLabels = { "Images", "Videos", "Spatial Images", "Spatial Videos" };
 
-    public static readonly string[] ImageExtensions = { ".png", ".jpg", ".jpeg" };
+    public static readonly string[] ImageExtensions = { ".png", ".jpg", ".jpeg", ".mpo" };
     public static readonly string[] VideoExtensions = { ".mp4", ".m4v", ".mov", ".webm", ".mkv" };
     public static readonly string[] LinkExtensions = { ".url", ".webloc", ".txt" };
 
@@ -277,7 +278,8 @@ public static class ViewerLibrary
                         continue;
 
                     string name = Path.GetFileNameWithoutExtension(file);
-                    bool stereo = StereoLayoutFor(name, 0, 0) != StereoLayout.Mono;
+                    // Spatial by name, or by what the file says it is (Quest 3D captures, MPO pairs, 3D tags).
+                    bool stereo = StereoLayoutFor(name, 0, 0) != StereoLayout.Mono || ViewerMediaProbe.Probe(file).isSpatial;
                     var kind = isVideo
                         ? stereo ? ViewerMediaKind.SpatialVideo : ViewerMediaKind.Video
                         : stereo ? ViewerMediaKind.SpatialImage : ViewerMediaKind.Image;
@@ -372,6 +374,8 @@ public static class ViewerLibrary
         Mono,
         SideBySide,
         TopBottom,
+        /// <summary>Two separate pictures, one per eye (an MPO stereo photo).</summary>
+        Pair,
     }
 
     /// <summary>

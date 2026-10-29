@@ -16,7 +16,7 @@ class ViewerMediaIndex : IPreprocessBuildWithReport
         "Media for the Viewer, built into the app. One folder per menu list:\n" +
         "  Images          PNG or JPEG\n" +
         "  Videos          MP4 (H.264/H.265), MOV, WebM\n" +
-        "  Spatial Images  stereo PNG or JPEG\n" +
+        "  Spatial Images  stereo PNG or JPEG, or MPO stereo pairs\n" +
         "  Spatial Videos  stereo MP4/MOV/WebM\n" +
         "A folder can also hold a link instead of the file: a .url, .webloc or .txt file containing the http(s) address\n" +
         "of the image or video (a direct link to the file, not a web page such as YouTube).\n" +
@@ -27,6 +27,8 @@ class ViewerMediaIndex : IPreprocessBuildWithReport
         "  _rl                                   side by side, right eye first\n" +
         "  _hsbs / _half                         each eye squeezed to half width (shown at full width)\n" +
         "Without a tag, a frame taller than wide is taken as top and bottom.\n" +
+        "Files that say what they are need no tag: 3D videos with a stereo tag, MPO stereo photos, and frames at\n" +
+        "least twice as wide as 16:9 (two views side by side). The Quest's own 3D captures are found this way too.\n" +
         "Apple spatial photos (HEIC) and spatial videos (MV-HEVC) must be converted to side by side first.\n\n" +
         "Media files here are not committed to git (see .gitignore); large videos make the APK large.\n" +
         "For media without a rebuild, use push-media.sh to copy files onto a headset.\n";

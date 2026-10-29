@@ -10,6 +10,7 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 /// a scrollable list of what's in that kind's folder (built in and on this headset; see <see cref="ViewerLibrary"/>)
 /// followed by the Quest's own photos and videos, newest first. Tap a name to show it; Clear empties the screen. The name field and Keyboard button bring up the keyboard: type a name (or part of one) or an
 /// address and press Enter to show it; while typing, the open list only shows names containing the text.
+/// Choosing something closes the list so it doesn't cover the screen.
 /// Paste shows an address copied in the browser (its Copy button); with the keyboard open it adds the address to
 /// the typed text instead, to edit before pressing Enter.
 /// The open list is shared, like the TS Menu: whoever opens or closes it does so for everyone.
@@ -252,9 +253,17 @@ public class ViewerMenu : MonoBehaviour
     void Choose(ViewerLibrary.Entry entry)
     {
         m_Message = null;
-        if (m_Viewer != null)
-            m_Viewer.Open(entry);
-        SetListStatus($"Showing {entry.name}");
+        if (m_Viewer == null)
+            return;
+        m_Viewer.Open(entry);
+        CloseList();
+    }
+
+    /// <summary>Once something is chosen the list gets out of the way of the screen (for everyone).</summary>
+    void CloseList()
+    {
+        if (m_Viewer != null && m_Viewer.openList != ViewerPanel.NoList)
+            m_Viewer.SetOpenList(ViewerPanel.NoList);
     }
 
     void SetListStatus(string text)
@@ -282,8 +291,12 @@ public class ViewerMenu : MonoBehaviour
             return;
         }
 
-        if (m_Viewer != null)
-            ShowNotice(m_Viewer.OpenTyped(text, openKind));
+        if (m_Viewer == null)
+            return;
+        string result = m_Viewer.OpenTyped(text, openKind);
+        ShowNotice(result);
+        if (result.StartsWith("Opening"))
+            CloseList();
     }
 
     /// <summary>Shown in the name field for a few seconds (and in the open list's status line).</summary>
@@ -352,8 +365,7 @@ public class ViewerMenu : MonoBehaviour
         m_Typed = string.Empty;
         m_Keyboard.Close(true);
         UpdateField();
-        if (openKind != null)
-            BuildList(false);
+        CloseList();
     }
 
     void OnKeyboardClosed(KeyboardTextEventArgs args) => UpdateField();

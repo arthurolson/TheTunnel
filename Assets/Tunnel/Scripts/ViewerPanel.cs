@@ -91,6 +91,7 @@ public class ViewerPanel : NetworkBehaviour
 
     const string k_EmptyHint = "Choose an image or video from the menu above,\nor type its name or address on the keyboard.";
     static readonly int k_MainTex = Shader.PropertyToID("_MainTex");
+    static readonly int k_RightTex = Shader.PropertyToID("_RightTex");
     static readonly int k_Layout = Shader.PropertyToID("_Layout");
     static readonly int k_SwapEyes = Shader.PropertyToID("_SwapEyes");
 
@@ -106,6 +107,9 @@ public class ViewerPanel : NetworkBehaviour
 
     Material m_Material;
     Texture2D m_Image;
+    Texture2D m_RightImage;
+    // What the file being shown says about itself (stereo layout, pairs, multi-view); default for web addresses.
+    ViewerMediaProbe.Info m_Probe;
     RenderTexture m_VideoTexture;
     int m_LoadedId;
     bool m_VideoReady;
@@ -577,7 +581,12 @@ public class ViewerPanel : NetworkBehaviour
             address = ViewerLibrary.AddressOf(entry);
         }
 
-        Debug.Log($"[Viewer] {ViewerLibrary.KindLabels[(int)state.kind]}: {m_Title} from {address}");
+        m_Probe = default;
+        if (address.StartsWith("file://") && File.Exists(address.Substring(7)))
+            m_Probe = ViewerMediaProbe.Probe(address.Substring(7));
+
+        Debug.Log($"[Viewer] {ViewerLibrary.KindLabels[(int)state.kind]}: {m_Title} from {address} " +
+            $"({m_Probe.width}x{m_Probe.height}, {m_Probe.layout}{(m_Probe.stereoPair ? ", stereo pair" : "")}{(m_Probe.multiView ? ", multi-view" : "")})");
         if (video)
             LoadVideo(address);
         else
@@ -596,12 +605,38 @@ public class ViewerPanel : NetworkBehaviour
             yield break;
         }
 
-        var texture = new Texture2D(2, 2, TextureFormat.RGBA32, true);
-        if (!texture.LoadImage(request.downloadHandler.data, false))
+        byte[] data = request.downloadHandler.data;
+        // A stereo photo pair (MPO): each eye gets its own picture.
+        if (ViewerLibrary.IsSpatialKind(state.kind) && ViewerMediaProbe.TryGetStereoPair(data, out var left, out var right))
         {
-            Destroy(texture);
+            m_Image = Decode(left.ToArray());
+            m_RightImage = Decode(right.ToArray());
+            if (m_Image != null && m_RightImage != null)
+            {
+                Show(state, m_Image, m_Image.width, m_Image.height, ViewerLibrary.StereoLayout.Pair);
+                yield break;
+            }
+        }
+
+        var texture = Decode(data);
+        if (texture == null)
+        {
             SetStatus($"{m_Title} isn't a PNG or JPEG picture.");
             yield break;
+        }
+
+        m_Image = texture;
+        Show(state, texture, texture.width, texture.height);
+    }
+
+    /// <summary>A PNG or JPEG as a texture ready to show (scaled down if huge, with mipmaps); null if it isn't one.</summary>
+    Texture2D Decode(byte[] bytes)
+    {
+        var texture = new Texture2D(2, 2, TextureFormat.RGBA32, true);
+        if (!texture.LoadImage(bytes, false))
+        {
+            Destroy(texture);
+            return null;
         }
 
         int longest = Mathf.Max(texture.width, texture.height);
@@ -615,8 +650,7 @@ public class ViewerPanel : NetworkBehaviour
         texture.filterMode = FilterMode.Trilinear;
         texture.anisoLevel = 4;
         texture.Apply(true, true);
-        m_Image = texture;
-        Show(state, texture, texture.width, texture.height);
+        return texture;
     }
 
     static Texture2D Rescaled(Texture2D source, int width, int height)
@@ -684,12 +718,23 @@ public class ViewerPanel : NetworkBehaviour
     }
 
     /// <summary>Puts the picture on the screen (one half per eye for spatial media) and reshapes the panel to it.</summary>
-    void Show(MediaState state, Texture texture, int width, int height)
+    void Show(MediaState state, Texture texture, int width, int height, ViewerLibrary.StereoLayout? knownLayout = null)
     {
         var layout = ViewerLibrary.StereoLayout.Mono;
         string name = state.isUrl ? state.source.ToString() : state.title.ToString();
+        string note = string.Empty;
         if (ViewerLibrary.IsSpatialKind(state.kind))
-            layout = ViewerLibrary.StereoLayoutFor(name, width, height);
+        {
+            // What the file says wins (a 3D tag, an MPO pair); a multi-view video's frame is one eye only.
+            if (knownLayout.HasValue)
+                layout = knownLayout.Value;
+            else if (m_Probe.layout != ViewerLibrary.StereoLayout.Mono)
+                layout = m_Probe.layout;
+            else if (m_Probe.multiView && ViewerLibrary.StereoLayoutFor(name, 0, 0) == ViewerLibrary.StereoLayout.Mono)
+                note = "This spatial video keeps its second eye in a layer the headset's video player can't read, so it shows flat.";
+            else
+                layout = ViewerLibrary.StereoLayoutFor(name, width, height);
+        }
 
         float eyeWidth = layout == ViewerLibrary.StereoLayout.SideBySide ? width * 0.5f : width;
         float eyeHeight = layout == ViewerLibrary.StereoLayout.TopBottom ? height * 0.5f : height;
@@ -704,6 +749,7 @@ public class ViewerPanel : NetworkBehaviour
         if (m_Material != null)
         {
             m_Material.SetTexture(k_MainTex, texture);
+            m_Material.SetTexture(k_RightTex, layout == ViewerLibrary.StereoLayout.Pair ? m_RightImage : null);
             m_Material.SetFloat(k_Layout, (float)layout);
             m_Material.SetFloat(k_SwapEyes, ViewerLibrary.SwapsEyes(name) ? 1f : 0f);
         }
@@ -711,6 +757,9 @@ public class ViewerPanel : NetworkBehaviour
         if (m_Screen != null)
             m_Screen.enabled = true;
         SetStatus(string.Empty);
+        Debug.Log($"[Viewer] showing {m_Title} as {layout}");
+        if (note.Length > 0)
+            notice?.Invoke(note);
 
         // The player who chose it reshapes the panel for everyone.
         if (isMine && m_Panel != null)
@@ -743,6 +792,15 @@ public class ViewerPanel : NetworkBehaviour
             Destroy(m_Image);
             m_Image = null;
         }
+
+        if (m_RightImage != null)
+        {
+            Destroy(m_RightImage);
+            m_RightImage = null;
+        }
+
+        if (m_Material != null)
+            m_Material.SetTexture(k_RightTex, null);
     }
 
     #endregion
