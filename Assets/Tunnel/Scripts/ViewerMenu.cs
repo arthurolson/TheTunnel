@@ -7,8 +7,8 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 
 /// <summary>
 /// The Viewer's menu bar: one button per kind of media (Images, Videos, Spatial Images, Spatial Videos), each opening
-/// a scrollable list of what's in that kind's folder (built in and on this headset; see <see cref="ViewerLibrary"/>).
-/// Tap a name to show it. The name field and Keyboard button bring up the keyboard: type a name (or part of one) or an
+/// a scrollable list of what's in that kind's folder (built in and on this headset; see <see cref="ViewerLibrary"/>)
+/// followed by the Quest's own photos and videos, newest first. Tap a name to show it; Clear empties the screen. The name field and Keyboard button bring up the keyboard: type a name (or part of one) or an
 /// address and press Enter to show it; while typing, the open list only shows names containing the text.
 /// Paste shows an address copied in the browser (its Copy button); with the keyboard open it adds the address to
 /// the typed text instead, to edit before pressing Enter.
@@ -66,6 +66,9 @@ public class ViewerMenu : MonoBehaviour
     Button m_PasteButton;
 
     [SerializeField]
+    Button m_ClearButton;
+
+    [SerializeField]
     XRKeyboard m_Keyboard;
 
     const string k_FieldPlaceholder = "<color=#999>Name or address</color>";
@@ -101,6 +104,12 @@ public class ViewerMenu : MonoBehaviour
             m_KeyboardButton.onClick.AddListener(ToggleKeyboard);
         if (m_PasteButton != null)
             m_PasteButton.onClick.AddListener(Paste);
+        if (m_ClearButton != null)
+            m_ClearButton.onClick.AddListener(() =>
+            {
+                if (m_Viewer != null)
+                    m_Viewer.Clear();
+            });
     }
 
     void OnEnable()
@@ -203,7 +212,7 @@ public class ViewerMenu : MonoBehaviour
         if (rescan)
         {
             SetListStatus("Looking for media...");
-            yield return ViewerLibrary.Refresh();
+            yield return ViewerLibrary.Refresh(true);
         }
 
         for (int i = m_ListContent.childCount - 1; i >= 0; i--)
@@ -217,7 +226,9 @@ public class ViewerMenu : MonoBehaviour
             var row = Instantiate(m_RowTemplate, m_ListContent);
             row.gameObject.SetActive(true);
             ((RectTransform)row.transform).anchoredPosition = new Vector2(0f, -i * m_RowSpacing);
-            string note = entry.isLink ? "  <color=#8CF>(link)</color>" : entry.onHeadset ? "  <color=#AAA>(this headset)</color>" : string.Empty;
+            string note = entry.isLink ? "  <color=#8CF>(link)</color>"
+                : entry.isDeviceMedia ? "  <color=#AAA>(Quest)</color>"
+                : entry.onHeadset ? "  <color=#AAA>(this headset)</color>" : string.Empty;
             row.GetComponentInChildren<TMP_Text>(true).text = entry.name + note;
             row.onClick.AddListener(() => Choose(entry));
         }
@@ -230,7 +241,7 @@ public class ViewerMenu : MonoBehaviour
         if (m_Message != null)
             SetListStatus(m_Message);
         else if (all.Count == 0)
-            SetListStatus($"Nothing here yet: add files or links to the {folder} folder.");
+            SetListStatus($"Nothing here yet: add files or links to the {folder} folder, or allow photos and videos.");
         else if (shown.Count == 0)
             SetListStatus($"No names containing \"{m_Typed}\". Enter opens it as typed.");
         else

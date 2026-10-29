@@ -180,6 +180,8 @@ static class ViewerPrefabBuilder
         // Paste sits above the bar beside Close, where the browser has Copy.
         var paste = CloneButton(buttonTemplate, bar, "Paste Button", k_TopButtonPosition, new Vector2(130f, 48.5f), 1f, "Paste", 18f);
         Set(menu, "m_PasteButton", paste);
+        var clear = CloneButton(buttonTemplate, bar, "Clear Button", k_TopButtonPosition - new Vector2(140f, 0f), new Vector2(130f, 48.5f), 1f, "Clear", 18f);
+        Set(menu, "m_ClearButton", clear);
 
         // The list: the TS Menu's texture list, rescaled to the same physical size on this smaller-scaled canvas.
         var segment = PrefabUtility.LoadPrefabContents(k_SegmentPath);

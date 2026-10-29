@@ -129,7 +129,7 @@ public class ViewerPanel : NetworkBehaviour
     Coroutine m_LoadRoutine;
     Coroutine m_PageRoutine;
 
-    public bool hasContent => media.id != 0;
+    public bool hasContent => media.id != 0 && media.source.Length > 0;
     public ViewerMediaKind kind => media.kind;
     public bool isVideo => hasContent && ViewerLibrary.IsVideoKind(media.kind);
     public string title => m_Title;
@@ -303,6 +303,18 @@ public class ViewerPanel : NetworkBehaviour
         if (string.IsNullOrWhiteSpace(name))
             name = Uri.TryCreate(url, UriKind.Absolute, out var uri) ? Uri.UnescapeDataString(Path.GetFileName(uri.LocalPath)) : url;
         Request(urlKind, url, true, string.IsNullOrEmpty(name) ? url : name);
+    }
+
+    /// <summary>Empties the screen for everyone (a video stops).</summary>
+    public void Clear()
+    {
+        if (m_PageRoutine != null)
+        {
+            StopCoroutine(m_PageRoutine);
+            m_PageRoutine = null;
+        }
+
+        Request(media.kind, string.Empty, false, string.Empty);
     }
 
     void Request(ViewerMediaKind newKind, string source, bool isUrl, string newTitle)
@@ -534,12 +546,19 @@ public class ViewerPanel : NetworkBehaviour
         ReleaseMedia();
         m_Title = state.title.ToString();
         string source = state.source.ToString();
-        bool video = ViewerLibrary.IsVideoKind(state.kind);
+        bool video = source.Length > 0 && ViewerLibrary.IsVideoKind(state.kind);
         if (m_Controls != null && m_Controls.activeSelf != video)
         {
             m_Controls.SetActive(video);
             if (m_Panel != null)
                 m_Panel.RefreshLayout();
+        }
+
+        // Cleared: an empty screen, ready for the next thing.
+        if (source.Length == 0)
+        {
+            SetStatus(k_EmptyHint);
+            yield break;
         }
 
         SetStatus($"Loading {m_Title}...");

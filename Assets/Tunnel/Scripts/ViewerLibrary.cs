@@ -22,6 +22,9 @@ public enum ViewerMediaKind : byte
 ///    build (Tunnel/Editor/ViewerMediaIndex.cs writes the list, index.json, since an APK's folders can't be listed).
 ///  - This headset: Android/data/&lt;package&gt;/files/Viewer/&lt;same folders&gt; (push-media.sh copies files there), so new
 ///    media needs no rebuild. Only headsets that have a file can show it, so prefer built-in media or links for sharing.
+///  - The Quest's own photos and videos: its screenshots and recordings (the Oculus folder) and the Pictures,
+///    Movies, DCIM and Download folders, sorted into the lists by file type (newest first). Reading them needs the
+///    headset's photos-and-videos permission, asked for the first time a list is opened.
 /// A folder can hold the media itself or a link to it: a .url, .webloc or .txt file whose text contains an http(s)
 /// address. Either way the entry's name is the file name without its extension.
 /// Spatial media is stereo: side by side (left eye on the left) unless the name says otherwise; see <see cref="StereoLayoutFor"/>.
@@ -49,6 +52,11 @@ public static class ViewerLibrary
         public string location;
         public bool isLink;
         public bool onHeadset;
+        [Tooltip("Set for the Quest's own photos and videos: where the file is.")]
+        public string fullPath;
+        public long modified;
+
+        public bool isDeviceMedia => !string.IsNullOrEmpty(fullPath);
     }
 
     [Serializable]
@@ -73,8 +81,27 @@ public static class ViewerLibrary
     public static IEnumerable<Entry> OfKind(ViewerMediaKind kind) => s_All.Where(e => e.kind == kind);
 
     /// <summary>Reads the built-in list (once) and this headset's folders (every time, creating them if needed).</summary>
-    public static IEnumerator Refresh()
+    /// <summary>The Quest's own media folders (shared storage), each with the kinds it may hold.</summary>
+    static readonly (string path, bool images, bool videos)[] k_DeviceFolders =
     {
+        ("/sdcard/Oculus/Screenshots", true, false),
+        ("/sdcard/Oculus/VideoShots", false, true),
+        ("/sdcard/Pictures", true, true),
+        ("/sdcard/Movies", false, true),
+        ("/sdcard/DCIM", true, true),
+        ("/sdcard/Download", true, true),
+    };
+
+    const string k_ReadImages = "android.permission.READ_MEDIA_IMAGES";
+    const string k_ReadVideos = "android.permission.READ_MEDIA_VIDEO";
+    static bool s_PermissionAsked;
+
+    /// <param name="askPermission">Ask for the photos-and-videos permission if it hasn't been asked this session.</param>
+    public static IEnumerator Refresh(bool askPermission = false)
+    {
+        if (askPermission)
+            yield return AskForDeviceMedia();
+
         if (s_BuiltIn == null)
         {
             var builtIn = new List<Entry>();
@@ -90,7 +117,17 @@ public static class ViewerLibrary
                 s_All.Add(entry);
         }
 
-        s_All.Sort((a, b) => a.kind != b.kind ? a.kind.CompareTo(b.kind) : string.Compare(a.name, b.name, StringComparison.OrdinalIgnoreCase));
+        s_All.AddRange(ScanDeviceMedia());
+
+        // By kind; the app's own media by name, then the Quest's photos and videos, newest first.
+        s_All.Sort((a, b) =>
+        {
+            if (a.kind != b.kind)
+                return a.kind.CompareTo(b.kind);
+            if (a.isDeviceMedia != b.isDeviceMedia)
+                return a.isDeviceMedia ? 1 : -1;
+            return a.isDeviceMedia ? b.modified.CompareTo(a.modified) : string.Compare(a.name, b.name, StringComparison.OrdinalIgnoreCase);
+        });
     }
 
     static IEnumerator LoadBuiltIn(List<Entry> into)
@@ -181,11 +218,99 @@ public static class ViewerLibrary
     /// <summary>The address a loader opens for an entry: its URL, or its file in the right root.</summary>
     public static string AddressOf(Entry entry)
     {
+        if (entry.isDeviceMedia)
+            return "file://" + entry.fullPath;
         if (entry.isLink)
             return entry.location;
         string path = Path.Combine(entry.onHeadset ? HeadsetRoot : BuiltInRoot, KindFolders[(int)entry.kind], entry.location);
         // StreamingAssets on Android is already a jar: URL; everything else is a plain file.
         return path.Contains("://") ? path : "file://" + path;
+    }
+
+    static IEnumerator AskForDeviceMedia()
+    {
+        if (s_PermissionAsked || Application.platform != RuntimePlatform.Android
+            || (UnityEngine.Android.Permission.HasUserAuthorizedPermission(k_ReadImages)
+                && UnityEngine.Android.Permission.HasUserAuthorizedPermission(k_ReadVideos)))
+            yield break;
+
+        s_PermissionAsked = true;
+        bool answered = false;
+        var callbacks = new UnityEngine.Android.PermissionCallbacks();
+        callbacks.PermissionGranted += _ => answered = true;
+        callbacks.PermissionDenied += _ => answered = true;
+        UnityEngine.Android.Permission.RequestUserPermissions(new[] { k_ReadImages, k_ReadVideos }, callbacks);
+
+        // One answer covers both (the headset asks once for photos and videos); give up if the prompt is dismissed.
+        float giveUp = Time.realtimeSinceStartup + 30f;
+        while (!answered && Time.realtimeSinceStartup < giveUp)
+            yield return null;
+        yield return null;
+        Debug.Log($"[Viewer] photos and videos permission: images {UnityEngine.Android.Permission.HasUserAuthorizedPermission(k_ReadImages)}, " +
+            $"videos {UnityEngine.Android.Permission.HasUserAuthorizedPermission(k_ReadVideos)}");
+    }
+
+    /// <summary>The Quest's photos and videos it lets the app see (none in the Editor).</summary>
+    static List<Entry> ScanDeviceMedia()
+    {
+        var entries = new List<Entry>();
+        if (Application.platform != RuntimePlatform.Android)
+            return entries;
+
+        var seen = new HashSet<string>();
+        foreach (var (path, images, videos) in k_DeviceFolders)
+        {
+            try
+            {
+                if (!Directory.Exists(path))
+                    continue;
+                // The folder and the one below it (DCIM/Camera, Pictures/Screenshots, ...).
+                var files = Directory.GetFiles(path).Concat(Directory.GetDirectories(path)
+                    .Where(d => !Path.GetFileName(d).StartsWith("."))
+                    .SelectMany(d => SafeFiles(d)));
+                foreach (string file in files)
+                {
+                    string extension = Path.GetExtension(file).ToLowerInvariant();
+                    bool isVideo = VideoExtensions.Contains(extension);
+                    bool isImage = ImageExtensions.Contains(extension);
+                    if (!(isVideo && videos) && !(isImage && images) || !seen.Add(file))
+                        continue;
+
+                    string name = Path.GetFileNameWithoutExtension(file);
+                    bool stereo = StereoLayoutFor(name, 0, 0) != StereoLayout.Mono;
+                    var kind = isVideo
+                        ? stereo ? ViewerMediaKind.SpatialVideo : ViewerMediaKind.Video
+                        : stereo ? ViewerMediaKind.SpatialImage : ViewerMediaKind.Image;
+                    entries.Add(new Entry
+                    {
+                        name = name,
+                        kind = kind,
+                        location = Path.GetFileName(file),
+                        fullPath = file,
+                        onHeadset = true,
+                        modified = File.GetLastWriteTimeUtc(file).Ticks,
+                    });
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[Viewer] can't read {path}: {e.Message}");
+            }
+        }
+
+        return entries;
+    }
+
+    static IEnumerable<string> SafeFiles(string folder)
+    {
+        try
+        {
+            return Directory.GetFiles(folder);
+        }
+        catch (Exception)
+        {
+            return Array.Empty<string>();
+        }
     }
 
     public static Entry Find(ViewerMediaKind kind, string name) =>
