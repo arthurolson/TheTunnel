@@ -1,4 +1,6 @@
 using System.Collections;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using TMPro;
 using UnityEngine;
@@ -10,7 +12,11 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 /// a scrollable list of what's in that kind's folder (built in and on this headset; see <see cref="ViewerLibrary"/>)
 /// followed by the Quest's own photos and videos, newest first. Tap a name to show it; Clear empties the screen. The name field and Keyboard button bring up the keyboard: type a name (or part of one) or an
 /// address and press Enter to show it; while typing, the open list only shows names containing the text.
-/// Choosing something closes the list so it doesn't cover the screen.
+/// Choosing something closes the list; the list opens beside the screen, on its left, so it doesn't cover it.
+/// Each row has two check boxes: Save (build this headset's file into the app at the next build, so every headset
+/// has it; checked and greyed for media already built in) and Delete (marks the file; "Delete checked" removes the
+/// marked ones from this headset, the Quest's own photos and videos after the headset's own confirmation).
+/// &lt; and &gt; on the screen's edges show the previous or next item of the shown kind.
 /// Paste shows an address copied in the browser (its Copy button); with the keyboard open it adds the address to
 /// the typed text instead, to edit before pressing Enter.
 /// The open list is shared, like the TS Menu: whoever opens or closes it does so for everyone.
@@ -19,6 +25,10 @@ public class ViewerMenu : MonoBehaviour
 {
     [SerializeField]
     ViewerPanel m_Viewer;
+
+    [SerializeField]
+    [Tooltip("The screen the list sits beside and the < and > buttons sit on.")]
+    Transform m_ScreenQuad;
 
     [Header("Kinds of media (Images, Videos, Spatial Images, Spatial Videos)")]
     [SerializeField]
@@ -53,6 +63,20 @@ public class ViewerMenu : MonoBehaviour
     [SerializeField]
     float m_RowSpacing = 58f;
 
+    [SerializeField]
+    [Tooltip("Gap between the list and the screen's left edge (meters).")]
+    float m_ListGap = 0.03f;
+
+    [SerializeField]
+    Button m_DeleteButton;
+
+    [Header("Previous and next")]
+    [SerializeField]
+    Button m_PreviousButton;
+
+    [SerializeField]
+    Button m_NextButton;
+
     [Header("Typing")]
     [SerializeField]
     Button m_Field;
@@ -80,6 +104,9 @@ public class ViewerMenu : MonoBehaviour
     Coroutine m_BuildRoutine;
     string m_Notice;
     float m_NoticeUntil;
+    readonly HashSet<string> m_ToDelete = new();
+    List<ViewerLibrary.Entry> m_AwaitingDelete;
+    float m_NextStepCheck;
 
     ViewerMediaKind? openKind => m_Viewer != null && m_Viewer.openList >= 0 ? (ViewerMediaKind)m_Viewer.openList : null;
 
@@ -111,6 +138,24 @@ public class ViewerMenu : MonoBehaviour
                 if (m_Viewer != null)
                     m_Viewer.Clear();
             });
+        if (m_DeleteButton != null)
+        {
+            m_DeleteButton.onClick.AddListener(DeleteChecked);
+            m_DeleteButton.gameObject.SetActive(false);
+        }
+
+        if (m_PreviousButton != null)
+            m_PreviousButton.onClick.AddListener(() => Step(-1));
+        if (m_NextButton != null)
+            m_NextButton.onClick.AddListener(() => Step(1));
+        UpdateStepButtons();
+    }
+
+    IEnumerator Start()
+    {
+        // The library is read when a list opens or a named item loads; < and > need it before that.
+        yield return ViewerLibrary.Refresh();
+        UpdateStepButtons();
     }
 
     void OnEnable()
@@ -220,6 +265,7 @@ public class ViewerMenu : MonoBehaviour
             Destroy(m_ListContent.GetChild(i).gameObject);
 
         var all = ViewerLibrary.OfKind(kind.Value).ToList();
+        var marked = ViewerLibrary.ReadSaveList().Select(line => line.path).ToHashSet();
         var shown = m_Typed.Length == 0 ? all : all.Where(e => e.name.IndexOf(m_Typed, System.StringComparison.OrdinalIgnoreCase) >= 0).ToList();
         for (int i = 0; i < shown.Count; i++)
         {
@@ -230,8 +276,10 @@ public class ViewerMenu : MonoBehaviour
             string note = entry.isLink ? "  <color=#8CF>(link)</color>"
                 : entry.isDeviceMedia ? "  <color=#AAA>(Quest)</color>"
                 : entry.onHeadset ? "  <color=#AAA>(this headset)</color>" : string.Empty;
-            row.GetComponentInChildren<TMP_Text>(true).text = entry.name + note;
+            var label = row.transform.Find("Label").GetComponent<TMP_Text>();
+            string text = entry.name + note;
             row.onClick.AddListener(() => Choose(entry));
+            SetUpCheckBoxes(row, entry, label, text, marked.Contains(entry.file ?? string.Empty));
         }
 
         m_ListContent.sizeDelta = new Vector2(m_ListContent.sizeDelta.x, Mathf.Max(1, shown.Count) * m_RowSpacing);
@@ -248,6 +296,86 @@ public class ViewerMenu : MonoBehaviour
         else
             SetListStatus(m_Typed.Length > 0 ? $"{shown.Count} of {all.Count} contain \"{m_Typed}\"" : "Tap a name to show it.");
         m_BuildRoutine = null;
+        UpdateDeleteButton();
+        UpdateStepButtons();
+    }
+
+    void SetUpCheckBoxes(Button row, ViewerLibrary.Entry entry, TMP_Text label, string text, bool marked)
+    {
+        var save = row.transform.Find("Save Toggle")?.GetComponent<Toggle>();
+        if (save != null)
+        {
+            bool builtIn = ViewerLibrary.IsBuiltIn(entry);
+            save.SetIsOnWithoutNotify(builtIn || marked);
+            save.interactable = !builtIn && entry.file != null;
+            save.onValueChanged.AddListener(on =>
+            {
+                ViewerLibrary.MarkToSave(entry, on);
+                ShowNotice(on ? $"{entry.name} goes into the app at the next build." : $"{entry.name} won't go into the app.");
+            });
+        }
+
+        var delete = row.transform.Find("Delete Toggle")?.GetComponent<Toggle>();
+        bool toDelete = entry.canDelete && m_ToDelete.Contains(entry.file);
+        label.text = toDelete ? DeleteLook(text) : text;
+        if (delete == null)
+            return;
+        delete.gameObject.SetActive(entry.canDelete);
+        delete.SetIsOnWithoutNotify(toDelete);
+        delete.onValueChanged.AddListener(on =>
+        {
+            if (on)
+                m_ToDelete.Add(entry.file);
+            else
+                m_ToDelete.Remove(entry.file);
+            label.text = on ? DeleteLook(text) : text;
+            UpdateDeleteButton();
+        });
+    }
+
+    static string DeleteLook(string text) => $"<color=#F88><s>{text}</s></color>";
+
+    void UpdateDeleteButton()
+    {
+        int count = m_ToDelete.Count(file => ViewerLibrary.all.Any(e => e.file == file));
+        if (m_DeleteButton == null)
+            return;
+        m_DeleteButton.gameObject.SetActive(count > 0);
+        var text = m_DeleteButton.GetComponentInChildren<TMP_Text>(true);
+        if (text != null)
+            text.text = $"Delete {count} checked";
+    }
+
+    void DeleteChecked()
+    {
+        var entries = ViewerLibrary.all.Where(e => e.canDelete && m_ToDelete.Contains(e.file)).ToList();
+        m_ToDelete.Clear();
+        if (entries.Count == 0)
+            return;
+
+        var (deleted, asked) = ViewerLibrary.Delete(entries);
+        if (entries.Any(e => IsShown(e) && !File.Exists(e.file)))
+            m_Viewer.Clear();
+        m_AwaitingDelete = asked > 0 ? entries.Where(e => e.isDeviceMedia).ToList() : null;
+        int failed = entries.Count - deleted - asked;
+        m_Message = (deleted > 0 ? $"Deleted {deleted}. " : string.Empty)
+            + (asked > 0 ? $"Answer the headset's prompt to delete {asked} of its own. " : string.Empty)
+            + (failed > 0 ? $"Couldn't delete {failed}." : string.Empty);
+        BuildList(true);
+    }
+
+    /// <summary>Back from the headset's delete prompt: show what it deleted.</summary>
+    void OnApplicationFocus(bool focused)
+    {
+        if (!focused || m_AwaitingDelete == null)
+            return;
+        var gone = m_AwaitingDelete.Where(e => !File.Exists(e.file)).ToList();
+        m_AwaitingDelete = null;
+        if (gone.Any(IsShown))
+            m_Viewer.Clear();
+        ShowNotice(gone.Count > 0 ? $"Deleted {gone.Count} of the headset's photos and videos." : "Nothing deleted.");
+        if (openKind != null)
+            BuildList(true);
     }
 
     void Choose(ViewerLibrary.Entry entry)
@@ -270,6 +398,69 @@ public class ViewerMenu : MonoBehaviour
     {
         if (m_ListStatus != null)
             m_ListStatus.text = text;
+    }
+
+    #endregion
+
+    #region Placement, previous and next
+
+    void LateUpdate()
+    {
+        if (m_ScreenQuad == null)
+            return;
+        Vector3 right = m_ScreenQuad.right, up = m_ScreenQuad.up, toViewer = -m_ScreenQuad.forward;
+        Vector3 center = m_ScreenQuad.position;
+        Vector2 half = new Vector2(m_ScreenQuad.lossyScale.x, m_ScreenQuad.lossyScale.y) * 0.5f;
+
+        // The list: left of the screen, tops level.
+        if (m_ListPanel != null && m_ListPanel.activeSelf)
+        {
+            var list = (RectTransform)m_ListPanel.transform;
+            Vector2 listHalf = Vector2.Scale(list.rect.size, list.lossyScale) * 0.5f;
+            list.position = center - right * (half.x + m_ListGap + listHalf.x) + up * (half.y - listHalf.y) + toViewer * 0.005f;
+        }
+
+        // < and >: just inside the screen's left and right edges, halfway up.
+        foreach (var (button, side) in new[] { (m_PreviousButton, -1f), (m_NextButton, 1f) })
+        {
+            if (button == null || !button.gameObject.activeSelf)
+                continue;
+            var rect = (RectTransform)button.transform;
+            float buttonHalf = rect.rect.width * rect.lossyScale.x * 0.5f;
+            rect.position = center + right * side * (half.x - buttonHalf - 0.01f) + toViewer * 0.008f;
+        }
+    }
+
+    /// <summary>The shown kind's list without repeated names (one file can be both built in and on the Quest).</summary>
+    List<ViewerLibrary.Entry> StepList() => m_Viewer == null ? new List<ViewerLibrary.Entry>()
+        : ViewerLibrary.OfKind(m_Viewer.kind).GroupBy(e => (e.isLink, e.name.ToLowerInvariant())).Select(g => g.First()).ToList();
+
+    bool IsShown(ViewerLibrary.Entry entry) =>
+        m_Viewer != null && m_Viewer.hasContent && m_Viewer.kind == entry.kind && (m_Viewer.isUrl
+            ? entry.isLink && entry.location == m_Viewer.source
+            : !entry.isLink && string.Equals(entry.name, m_Viewer.source, System.StringComparison.OrdinalIgnoreCase));
+
+    void Step(int direction)
+    {
+        if (m_Viewer == null || !m_Viewer.hasContent)
+            return;
+        var list = StepList();
+        if (list.Count == 0)
+            return;
+        int at = list.FindIndex(IsShown);
+        int next = at < 0 ? (direction > 0 ? 0 : list.Count - 1) : (at + direction + list.Count) % list.Count;
+        m_Viewer.Open(list[next]);
+    }
+
+    /// <summary>&lt; and &gt; show when the shown kind has more than one item.</summary>
+    void UpdateStepButtons()
+    {
+        bool show = m_Viewer != null && m_Viewer.hasContent && StepList().Count > 1;
+        foreach (var button in new[] { m_PreviousButton, m_NextButton })
+        {
+            if (button != null && button.gameObject.activeSelf != show)
+                button.gameObject.SetActive(show);
+        }
     }
 
     #endregion
@@ -319,6 +510,12 @@ public class ViewerMenu : MonoBehaviour
         {
             m_Notice = null;
             UpdateField();
+        }
+
+        if (Time.unscaledTime >= m_NextStepCheck)
+        {
+            m_NextStepCheck = Time.unscaledTime + 0.5f;
+            UpdateStepButtons();
         }
     }
 

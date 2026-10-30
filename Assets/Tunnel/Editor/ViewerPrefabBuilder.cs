@@ -109,6 +109,7 @@ static class ViewerPrefabBuilder
             Set(viewer, "m_Controls", controls.gameObject);
 
             Set(viewerMenu, "m_Viewer", viewer);
+            Set(viewerMenu, "m_ScreenQuad", media.transform);
             Set(viewerMenu, "m_Keyboard", keyboard);
             Set(controls.GetComponent<ViewerControls>(), "m_Viewer", viewer);
 
@@ -183,6 +184,12 @@ static class ViewerPrefabBuilder
         var clear = CloneButton(buttonTemplate, bar, "Clear Button", k_TopButtonPosition - new Vector2(140f, 0f), new Vector2(130f, 48.5f), 1f, "Clear", 18f);
         Set(menu, "m_ClearButton", clear);
 
+        // < and >: the menu places them on the screen's edges.
+        var previous = CloneButton(buttonTemplate, bar, "Previous Button", new Vector2(-700f, -400f), new Vector2(70f, 120f), 1f, "<", 48f);
+        var next = CloneButton(buttonTemplate, bar, "Next Button", new Vector2(700f, -400f), new Vector2(70f, 120f), 1f, ">", 48f);
+        Set(menu, "m_PreviousButton", previous);
+        Set(menu, "m_NextButton", next);
+
         // The list: the TS Menu's texture list, rescaled to the same physical size on this smaller-scaled canvas.
         var segment = PrefabUtility.LoadPrefabContents(k_SegmentPath);
         try
@@ -202,9 +209,17 @@ static class ViewerPrefabBuilder
 
             var refresh = list.transform.Find("Refresh Button").GetComponent<Button>();
             refresh.onClick = new Button.ButtonClickedEvent();
-            ((RectTransform)refresh.transform).anchoredPosition = new Vector2(0f, -228f);
+            ((RectTransform)refresh.transform).anchoredPosition = new Vector2(-110f, -228f);
+            var delete = Object.Instantiate(refresh.gameObject, list.transform, false).GetComponent<Button>();
+            delete.name = "Delete Button";
+            ((RectTransform)delete.transform).anchoredPosition = new Vector2(110f, -228f);
+            Label(delete).text = "Delete checked";
+            delete.gameObject.SetActive(false);
+            Set(menu, "m_DeleteButton", delete);
+
             var rowTemplate = list.transform.Find("Row Template").GetComponent<Button>();
             rowTemplate.onClick = new Button.ButtonClickedEvent();
+            AddCheckBoxes(rowTemplate);
             var scroll = list.GetComponentInChildren<ScrollRect>(true);
 
             Set(menu, "m_ListPanel", list);
@@ -222,6 +237,79 @@ static class ViewerPrefabBuilder
         }
 
         return menu;
+    }
+
+    const string k_ToggleSprites = "Assets/Samples/XR Interaction Toolkit/3.5.1/Starter Assets/DemoAssets/Sprites/";
+
+    /// <summary>Save and Delete check boxes at the right end of a list row (the name's label is shortened to fit).</summary>
+    static void AddCheckBoxes(Button row)
+    {
+        var label = (RectTransform)row.transform.Find("Label");
+        label.offsetMax = new Vector2(-176f, label.offsetMax.y);
+        var text = label.GetComponent<TMP_Text>();
+        text.textWrappingMode = TextWrappingModes.NoWrap;
+        text.overflowMode = TextOverflowModes.Ellipsis;
+        AddCheckBox(row.transform, "Save Toggle", "Save", -132f, new Color(0.133f, 0.588f, 0.953f), text);
+        AddCheckBox(row.transform, "Delete Toggle", "Delete", -48f, new Color(0.9f, 0.25f, 0.25f), text);
+    }
+
+    static void AddCheckBox(Transform row, string name, string caption, float x, Color checkColor, TMP_Text style)
+    {
+        var outline = AssetDatabase.LoadAssetAtPath<Sprite>(k_ToggleSprites + "Round Radius 4 Outline.png");
+        var filled = AssetDatabase.LoadAssetAtPath<Sprite>(k_ToggleSprites + "Round Radius 4.png");
+
+        var root = NewUI(name, row);
+        var rect = (RectTransform)root.transform;
+        rect.anchorMin = rect.anchorMax = new Vector2(1f, 0.5f);
+        rect.sizeDelta = new Vector2(84f, 46f);
+        rect.anchoredPosition3D = new Vector3(x, 0f, -1f);
+        var hit = root.AddComponent<Image>();
+        hit.color = Color.clear; // the whole box and caption take the poke
+
+        var box = NewUI("Box", root.transform).AddComponent<Image>();
+        var boxRect = box.rectTransform;
+        boxRect.anchorMin = boxRect.anchorMax = new Vector2(0f, 0.5f);
+        boxRect.sizeDelta = new Vector2(26f, 26f);
+        boxRect.anchoredPosition = new Vector2(15f, 0f);
+        box.sprite = outline;
+        box.type = Image.Type.Sliced;
+        box.color = Color.white;
+
+        var check = NewUI("Check", box.transform).AddComponent<Image>();
+        var checkRect = check.rectTransform;
+        checkRect.anchorMin = Vector2.zero;
+        checkRect.anchorMax = Vector2.one;
+        checkRect.sizeDelta = new Vector2(-8f, -8f);
+        check.sprite = filled;
+        check.type = Image.Type.Sliced;
+        check.color = checkColor;
+        check.raycastTarget = false;
+
+        var label = NewUI("Caption", root.transform).AddComponent<TextMeshProUGUI>();
+        var labelRect = label.rectTransform;
+        labelRect.anchorMin = new Vector2(0f, 0f);
+        labelRect.anchorMax = new Vector2(1f, 1f);
+        labelRect.offsetMin = new Vector2(32f, 0f);
+        labelRect.offsetMax = Vector2.zero;
+        label.font = style.font;
+        label.color = style.color;
+        label.fontSize = 17f;
+        label.alignment = TextAlignmentOptions.MidlineLeft;
+        label.text = caption;
+        label.raycastTarget = false;
+
+        var toggle = root.AddComponent<Toggle>();
+        toggle.targetGraphic = box;
+        toggle.graphic = check;
+        toggle.isOn = false;
+    }
+
+    static GameObject NewUI(string name, Transform parent)
+    {
+        var go = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer));
+        go.layer = parent.gameObject.layer;
+        go.transform.SetParent(parent, false);
+        return go;
     }
 
     /// <summary>The video controls bar: a seek slider and time, then the transport buttons.</summary>

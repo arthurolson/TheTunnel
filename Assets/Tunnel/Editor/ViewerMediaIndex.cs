@@ -31,11 +31,16 @@ class ViewerMediaIndex : IPreprocessBuildWithReport
         "least twice as wide as 16:9 (two views side by side). The Quest's own 3D captures are found this way too.\n" +
         "Apple spatial photos (HEIC) and spatial videos (MV-HEVC) must be converted to side by side first.\n\n" +
         "Media files here are not committed to git (see .gitignore); large videos make the APK large.\n" +
+        "Media checked Save in a Viewer list on a headset is copied here before every build (from headsets plugged in).\n" +
         "For media without a rebuild, use push-media.sh to copy files onto a headset.\n";
 
     public int callbackOrder => -100;
 
-    public void OnPreprocessBuild(BuildReport report) => WriteIndex();
+    public void OnPreprocessBuild(BuildReport report)
+    {
+        ViewerSavedMedia.CopyIntoApp();
+        WriteIndex();
+    }
 
     [InitializeOnLoadMethod]
     static void WriteAfterReload() => EditorApplication.delayCall += () =>

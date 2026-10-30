@@ -135,6 +135,9 @@ public class ViewerPanel : NetworkBehaviour
 
     public bool hasContent => media.id != 0 && media.source.Length > 0;
     public ViewerMediaKind kind => media.kind;
+    /// <summary>What's shown: an entry's name, or an address when <see cref="isUrl"/>.</summary>
+    public string source => media.source.ToString();
+    public bool isUrl => media.isUrl;
     public bool isVideo => hasContent && ViewerLibrary.IsVideoKind(media.kind);
     public string title => m_Title;
     public string status => m_Status;

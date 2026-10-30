@@ -56,8 +56,12 @@ public static class ViewerLibrary
         [Tooltip("Set for the Quest's own photos and videos: where the file is.")]
         public string fullPath;
         public long modified;
+        /// <summary>The file behind an entry on this headset (its own folder or the Quest's); null for built-in media.</summary>
+        [NonSerialized]
+        public string file;
 
         public bool isDeviceMedia => !string.IsNullOrEmpty(fullPath);
+        public bool canDelete => !string.IsNullOrEmpty(file);
     }
 
     [Serializable]
@@ -169,6 +173,8 @@ public static class ViewerLibrary
                     if (entry == null)
                         continue;
                     entry.onHeadset = onHeadset;
+                    if (onHeadset)
+                        entry.file = file;
                     entries.Add(entry);
                 }
             }
@@ -285,6 +291,7 @@ public static class ViewerLibrary
                         kind = kind,
                         location = Path.GetFileName(file),
                         fullPath = file,
+                        file = file,
                         onHeadset = true,
                         modified = File.GetLastWriteTimeUtc(file).Ticks,
                     });
@@ -364,6 +371,170 @@ public static class ViewerLibrary
             return spatial ? ViewerMediaKind.SpatialVideo : ViewerMediaKind.Video;
         return spatial ? ViewerMediaKind.SpatialImage : ViewerMediaKind.Image;
     }
+
+    #region Saving into the app and deleting
+
+    /// <summary>
+    /// The headset's list of its media to build into the app: one line per file, "kind&lt;tab&gt;path". Before every
+    /// build the Editor copies them from connected headsets into Assets/StreamingAssets/Viewer (see
+    /// Tunnel/Editor/ViewerSavedMedia.cs), so every headset has them after the next install.
+    /// </summary>
+    public const string SaveListFile = "save-to-app.txt";
+
+    static string saveListPath => Path.Combine(HeadsetRoot, SaveListFile);
+
+    /// <summary>Built in already (the app's own media, or a file of the same name in the kind's built-in folder).</summary>
+    public static bool IsBuiltIn(Entry entry) =>
+        !entry.onHeadset || (s_BuiltIn != null && entry.file != null && s_BuiltIn.Any(e => e.kind == entry.kind && !e.isLink
+            && string.Equals(e.location, Path.GetFileName(entry.file), StringComparison.OrdinalIgnoreCase)));
+
+    public static bool IsMarkedToSave(Entry entry) => entry.file != null && ReadSaveList().Any(line => line.path == entry.file);
+
+    public static void MarkToSave(Entry entry, bool save)
+    {
+        if (entry.file == null)
+            return;
+        var lines = ReadSaveList().Where(line => line.path != entry.file).ToList();
+        if (save)
+            lines.Add(((int)entry.kind, entry.file));
+        WriteSaveList(lines);
+    }
+
+    public static List<(int kind, string path)> ReadSaveList()
+    {
+        var lines = new List<(int, string)>();
+        try
+        {
+            if (!File.Exists(saveListPath))
+                return lines;
+            foreach (string line in File.ReadAllLines(saveListPath))
+            {
+                var parts = line.Split('\t');
+                if (parts.Length == 2 && int.TryParse(parts[0], out int kind) && kind >= 0 && kind < KindFolders.Length)
+                    lines.Add((kind, parts[1]));
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[Viewer] can't read {saveListPath}: {e.Message}");
+        }
+
+        return lines;
+    }
+
+    static void WriteSaveList(List<(int kind, string path)> lines)
+    {
+        try
+        {
+            Directory.CreateDirectory(HeadsetRoot);
+            File.WriteAllLines(saveListPath, lines.Select(line => $"{line.kind}\t{line.path}"));
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[Viewer] can't write {saveListPath}: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Deletes entries' files from this headset. The app's own files go at once; the Quest's photos and videos belong
+    /// to the headset, so it shows its own "Allow deleting?" prompt for them (they're gone once it's answered).
+    /// Returns how many were deleted at once and how many await the headset's prompt.
+    /// </summary>
+    public static (int deleted, int asked) Delete(IEnumerable<Entry> entries)
+    {
+        int deleted = 0;
+        var device = new List<Entry>();
+        foreach (var entry in entries.Where(e => e.canDelete))
+        {
+            if (entry.isDeviceMedia)
+            {
+                device.Add(entry);
+                continue;
+            }
+
+            try
+            {
+                File.Delete(entry.file);
+                deleted++;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[Viewer] can't delete {entry.file}: {e.Message}");
+            }
+        }
+
+        var deletedFiles = entries.Select(e => e.file).ToHashSet();
+        var lines = ReadSaveList();
+        if (lines.RemoveAll(line => deletedFiles.Contains(line.path) && !File.Exists(line.path)) > 0)
+            WriteSaveList(lines);
+
+        int asked = device.Count > 0 && AskToDeleteDeviceMedia(device) ? device.Count : 0;
+        Debug.Log($"[Viewer] deleted {deleted}, asked the headset to delete {asked}");
+        return (deleted, asked);
+    }
+
+    /// <summary>Android's MediaStore delete request for files the app doesn't own: the system asks the wearer.</summary>
+    static bool AskToDeleteDeviceMedia(List<Entry> entries)
+    {
+        if (Application.platform != RuntimePlatform.Android)
+            return false;
+        try
+        {
+            using var player = new AndroidJavaClass("com.unity3d.player.UnityPlayer");
+            using var activity = player.GetStatic<AndroidJavaObject>("currentActivity");
+            using var resolver = activity.Call<AndroidJavaObject>("getContentResolver");
+            using var uris = new AndroidJavaObject("java.util.ArrayList");
+            using var contentUris = new AndroidJavaClass("android.content.ContentUris");
+            foreach (var entry in entries)
+            {
+                using var media = new AndroidJavaClass(IsVideoKind(entry.kind) ? "android.provider.MediaStore$Video$Media" : "android.provider.MediaStore$Images$Media");
+                using var collection = media.GetStatic<AndroidJavaObject>("EXTERNAL_CONTENT_URI");
+                using var cursor = resolver.Call<AndroidJavaObject>("query", collection, new[] { "_id" }, "_data=?", new[] { entry.file }, "_id");
+                if (cursor != null && cursor.Call<bool>("moveToFirst"))
+                {
+                    using var uri = contentUris.CallStatic<AndroidJavaObject>("withAppendedId", collection, cursor.Call<long>("getLong", 0));
+                    uris.Call<bool>("add", uri);
+                }
+                else
+                {
+                    Debug.LogWarning($"[Viewer] {entry.file} isn't in the headset's media list");
+                }
+
+                cursor?.Call("close");
+            }
+
+            if (uris.Call<int>("size") == 0)
+                return false;
+
+            using var mediaStore = new AndroidJavaClass("android.provider.MediaStore");
+            using var request = mediaStore.CallStatic<AndroidJavaObject>("createDeleteRequest", resolver, uris);
+            using var sender = request.Call<AndroidJavaObject>("getIntentSender");
+            // startIntentSenderForResult(sender, requestCode, fillInIntent = null, 0, 0, 0): null needs a raw JNI call.
+            IntPtr activityClass = AndroidJNI.GetObjectClass(activity.GetRawObject());
+            IntPtr method = AndroidJNI.GetMethodID(activityClass, "startIntentSenderForResult", "(Landroid/content/IntentSender;ILandroid/content/Intent;III)V");
+            AndroidJNI.CallVoidMethod(activity.GetRawObject(), method, new[]
+            {
+                new jvalue { l = sender.GetRawObject() }, new jvalue { i = 0x7E1E }, new jvalue { l = IntPtr.Zero },
+                new jvalue { i = 0 }, new jvalue { i = 0 }, new jvalue { i = 0 },
+            });
+            AndroidJNI.DeleteLocalRef(activityClass);
+            if (AndroidJNI.ExceptionOccurred() != IntPtr.Zero)
+            {
+                AndroidJNI.ExceptionDescribe();
+                AndroidJNI.ExceptionClear();
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[Viewer] can't ask to delete the headset's media: {e.Message}");
+            return false;
+        }
+    }
+
+    #endregion
 
     public enum StereoLayout
     {
