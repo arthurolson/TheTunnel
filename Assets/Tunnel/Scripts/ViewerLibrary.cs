@@ -473,8 +473,139 @@ public static class ViewerLibrary
         return (deleted, asked);
     }
 
+    /// <summary>
+    /// Renames an entry's file on this headset, keeping its extension; returns null when done, else why not. The
+    /// Quest's own photos and videos need the headset's permission first: see <see cref="AskToChangeDeviceMedia"/>.
+    /// </summary>
+    public static string Rename(Entry entry, string newName)
+    {
+        newName = CleanName(newName);
+        if (newName.Length == 0)
+            return "Type a new name first.";
+        if (!entry.canDelete)
+            return $"{entry.name} is built into the app and can't be renamed here.";
+        string target = Path.Combine(Path.GetDirectoryName(entry.file), newName + Path.GetExtension(entry.file));
+        if (File.Exists(target))
+            return $"There's already a {newName}.";
+
+        if (entry.isDeviceMedia)
+        {
+            if (!ChangeDeviceMedia(entry, uri => RenameDeviceMedia(uri, Path.GetFileName(target))))
+                return $"The headset didn't allow renaming {entry.name}.";
+        }
+        else
+        {
+            try
+            {
+                File.Move(entry.file, target);
+            }
+            catch (Exception e)
+            {
+                return $"Couldn't rename {entry.name}: {e.Message}";
+            }
+        }
+
+        var lines = ReadSaveList();
+        if (lines.RemoveAll(line => line.path == entry.file) > 0)
+        {
+            lines.Add(((int)entry.kind, target));
+            WriteSaveList(lines);
+        }
+
+        Debug.Log($"[Viewer] renamed {entry.file} to {target}");
+        return null;
+    }
+
+    /// <summary>A name safe for a file: no folder or reserved characters, no extension.</summary>
+    public static string CleanName(string name) =>
+        Regex.Replace((name ?? string.Empty).Replace("\n", string.Empty), @"[\\/:*?""<>|]", "_").Trim().TrimEnd('.');
+
+    /// <summary>
+    /// The Quest's own photos and videos belong to the headset: before the app may rename one, the headset asks the
+    /// wearer (its "Allow ... to modify?" prompt). Returns whether the prompt was shown; <see cref="Rename"/> works
+    /// once it's been allowed (see <see cref="MayChangeDeviceMedia"/>).
+    /// </summary>
+    public static bool AskToChangeDeviceMedia(Entry entry) => RequestForDeviceMedia("createWriteRequest", new List<Entry> { entry });
+
+    /// <summary>Whether the headset allowed the app to change one of its photos or videos.</summary>
+    public static bool MayChangeDeviceMedia(Entry entry)
+    {
+        bool allowed = false;
+        WithMediaUri(entry, (activity, uri) =>
+        {
+            using var process = new AndroidJavaClass("android.os.Process");
+            // Context.checkUriPermission(uri, pid, uid, FLAG_GRANT_WRITE_URI_PERMISSION) == PERMISSION_GRANTED
+            allowed = activity.Call<int>("checkUriPermission", uri, process.CallStatic<int>("myPid"), process.CallStatic<int>("myUid"), 2) == 0;
+        });
+        return allowed;
+    }
+
+    static bool ChangeDeviceMedia(Entry entry, Action<AndroidJavaObject> change)
+    {
+        bool done = false;
+        WithMediaUri(entry, (_, uri) =>
+        {
+            change(uri);
+            done = true;
+        });
+        return done;
+    }
+
+    static void RenameDeviceMedia(AndroidJavaObject uri, string displayName)
+    {
+        using var player = new AndroidJavaClass("com.unity3d.player.UnityPlayer");
+        using var activity = player.GetStatic<AndroidJavaObject>("currentActivity");
+        using var resolver = activity.Call<AndroidJavaObject>("getContentResolver");
+        using var values = new AndroidJavaObject("android.content.ContentValues");
+        values.Call("put", "_display_name", displayName);
+        resolver.Call<int>("update", uri, values, "_id=?", new[] { uri.Call<string>("getLastPathSegment") });
+    }
+
     /// <summary>Android's MediaStore delete request for files the app doesn't own: the system asks the wearer.</summary>
-    static bool AskToDeleteDeviceMedia(List<Entry> entries)
+    static bool AskToDeleteDeviceMedia(List<Entry> entries) => RequestForDeviceMedia("createDeleteRequest", entries);
+
+    /// <summary>Calls <paramref name="use"/> with the activity and the MediaStore address of one of the Quest's files.</summary>
+    static void WithMediaUri(Entry entry, Action<AndroidJavaObject, AndroidJavaObject> use)
+    {
+        if (Application.platform != RuntimePlatform.Android || !entry.isDeviceMedia)
+            return;
+        try
+        {
+            using var player = new AndroidJavaClass("com.unity3d.player.UnityPlayer");
+            using var activity = player.GetStatic<AndroidJavaObject>("currentActivity");
+            using var resolver = activity.Call<AndroidJavaObject>("getContentResolver");
+            using var uri = MediaUri(resolver, entry);
+            if (uri != null)
+                use(activity, uri);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[Viewer] can't change {entry.file}: {e.Message}");
+        }
+    }
+
+    static AndroidJavaObject MediaUri(AndroidJavaObject resolver, Entry entry)
+    {
+        using var media = new AndroidJavaClass(IsVideoKind(entry.kind) ? "android.provider.MediaStore$Video$Media" : "android.provider.MediaStore$Images$Media");
+        using var collection = media.GetStatic<AndroidJavaObject>("EXTERNAL_CONTENT_URI");
+        using var cursor = resolver.Call<AndroidJavaObject>("query", collection, new[] { "_id" }, "_data=?", new[] { entry.file }, "_id");
+        AndroidJavaObject uri = null;
+        if (cursor != null && cursor.Call<bool>("moveToFirst"))
+        {
+            using var contentUris = new AndroidJavaClass("android.content.ContentUris");
+            uri = contentUris.CallStatic<AndroidJavaObject>("withAppendedId", collection, cursor.Call<long>("getLong", 0));
+        }
+        else
+        {
+            Debug.LogWarning($"[Viewer] {entry.file} isn't in the headset's media list");
+        }
+
+        cursor?.Call("close");
+        return uri;
+    }
+
+    /// <summary>Shows one of MediaStore's prompts (createDeleteRequest, createWriteRequest) for the Quest's files.</summary>
+    static bool RequestForDeviceMedia(string requestMethod, List<Entry> entries)
     {
         if (Application.platform != RuntimePlatform.Android)
             return false;
@@ -484,30 +615,18 @@ public static class ViewerLibrary
             using var activity = player.GetStatic<AndroidJavaObject>("currentActivity");
             using var resolver = activity.Call<AndroidJavaObject>("getContentResolver");
             using var uris = new AndroidJavaObject("java.util.ArrayList");
-            using var contentUris = new AndroidJavaClass("android.content.ContentUris");
             foreach (var entry in entries)
             {
-                using var media = new AndroidJavaClass(IsVideoKind(entry.kind) ? "android.provider.MediaStore$Video$Media" : "android.provider.MediaStore$Images$Media");
-                using var collection = media.GetStatic<AndroidJavaObject>("EXTERNAL_CONTENT_URI");
-                using var cursor = resolver.Call<AndroidJavaObject>("query", collection, new[] { "_id" }, "_data=?", new[] { entry.file }, "_id");
-                if (cursor != null && cursor.Call<bool>("moveToFirst"))
-                {
-                    using var uri = contentUris.CallStatic<AndroidJavaObject>("withAppendedId", collection, cursor.Call<long>("getLong", 0));
+                using var uri = MediaUri(resolver, entry);
+                if (uri != null)
                     uris.Call<bool>("add", uri);
-                }
-                else
-                {
-                    Debug.LogWarning($"[Viewer] {entry.file} isn't in the headset's media list");
-                }
-
-                cursor?.Call("close");
             }
 
             if (uris.Call<int>("size") == 0)
                 return false;
 
             using var mediaStore = new AndroidJavaClass("android.provider.MediaStore");
-            using var request = mediaStore.CallStatic<AndroidJavaObject>("createDeleteRequest", resolver, uris);
+            using var request = mediaStore.CallStatic<AndroidJavaObject>(requestMethod, resolver, uris);
             using var sender = request.Call<AndroidJavaObject>("getIntentSender");
             // startIntentSenderForResult(sender, requestCode, fillInIntent = null, 0, 0, 0): null needs a raw JNI call.
             IntPtr activityClass = AndroidJNI.GetObjectClass(activity.GetRawObject());
@@ -529,7 +648,7 @@ public static class ViewerLibrary
         }
         catch (Exception e)
         {
-            Debug.LogWarning($"[Viewer] can't ask to delete the headset's media: {e.Message}");
+            Debug.LogWarning($"[Viewer] can't ask the headset ({requestMethod}): {e.Message}");
             return false;
         }
     }

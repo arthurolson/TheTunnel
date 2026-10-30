@@ -13,9 +13,10 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 /// followed by the Quest's own photos and videos, newest first. Tap a name to show it; Clear empties the screen. The name field and Keyboard button bring up the keyboard: type a name (or part of one) or an
 /// address and press Enter to show it; while typing, the open list only shows names containing the text.
 /// Choosing something closes the list; the list opens beside the screen, on its left, so it doesn't cover it.
-/// Each row has two check boxes: Save (build this headset's file into the app at the next build, so every headset
-/// has it; checked and greyed for media already built in) and Delete (marks the file; "Delete checked" removes the
-/// marked ones from this headset, the Quest's own photos and videos after the headset's own confirmation).
+/// Each row has three check boxes: Save (build this headset's file into the app at the next build, so every headset
+/// has it; checked and greyed for media already built in), Rename (brings up the keyboard with the name; Enter renames
+/// the file) and Delete (marks the file; "Delete checked" removes the marked ones from this headset). The Quest's own
+/// photos and videos are renamed or deleted only once the wearer allows it in the headset's own prompt.
 /// &lt; and &gt; on the screen's edges show the previous or next item of the shown kind.
 /// Paste shows an address copied in the browser (its Copy button); with the keyboard open it adds the address to
 /// the typed text instead, to edit before pressing Enter.
@@ -105,7 +106,12 @@ public class ViewerMenu : MonoBehaviour
     string m_Notice;
     float m_NoticeUntil;
     readonly HashSet<string> m_ToDelete = new();
-    List<ViewerLibrary.Entry> m_AwaitingDelete;
+    ViewerLibrary.Entry m_Renaming;
+    Toggle m_RenameToggle;
+    string m_RenameText = string.Empty;
+
+    /// <summary>How long to wait for the wearer to answer the headset's delete or rename prompt.</summary>
+    const float k_PromptWait = 180f;
     float m_NextStepCheck;
 
     ViewerMediaKind? openKind => m_Viewer != null && m_Viewer.openList >= 0 ? (ViewerMediaKind)m_Viewer.openList : null;
@@ -229,6 +235,8 @@ public class ViewerMenu : MonoBehaviour
             return;
         if (m_Notice != null && Time.unscaledTime < m_NoticeUntil)
             m_FieldText.text = $"<size=70%>{m_Notice}</size>";
+        else if (m_Renaming != null)
+            m_FieldText.text = $"<size=70%>Rename to:</size> {m_RenameText}";
         else if (m_Typed.Length > 0)
             m_FieldText.text = m_Typed;
         else if (m_Viewer != null && m_Viewer.hasContent && m_Viewer.title.Length > 0)
@@ -315,6 +323,22 @@ public class ViewerMenu : MonoBehaviour
             });
         }
 
+        var rename = row.transform.Find("Rename Toggle")?.GetComponent<Toggle>();
+        if (rename != null)
+        {
+            rename.gameObject.SetActive(entry.canDelete);
+            rename.SetIsOnWithoutNotify(m_Renaming != null && m_Renaming.file == entry.file);
+            if (rename.isOn)
+                m_RenameToggle = rename;
+            rename.onValueChanged.AddListener(on =>
+            {
+                if (on)
+                    StartRename(entry, rename);
+                else if (m_Renaming != null && m_Renaming.file == entry.file)
+                    CancelRename();
+            });
+        }
+
         var delete = row.transform.Find("Delete Toggle")?.GetComponent<Toggle>();
         bool toDelete = entry.canDelete && m_ToDelete.Contains(entry.file);
         label.text = toDelete ? DeleteLook(text) : text;
@@ -356,7 +380,8 @@ public class ViewerMenu : MonoBehaviour
         var (deleted, asked) = ViewerLibrary.Delete(entries);
         if (entries.Any(e => IsShown(e) && !File.Exists(e.file)))
             m_Viewer.Clear();
-        m_AwaitingDelete = asked > 0 ? entries.Where(e => e.isDeviceMedia).ToList() : null;
+        if (asked > 0)
+            StartCoroutine(WaitForHeadsetDelete(entries.Where(e => e.isDeviceMedia).ToList()));
         int failed = entries.Count - deleted - asked;
         m_Message = (deleted > 0 ? $"Deleted {deleted}. " : string.Empty)
             + (asked > 0 ? $"Answer the headset's prompt to delete {asked} of its own. " : string.Empty)
@@ -364,19 +389,111 @@ public class ViewerMenu : MonoBehaviour
         BuildList(true);
     }
 
-    /// <summary>Back from the headset's delete prompt: show what it deleted.</summary>
-    void OnApplicationFocus(bool focused)
+    /// <summary>
+    /// The headset's delete prompt floats over the app without pausing it, so the files are watched until they're gone
+    /// (or the wearer has had time to answer), then the list is read again.
+    /// </summary>
+    IEnumerator WaitForHeadsetDelete(List<ViewerLibrary.Entry> entries)
     {
-        if (!focused || m_AwaitingDelete == null)
-            return;
-        var gone = m_AwaitingDelete.Where(e => !File.Exists(e.file)).ToList();
-        m_AwaitingDelete = null;
+        float giveUp = Time.unscaledTime + k_PromptWait;
+        while (Time.unscaledTime < giveUp && entries.Any(e => File.Exists(e.file)))
+            yield return new WaitForSecondsRealtime(0.5f);
+
+        var gone = entries.Where(e => !File.Exists(e.file)).ToList();
         if (gone.Any(IsShown))
             m_Viewer.Clear();
-        ShowNotice(gone.Count > 0 ? $"Deleted {gone.Count} of the headset's photos and videos." : "Nothing deleted.");
+        ShowNotice(gone.Count == entries.Count ? $"Deleted {gone.Count} of the headset's photos and videos."
+            : gone.Count > 0 ? $"Deleted {gone.Count} of {entries.Count}; the headset kept the rest."
+            : "The headset didn't delete them.");
         if (openKind != null)
             BuildList(true);
     }
+
+    #region Renaming
+
+    void StartRename(ViewerLibrary.Entry entry, Toggle toggle)
+    {
+        if (m_RenameToggle != null && m_RenameToggle != toggle)
+            m_RenameToggle.SetIsOnWithoutNotify(false);
+        m_Renaming = entry;
+        m_RenameToggle = toggle;
+        m_RenameText = entry.name;
+        if (m_Keyboard != null)
+            m_Keyboard.Open(entry.name);
+        ShowNotice($"Type the new name for {entry.name}, then press Enter.");
+    }
+
+    void CancelRename()
+    {
+        m_Renaming = null;
+        if (m_RenameToggle != null)
+            m_RenameToggle.SetIsOnWithoutNotify(false);
+        m_RenameToggle = null;
+        UpdateField();
+    }
+
+    void FinishRename(string newName)
+    {
+        var entry = m_Renaming;
+        m_Renaming = null;
+        if (m_Keyboard != null && m_Keyboard.isOpen)
+            m_Keyboard.Close(true);
+        CancelRename();
+
+        newName = ViewerLibrary.CleanName(newName);
+        if (newName.Length == 0 || newName == entry.name)
+        {
+            ShowNotice("Name unchanged.");
+            return;
+        }
+
+        if (entry.isDeviceMedia && !ViewerLibrary.MayChangeDeviceMedia(entry))
+        {
+            if (!ViewerLibrary.AskToChangeDeviceMedia(entry))
+            {
+                ShowNotice($"The headset won't let the app rename {entry.name}.");
+                return;
+            }
+
+            ShowNotice($"Allow the change in the headset's prompt to rename {entry.name}.");
+            StartCoroutine(RenameWhenAllowed(entry, newName));
+            return;
+        }
+
+        StartCoroutine(Rename(entry, newName));
+    }
+
+    IEnumerator RenameWhenAllowed(ViewerLibrary.Entry entry, string newName)
+    {
+        float giveUp = Time.unscaledTime + k_PromptWait;
+        while (Time.unscaledTime < giveUp && !ViewerLibrary.MayChangeDeviceMedia(entry))
+            yield return new WaitForSecondsRealtime(0.5f);
+        if (!ViewerLibrary.MayChangeDeviceMedia(entry))
+        {
+            ShowNotice($"The headset didn't allow renaming {entry.name}.");
+            yield break;
+        }
+
+        yield return Rename(entry, newName);
+    }
+
+    IEnumerator Rename(ViewerLibrary.Entry entry, string newName)
+    {
+        bool shown = IsShown(entry);
+        string error = ViewerLibrary.Rename(entry, newName);
+        ShowNotice(error ?? $"Renamed {entry.name} to {newName}.");
+        if (error != null)
+            yield break;
+
+        yield return ViewerLibrary.Refresh();
+        var renamed = ViewerLibrary.Find(entry.kind, newName);
+        if (shown && renamed != null)
+            m_Viewer.Open(renamed);
+        if (openKind != null)
+            BuildList(false);
+    }
+
+    #endregion
 
     void Choose(ViewerLibrary.Entry entry)
     {
@@ -528,14 +645,26 @@ public class ViewerMenu : MonoBehaviour
         if (m_Keyboard == null)
             return;
         if (m_Keyboard.isOpen)
+        {
             m_Keyboard.Close(false);
+        }
         else
+        {
+            CancelRename();
             m_Keyboard.Open(m_Typed);
+        }
     }
 
     void OnTextUpdated(KeyboardTextEventArgs args)
     {
         string text = (args.keyboardText ?? string.Empty).Replace("\n", string.Empty);
+        if (m_Renaming != null)
+        {
+            m_RenameText = text;
+            UpdateField();
+            return;
+        }
+
         if (text == m_Typed)
             return;
         m_Typed = text;
@@ -548,6 +677,12 @@ public class ViewerMenu : MonoBehaviour
     void OnTextSubmitted(KeyboardTextEventArgs args)
     {
         string text = (args.keyboardText ?? string.Empty).Replace("\n", string.Empty).Trim();
+        if (m_Renaming != null)
+        {
+            FinishRename(text);
+            return;
+        }
+
         if (m_Viewer == null || text.Length == 0)
             return;
 
@@ -565,7 +700,13 @@ public class ViewerMenu : MonoBehaviour
         CloseList();
     }
 
-    void OnKeyboardClosed(KeyboardTextEventArgs args) => UpdateField();
+    void OnKeyboardClosed(KeyboardTextEventArgs args)
+    {
+        // Closed without Enter: no rename.
+        if (m_Renaming != null)
+            CancelRename();
+        UpdateField();
+    }
 
     #endregion
 }

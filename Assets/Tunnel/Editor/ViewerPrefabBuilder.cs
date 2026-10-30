@@ -202,6 +202,15 @@ static class ViewerPrefabBuilder
             float scale = 1.4f;
             rect.localScale = Vector3.one * scale;
             rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
+            // Wider than the TS Menu's, for the check boxes beside each name.
+            const float k_Wider = 120f;
+            rect.sizeDelta += new Vector2(k_Wider, 0f);
+            foreach (string child in new[] { "Scroll View", "Status", "Title" })
+            {
+                var part = (RectTransform)list.transform.Find(child);
+                part.sizeDelta += new Vector2(k_Wider, 0f);
+            }
+
             rect.anchoredPosition3D = new Vector3(-600f + 540f * scale * 0.5f, -45f - 12f - 560f * scale * 0.5f, -25f);
             var folder = list.transform.Find("Folder");
             if (folder != null)
@@ -241,19 +250,20 @@ static class ViewerPrefabBuilder
 
     const string k_ToggleSprites = "Assets/Samples/XR Interaction Toolkit/3.5.1/Starter Assets/DemoAssets/Sprites/";
 
-    /// <summary>Save and Delete check boxes at the right end of a list row (the name's label is shortened to fit).</summary>
+    /// <summary>Save, Rename and Delete check boxes at the right end of a list row (the name's label is shortened to fit).</summary>
     static void AddCheckBoxes(Button row)
     {
         var label = (RectTransform)row.transform.Find("Label");
-        label.offsetMax = new Vector2(-176f, label.offsetMax.y);
+        label.offsetMax = new Vector2(-276f, label.offsetMax.y);
         var text = label.GetComponent<TMP_Text>();
         text.textWrappingMode = TextWrappingModes.NoWrap;
         text.overflowMode = TextOverflowModes.Ellipsis;
-        AddCheckBox(row.transform, "Save Toggle", "Save", -132f, new Color(0.133f, 0.588f, 0.953f), text);
-        AddCheckBox(row.transform, "Delete Toggle", "Delete", -48f, new Color(0.9f, 0.25f, 0.25f), text);
+        AddCheckBox(row.transform, "Save Toggle", "Save", -236f, 72f, new Color(0.133f, 0.588f, 0.953f), text);
+        AddCheckBox(row.transform, "Rename Toggle", "Rename", -140f, 104f, new Color(0.95f, 0.75f, 0.2f), text);
+        AddCheckBox(row.transform, "Delete Toggle", "Delete", -44f, 80f, new Color(0.9f, 0.25f, 0.25f), text);
     }
 
-    static void AddCheckBox(Transform row, string name, string caption, float x, Color checkColor, TMP_Text style)
+    static void AddCheckBox(Transform row, string name, string caption, float x, float width, Color checkColor, TMP_Text style)
     {
         var outline = AssetDatabase.LoadAssetAtPath<Sprite>(k_ToggleSprites + "Round Radius 4 Outline.png");
         var filled = AssetDatabase.LoadAssetAtPath<Sprite>(k_ToggleSprites + "Round Radius 4.png");
@@ -261,7 +271,7 @@ static class ViewerPrefabBuilder
         var root = NewUI(name, row);
         var rect = (RectTransform)root.transform;
         rect.anchorMin = rect.anchorMax = new Vector2(1f, 0.5f);
-        rect.sizeDelta = new Vector2(84f, 46f);
+        rect.sizeDelta = new Vector2(width, 46f);
         rect.anchoredPosition3D = new Vector3(x, 0f, -1f);
         var hit = root.AddComponent<Image>();
         hit.color = Color.clear; // the whole box and caption take the poke
