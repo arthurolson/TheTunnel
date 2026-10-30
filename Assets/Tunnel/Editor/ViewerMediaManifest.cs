@@ -3,8 +3,7 @@ using System.Xml;
 using UnityEditor.Android;
 
 /// <summary>
-/// Lets the Viewer list the Quest's own photos and videos (screenshots, recordings, Pictures, Movies, DCIM,
-/// Download): adds Android's read-photos and read-videos permissions. The app asks for them the first time a Viewer
+/// Lets the Viewer list the Quest's own screenshots and recordings (Oculus/Screenshots, Oculus/VideoShots): adds Android's read-photos and read-videos permissions. The app asks for them the first time a Viewer
 /// list is opened.
 /// </summary>
 class ViewerMediaManifest : IPostGenerateGradleAndroidProject

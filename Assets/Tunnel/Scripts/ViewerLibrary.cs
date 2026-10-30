@@ -22,8 +22,8 @@ public enum ViewerMediaKind : byte
 ///    build (Tunnel/Editor/ViewerMediaIndex.cs writes the list, index.json, since an APK's folders can't be listed).
 ///  - This headset: Android/data/&lt;package&gt;/files/Viewer/&lt;same folders&gt; (push-media.sh copies files there), so new
 ///    media needs no rebuild. Only headsets that have a file can show it, so prefer built-in media or links for sharing.
-///  - The Quest's own photos and videos: its screenshots and recordings (the Oculus folder) and the Pictures,
-///    Movies, DCIM and Download folders, sorted into the lists by file type (newest first); spatial ones (by their
+///  - The Quest's own photos and videos: only its screenshots and recordings (Oculus/Screenshots, Oculus/VideoShots;
+///    other folders such as Pictures or Download are not listed), newest first; spatial ones (by their
 ///    name or what the file says, see <see cref="ViewerMediaProbe"/>) go into the Spatial lists. Reading them needs the
 ///    headset's photos-and-videos permission, asked for the first time a list is opened.
 /// A folder can hold the media itself or a link to it: a .url, .webloc or .txt file whose text contains an http(s)
@@ -87,10 +87,6 @@ public static class ViewerLibrary
     {
         ("/sdcard/Oculus/Screenshots", true, false),
         ("/sdcard/Oculus/VideoShots", false, true),
-        ("/sdcard/Pictures", true, true),
-        ("/sdcard/Movies", false, true),
-        ("/sdcard/DCIM", true, true),
-        ("/sdcard/Download", true, true),
     };
 
     const string k_ReadImages = "android.permission.READ_MEDIA_IMAGES";
@@ -265,7 +261,7 @@ public static class ViewerLibrary
             {
                 if (!Directory.Exists(path))
                     continue;
-                // The folder and the one below it (DCIM/Camera, Pictures/Screenshots, ...).
+                // The folder and the one below it.
                 var files = Directory.GetFiles(path).Concat(Directory.GetDirectories(path)
                     .Where(d => !Path.GetFileName(d).StartsWith("."))
                     .SelectMany(d => SafeFiles(d)));
