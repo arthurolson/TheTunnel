@@ -13,7 +13,9 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// Builds the Viewer prefab (Assets/Tunnel/ViewerPanel.prefab) from the browser panel, so it moves, snaps, resizes
 /// and closes exactly like it, then swaps the web page for a media screen, the address bar for the Viewer's menu
 /// (borrowing the TS Menu's list), and adds the video controls. Also gives the browser's keyboard a move handle and
-/// its bar a Copy button (for the Viewer's Paste), registers the prefab for spawning and adds a New Viewer button to the TS Menu. Safe to run again: the prefab keeps
+/// its bar a Copy button (for the Viewer's Paste) and an Unsnap button (both panels), makes both panels' bars and the
+/// browser's page larger to read from a distance, registers the prefab for spawning and adds a New Viewer button to
+/// the TS Menu. Safe to run again: the prefab keeps
 /// its asset (and network) identity. Tunnel > Viewer > Rebuild Viewer Prefab.
 /// </summary>
 static class ViewerPrefabBuilder
@@ -25,9 +27,16 @@ static class ViewerPrefabBuilder
     const string k_MaterialPath = "Assets/Tunnel/Materials/ViewerScreen.mat";
     const string k_HandleMaterialPath = "Assets/Tunnel/Materials/BP_CornerMarker.mat";
     const string k_NetworkPrefabListGuid = "7a0e675f74edc434e8c3591b070157ec";
-    const float k_BarScale = 0.0006f;
+    // The bars' canvas scale: a quarter larger than the template's 0.0006, so buttons and text read from a distance.
+    const float k_BarScale = 0.00075f;
+    // The browser's page is laid out this many pixels wide (the template's 1280 / 1.25): its text a quarter larger.
+    static readonly Vector2Int k_PageSize = new(1024, 576);
     // Above the bar, left of the Close button.
     static readonly Vector2 k_TopButtonPosition = new(365f, 82f);
+    // Above the bar's left end.
+    static readonly Vector2 k_SnapButtonPosition = new(-515f, 82f);
+    // Largest label size on the bars' buttons (the template's 1.3-scaled buttons show 16 x 1.3).
+    const float k_ButtonFontSize = 21f;
 
     [MenuItem("Tunnel/Viewer/Rebuild Viewer Prefab")]
     public static string BuildAll()
@@ -116,8 +125,8 @@ static class ViewerPrefabBuilder
             Set(panel, "m_ScreenQuad", media.transform);
             Set(panel, "m_Controls", controls);
             SetFloat(panel, "m_Width", 1.0f);
-            SetFloat(panel, "m_ControlsDrop", 0.07f);
-            SetFloat(panel, "m_ControlsSpace", 0.14f);
+            SetFloat(panel, "m_ControlsDrop", 0.085f);
+            SetFloat(panel, "m_ControlsSpace", 0.17f);
 
             var saved = PrefabUtility.SaveAsPrefabAsset(root, k_ViewerPath);
             return $"Viewer prefab saved ({refs})" + (saved != null ? "" : " FAILED");
@@ -150,7 +159,7 @@ static class ViewerPrefabBuilder
         float[] x = { -515f, -350f, -185f, -20f };
         for (int i = 0; i < 4; i++)
         {
-            var button = CloneButton(buttonTemplate, bar, ViewerLibrary.KindFolders[i] + " Button", new Vector2(x[i], 0f), new Vector2(160f, 48.5f), 1f, ViewerLibrary.KindLabels[i], 20f);
+            var button = CloneButton(buttonTemplate, bar, ViewerLibrary.KindFolders[i] + " Button", new Vector2(x[i], 0f), new Vector2(160f, 48.5f), 1f, ViewerLibrary.KindLabels[i], k_ButtonFontSize);
             kindButtons[i] = button;
             kindLabels[i] = Label(button);
         }
@@ -179,9 +188,9 @@ static class ViewerPrefabBuilder
         Set(menu, "m_KeyboardButton", keyboardButtonComponent);
 
         // Paste sits above the bar beside Close, where the browser has Copy.
-        var paste = CloneButton(buttonTemplate, bar, "Paste Button", k_TopButtonPosition, new Vector2(130f, 48.5f), 1f, "Paste", 18f);
+        var paste = CloneButton(buttonTemplate, bar, "Paste Button", k_TopButtonPosition, new Vector2(130f, 48.5f), 1f, "Paste", k_ButtonFontSize);
         Set(menu, "m_PasteButton", paste);
-        var clear = CloneButton(buttonTemplate, bar, "Clear Button", k_TopButtonPosition - new Vector2(140f, 0f), new Vector2(130f, 48.5f), 1f, "Clear", 18f);
+        var clear = CloneButton(buttonTemplate, bar, "Clear Button", k_TopButtonPosition - new Vector2(140f, 0f), new Vector2(130f, 48.5f), 1f, "Clear", k_ButtonFontSize);
         Set(menu, "m_ClearButton", clear);
 
         // < and >: the menu places them on the screen's edges.
@@ -357,7 +366,7 @@ static class ViewerPrefabBuilder
         string[] labels = { "|« Start", "« 10 s", "Play", "Stop", "10 s »", "Fast ×2", "Loop: Off" };
         for (int i = 0; i < names.Length; i++)
         {
-            var button = CloneButton(buttonTemplate, controls, names[i] + " Button", new Vector2(-450f + i * 150f, -35f), new Vector2(140f, 48.5f), 1f, labels[i], 20f);
+            var button = CloneButton(buttonTemplate, controls, names[i] + " Button", new Vector2(-450f + i * 150f, -35f), new Vector2(140f, 48.5f), 1f, labels[i], k_ButtonFontSize);
             Set(component, $"m_{names[i]}Button", button);
             if (names[i] is "Play" or "Fast" or "Loop")
                 Set(component, $"m_{names[i]}Label", Label(button));
@@ -489,28 +498,53 @@ static class ViewerPrefabBuilder
         Set(attachment, "m_Handle", handle);
     }
 
-    /// <summary>The browser's keyboard gets the same move handle as the Viewer's, and its bar a Copy button.</summary>
+    /// <summary>
+    /// The browser's keyboard gets the same move handle as the Viewer's, and its bar a Copy button and an Unsnap
+    /// button (which the Viewer inherits); its bar and page are made larger to read from a distance.
+    /// </summary>
     static string UpdateBrowser()
     {
         var root = PrefabUtility.LoadPrefabContents(k_BrowserPath);
         try
         {
+            var panel = root.GetComponent<BrowserPanel>();
             var keyboardRoot = root.transform.Find("Keyboard");
             var keys = keyboardRoot.GetComponentInChildren<XRKeyboard>(true).gameObject;
-            AddKeyboardHandle(keyboardRoot, root.GetComponent<BrowserPanel>(), keys);
+            AddKeyboardHandle(keyboardRoot, panel, keys);
 
             var bar = root.transform.Find("Address Bar");
+            bar.localScale = Vector3.one * k_BarScale;
+            SetFloat(panel, "m_AddressBarGap", 0.05f);
+            var page = new SerializedObject(root.GetComponentInChildren<TLab.WebView.WebView>(true));
+            page.FindProperty("m_viewSize").vector2IntValue = k_PageSize;
+            page.FindProperty("m_texSize").vector2IntValue = k_PageSize;
+            page.ApplyModifiedPropertiesWithoutUndo();
+
+            // The unscaled buttons' labels as large as the 1.3-scaled ones' (Back, Keyboard, Close); Favorite clear of Back.
+            foreach (string name in new[] { "Favorite Button", "Sync Button", "Saved Button" })
+                Label(bar.Find(name).GetComponent<Button>()).fontSize = k_ButtonFontSize;
+            ((RectTransform)bar.Find("Favorite Button")).anchoredPosition = new Vector2(-365f, 0f);
+
+            var oldSnap = bar.Find("Snap Button");
+            if (oldSnap != null)
+                Object.DestroyImmediate(oldSnap.gameObject);
+            var snap = CloneButton(bar.Find("Favorite Button").gameObject, bar, "Snap Button", k_SnapButtonPosition, new Vector2(130f, 48.5f), 1f, "Unsnap", k_ButtonFontSize);
+            var snapper = snap.gameObject.AddComponent<PanelSnapButton>();
+            Set(snapper, "m_Panel", panel);
+            Set(snapper, "m_Button", snap);
+            Set(snapper, "m_Label", Label(snap));
+
             var old = bar.Find("Copy Button");
             if (old != null)
                 Object.DestroyImmediate(old.gameObject);
-            var copy = CloneButton(bar.Find("Favorite Button").gameObject, bar, "Copy Button", k_TopButtonPosition, new Vector2(130f, 48.5f), 1f, "Copy", 18f);
+            var copy = CloneButton(bar.Find("Favorite Button").gameObject, bar, "Copy Button", k_TopButtonPosition, new Vector2(130f, 48.5f), 1f, "Copy", k_ButtonFontSize);
             var copier = copy.gameObject.AddComponent<BrowserCopyButton>();
             Set(copier, "m_Container", root.GetComponentInChildren<TLab.WebView.BrowserContainer>(true));
             Set(copier, "m_Button", copy);
             Set(copier, "m_Label", Label(copy));
 
             PrefabUtility.SaveAsPrefabAsset(root, k_BrowserPath);
-            return "browser: keyboard handle, Copy button";
+            return "browser: keyboard handle, Copy and Unsnap buttons, larger bar and page";
         }
         finally
         {

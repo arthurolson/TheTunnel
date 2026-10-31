@@ -12,8 +12,9 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
     /// <summary>
     /// A framed panel (the browser, 16:9, or the Viewer, shaped like what it shows) that is moved by its frame,
     /// resized from its corners and, when released, snapped onto the nearest Tunnel Segment wall (and then follows
-    /// that tunnel when it moves). Corner markers only appear while a hand or controller is near that corner. The
-    /// panel always stays upright. The bar above it and the keyboard below it can be moved by their handles (see
+    /// that tunnel when it moves). Unsnapped (its Unsnap button, <see cref="SetFree"/>) it comes off the wall and stays
+    /// wherever it is let go, until snapped back. Corner markers only appear while a hand or controller is near that
+    /// corner. The panel always stays upright. The bar above it and the keyboard below it can be moved by their handles (see
     /// <see cref="PanelAttachment"/>); they then keep that spot relative to the panel.
     /// Size, shape, wall attachment and where the bar and keyboard were moved are replicated; the pose is synced while
     /// someone holds it (ClaimableNetworkTransform).
@@ -132,6 +133,10 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         [SerializeField]
         float m_SnapDuration = 0.2f;
 
+        [SerializeField]
+        [Tooltip("When unsnapped, the panel first comes this far off its wall, towards the viewer (meters).")]
+        float m_UnsnapDistance = 0.3f;
+
         // Width < 0 means "not set yet"; the server fills in the authored width on spawn.
         readonly NetworkVariable<float> m_NetWidth = new(-1f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
         readonly NetworkVariable<float> m_NetAspect = new(-1f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
@@ -142,8 +147,11 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         // xyz = position in the tunnel's local frame, w = yaw in the tunnel's local frame (degrees).
         readonly NetworkVariable<Vector4> m_NetLocalPose = new(Vector4.zero, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
         readonly NetworkVariable<bool> m_NetAttached = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+        // Unsnapped: stays where it is let go instead of snapping to a wall.
+        readonly NetworkVariable<bool> m_NetFree = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
         TunnelSegmentGeometry m_AttachedTunnel;
+        bool m_Free;
         Vector3 m_AttachedLocalPosition;
         float m_AttachedLocalYaw;
 
@@ -169,6 +177,12 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
 
         /// <summary>Width over height of the screen.</summary>
         public float aspect => m_Aspect;
+
+        /// <summary>Unsnapped from the tunnel: the panel stays where it is let go (see <see cref="SetFree"/>).</summary>
+        public bool isFree => m_Free;
+
+        /// <summary>Called when the panel is unsnapped or snapped back, by anyone.</summary>
+        public event System.Action freeChanged;
 
         static int s_PanelCount;
 
@@ -217,6 +231,7 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
             m_NetKeyboardOffset.OnValueChanged += OnNetOffsetChanged;
             m_NetAttached.OnValueChanged += OnNetAttachmentChanged;
             m_NetLocalPose.OnValueChanged += OnNetLocalPoseChanged;
+            m_NetFree.OnValueChanged += OnNetFreeChanged;
 
             if (IsServer && m_NetWidth.Value < 0f)
                 m_NetWidth.Value = m_Width;
@@ -225,6 +240,7 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
 
             ApplyNetSize();
             ApplyNetOffsets();
+            ApplyFree(m_NetFree.Value);
 
             // A replicated attachment wins; otherwise the server publishes the one adopted from the scene layout.
             if (m_NetAttached.Value)
@@ -252,6 +268,7 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
             m_NetKeyboardOffset.OnValueChanged -= OnNetOffsetChanged;
             m_NetAttached.OnValueChanged -= OnNetAttachmentChanged;
             m_NetLocalPose.OnValueChanged -= OnNetLocalPoseChanged;
+            m_NetFree.OnValueChanged -= OnNetFreeChanged;
         }
 
         ///<inheritdoc/>
@@ -268,7 +285,7 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         void Start()
         {
             // Placed in the scene already on a wall: adopt it, so the panel follows that tunnel from the start.
-            if (!IsSpawned || IsServer)
+            if ((!IsSpawned || IsServer) && !m_Free)
                 AttachToClosestWallAtCurrentPose();
         }
 
@@ -306,7 +323,70 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         void OnGrabEnded(SelectExitEventArgs args)
         {
             m_Moving = false;
-            SnapToClosestWall();
+            if (!m_Free)
+                SnapToClosestWall();
+        }
+
+        #endregion
+
+        #region Unsnapping
+
+        /// <summary>
+        /// Unsnaps the panel from its wall (it comes a little way off it, towards the viewer, and from then on stays
+        /// wherever it is let go), or snaps it back onto the nearest wall. Shared with everyone.
+        /// </summary>
+        public void SetFree(bool free)
+        {
+            if (free == m_Free)
+                return;
+            ApplyFree(free);
+            if (IsSpawned)
+                SetFreeRpc(free);
+
+            StopSnap();
+            if (free)
+            {
+                Detach();
+                m_SnapRoutine = StartCoroutine(MoveRoutine(transform.position - transform.forward * m_UnsnapDistance, transform.rotation));
+            }
+            else
+            {
+                SnapToClosestWall();
+            }
+        }
+
+        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+        void SetFreeRpc(bool free) => m_NetFree.Value = free;
+
+        void OnNetFreeChanged(bool previous, bool current) => ApplyFree(current);
+
+        void ApplyFree(bool free)
+        {
+            if (free == m_Free)
+                return;
+            m_Free = free;
+            freeChanged?.Invoke();
+        }
+
+        /// <summary>Glides off the wall, holding the panel meanwhile so everyone sees it move.</summary>
+        IEnumerator MoveRoutine(Vector3 endPos, Quaternion endRot)
+        {
+            m_Snapping = true;
+            HoldOwnership(true);
+
+            Vector3 startPos = transform.position;
+            Quaternion startRot = transform.rotation;
+            for (float t = 0f; t < m_SnapDuration; t += Time.deltaTime)
+            {
+                float k = Mathf.SmoothStep(0f, 1f, t / m_SnapDuration);
+                transform.SetPositionAndRotation(Vector3.Lerp(startPos, endPos, k), Quaternion.Slerp(startRot, endRot, k));
+                yield return null;
+            }
+
+            transform.SetPositionAndRotation(endPos, endRot);
+            m_Snapping = false;
+            m_SnapRoutine = null;
+            HoldOwnership(false);
         }
 
         #endregion
@@ -360,7 +440,8 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
             m_DragInteractor = null;
             SendWidth(true);
             HoldOwnership(false);
-            SnapToClosestWall();
+            if (!m_Free)
+                SnapToClosestWall();
         }
 
         void UpdateCornerDrag()
