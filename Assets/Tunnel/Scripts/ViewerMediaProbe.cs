@@ -15,6 +15,9 @@ using UnityEngine;
 ///  - The Quest's own captures (Oculus/Screenshots, Oculus/VideoShots) at 2:1 or wider: both eyes side by side, as
 ///    recorded with debug.oculus.screenCaptureEye 2 (e.g. 2880 x 1440, 1440 x 1440 per eye). Flat captures are 16:9
 ///    or square.
+///  - The Quest's own screenshots at 16:9: with debug.oculus.screenCaptureEye 2 they hold both eyes squeezed into the
+///    usual 3840 x 2160, and nothing in the file says so, so a small copy is decoded and its halves compared (the two
+///    eyes are nearly the same picture; a flat picture's halves aren't). Remembered across runs.
 /// Results are cached by file and modification time.
 /// </summary>
 public static class ViewerMediaProbe
@@ -35,8 +38,18 @@ public static class ViewerMediaProbe
     const int k_MaxMoovBytes = 32 * 1024 * 1024;
     const float k_DoubleWideAspect = 3.0f; // two 16:9 views side by side are 3.56; a 16:9 frame is 1.78
     const float k_QuestStereoCaptureAspect = 1.95f; // two square eye views: 2:1
+    const int k_ThumbWidth = 128;
+    const int k_ThumbHeight = 72;
+    const int k_ThumbBlock = 4;
+    // Halves of the stereo screenshots tried scored 0.86-0.97 alike with 5-10 (of 255) apart; flat ones at most 0.68
+    // and at least 18 apart.
+    const float k_MinHalvesCorrelation = 0.8f;
+    const float k_MaxHalvesDifference = 16f;
+    const float k_MinContrast = 4f; // a blank picture's halves match too
+    const string k_HalvesCacheFile = "viewer-stereo-screenshots.txt";
 
     static readonly Dictionary<string, (long modified, Info info)> s_Cache = new();
+    static Dictionary<string, (long modified, bool stereo)> s_HalvesCache;
 
     public static Info Probe(string path)
     {
@@ -58,7 +71,9 @@ public static class ViewerMediaProbe
             float aspect = info.height > 0 ? (float)info.width / info.height : 0f;
             bool questCapture = path.Replace('\\', '/').Contains("/Oculus/");
             if (info.layout == ViewerLibrary.StereoLayout.Mono && !info.stereoPair && !info.multiView
-                && (aspect >= k_DoubleWideAspect || (questCapture && aspect >= k_QuestStereoCaptureAspect)))
+                && (aspect >= k_DoubleWideAspect || (questCapture && aspect >= k_QuestStereoCaptureAspect)
+                    || (questCapture && extension is ".jpg" or ".jpeg" or ".png" && aspect is > 1.7f and < 1.82f
+                        && HalvesMatch(path, modified))))
                 info.layout = ViewerLibrary.StereoLayout.SideBySide;
 
             s_Cache[path] = (modified, info);
@@ -277,6 +292,166 @@ public static class ViewerMediaProbe
         left = new ArraySegment<byte>(data, 0, firstSize);
         right = new ArraySegment<byte>(data, secondOffset, secondSize);
         return true;
+    }
+
+    #endregion
+
+    #region Halves
+
+    /// <summary>Whether a picture's left and right halves are the same scene (two eyes side by side).</summary>
+    static bool HalvesMatch(string path, long modified)
+    {
+        LoadHalvesCache();
+        if (s_HalvesCache.TryGetValue(path, out var known) && known.modified == modified)
+            return known.stereo;
+
+        float[] grey = Thumbnail(path);
+        bool stereo = grey != null && ScoreHalves(grey, out float correlation, out float difference, out float contrast)
+            && correlation >= k_MinHalvesCorrelation && difference <= k_MaxHalvesDifference && contrast >= k_MinContrast;
+        s_HalvesCache[path] = (modified, stereo);
+        try
+        {
+            File.AppendAllText(HalvesCachePath, $"{modified}\t{(stereo ? 1 : 0)}\t{path}\n");
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[Viewer] can't save {k_HalvesCacheFile}: {e.Message}");
+        }
+
+        return stereo;
+    }
+
+    static string HalvesCachePath => Path.Combine(Application.persistentDataPath, k_HalvesCacheFile);
+
+    static void LoadHalvesCache()
+    {
+        if (s_HalvesCache != null)
+            return;
+        s_HalvesCache = new Dictionary<string, (long, bool)>();
+        try
+        {
+            if (!File.Exists(HalvesCachePath))
+                return;
+            foreach (string line in File.ReadAllLines(HalvesCachePath))
+            {
+                string[] parts = line.Split('\t');
+                if (parts.Length == 3 && long.TryParse(parts[0], out long modified))
+                    s_HalvesCache[parts[2]] = (modified, parts[1] == "1");
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[Viewer] can't read {k_HalvesCacheFile}: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Block averages of the two halves of a grey thumbnail: how alike they are (correlation), how far apart
+    /// (mean difference, 0-255) and how much the picture varies. Blocks absorb the small shift between the eyes.
+    /// </summary>
+    static bool ScoreHalves(float[] grey, out float correlation, out float difference, out float contrast)
+    {
+        correlation = difference = contrast = 0f;
+        const int half = k_ThumbWidth / 2;
+        var left = new List<float>();
+        var right = new List<float>();
+        for (int by = 0; by + k_ThumbBlock <= k_ThumbHeight; by += k_ThumbBlock)
+        {
+            for (int bx = 0; bx + k_ThumbBlock <= half; bx += k_ThumbBlock)
+            {
+                float l = 0f, r = 0f;
+                for (int y = by; y < by + k_ThumbBlock; y++)
+                {
+                    for (int x = bx; x < bx + k_ThumbBlock; x++)
+                    {
+                        l += grey[y * k_ThumbWidth + x];
+                        r += grey[y * k_ThumbWidth + x + half];
+                    }
+                }
+
+                left.Add(l / (k_ThumbBlock * k_ThumbBlock));
+                right.Add(r / (k_ThumbBlock * k_ThumbBlock));
+            }
+        }
+
+        int n = left.Count;
+        if (n == 0)
+            return false;
+        float meanL = 0f, meanR = 0f;
+        for (int i = 0; i < n; i++)
+        {
+            meanL += left[i] / n;
+            meanR += right[i] / n;
+        }
+
+        float covariance = 0f, varianceL = 0f, varianceR = 0f;
+        for (int i = 0; i < n; i++)
+        {
+            float dl = left[i] - meanL, dr = right[i] - meanR;
+            covariance += dl * dr;
+            varianceL += dl * dl;
+            varianceR += dr * dr;
+            difference += Mathf.Abs(left[i] - right[i]) / n;
+        }
+
+        correlation = covariance / (Mathf.Sqrt(varianceL * varianceR) + 1e-6f);
+        contrast = Mathf.Sqrt(varianceL / n);
+        return true;
+    }
+
+    /// <summary>A k_ThumbWidth x k_ThumbHeight grey copy of a picture (0-255), or null.</summary>
+    static float[] Thumbnail(string path)
+    {
+        var grey = new float[k_ThumbWidth * k_ThumbHeight];
+#if UNITY_ANDROID && !UNITY_EDITOR
+        // Android decodes a JPEG at 1/16 size without decoding the whole picture.
+        using var options = new AndroidJavaObject("android.graphics.BitmapFactory$Options");
+        options.Set("inSampleSize", 16);
+        using var factory = new AndroidJavaClass("android.graphics.BitmapFactory");
+        using var bitmap = factory.CallStatic<AndroidJavaObject>("decodeFile", path, options);
+        if (bitmap == null)
+            return null;
+        using var bitmapClass = new AndroidJavaClass("android.graphics.Bitmap");
+        using var scaled = bitmapClass.CallStatic<AndroidJavaObject>("createScaledBitmap", bitmap, k_ThumbWidth, k_ThumbHeight, true);
+        // getPixels fills an array it's given, which AndroidJavaObject doesn't copy back.
+        IntPtr array = AndroidJNI.NewIntArray(grey.Length);
+        IntPtr getPixels = AndroidJNIHelper.GetMethodID(scaled.GetRawClass(), "getPixels", "([IIIIIII)V");
+        AndroidJNI.CallVoidMethod(scaled.GetRawObject(), getPixels, new[]
+        {
+            new jvalue { l = array }, new jvalue { i = 0 }, new jvalue { i = k_ThumbWidth }, new jvalue { i = 0 },
+            new jvalue { i = 0 }, new jvalue { i = k_ThumbWidth }, new jvalue { i = k_ThumbHeight },
+        });
+        int[] pixels = AndroidJNI.FromIntArray(array);
+        AndroidJNI.DeleteLocalRef(array);
+        scaled.Call("recycle");
+        bitmap.Call("recycle");
+        for (int i = 0; i < grey.Length; i++)
+        {
+            int c = pixels[i];
+            grey[i] = (((c >> 16) & 0xFF) + 2 * ((c >> 8) & 0xFF) + (c & 0xFF)) * 0.25f;
+        }
+#else
+        var texture = new Texture2D(2, 2);
+        try
+        {
+            if (!texture.LoadImage(File.ReadAllBytes(path)))
+                return null;
+            for (int y = 0; y < k_ThumbHeight; y++)
+            {
+                for (int x = 0; x < k_ThumbWidth; x++)
+                {
+                    // Rows from the top, as on Android.
+                    Color c = texture.GetPixelBilinear((x + 0.5f) / k_ThumbWidth, 1f - (y + 0.5f) / k_ThumbHeight);
+                    grey[y * k_ThumbWidth + x] = (c.r + 2f * c.g + c.b) * 0.25f * 255f;
+                }
+            }
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(texture);
+        }
+#endif
+        return grey;
     }
 
     #endregion
