@@ -16,7 +16,9 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 /// Each row has three check boxes: Save (build this headset's file into the app at the next build, so every headset
 /// has it; checked and greyed for media already built in), Rename (brings up the keyboard with the name; Enter renames
 /// the file) and Delete (marks the file; "Delete checked" removes the marked ones from this headset). The Quest's own
-/// photos and videos are renamed or deleted only once the wearer allows it in the headset's own prompt.
+/// photos and videos are renamed or deleted only once the wearer allows it in the headset's own prompt. Media built
+/// into the app can be deleted too: it leaves this headset's list at once and the app at the next build (see
+/// <see cref="ViewerLibrary.RemoveFromApp"/>), which clears it out of Assets/StreamingAssets/Viewer.
 /// &lt; and &gt; on the screen's edges show the previous or next item of the shown kind.
 /// Paste shows an address copied in the browser (its Copy button); with the keyboard open it adds the address to
 /// the typed text instead, to edit before pressing Enter.
@@ -340,18 +342,19 @@ public class ViewerMenu : MonoBehaviour
         }
 
         var delete = row.transform.Find("Delete Toggle")?.GetComponent<Toggle>();
-        bool toDelete = entry.canDelete && m_ToDelete.Contains(entry.file);
+        bool canDelete = entry.canDelete || entry.inApp;
+        bool toDelete = canDelete && m_ToDelete.Contains(entry.deleteKey);
         label.text = toDelete ? DeleteLook(text) : text;
         if (delete == null)
             return;
-        delete.gameObject.SetActive(entry.canDelete);
+        delete.gameObject.SetActive(canDelete);
         delete.SetIsOnWithoutNotify(toDelete);
         delete.onValueChanged.AddListener(on =>
         {
             if (on)
-                m_ToDelete.Add(entry.file);
+                m_ToDelete.Add(entry.deleteKey);
             else
-                m_ToDelete.Remove(entry.file);
+                m_ToDelete.Remove(entry.deleteKey);
             label.text = on ? DeleteLook(text) : text;
             UpdateDeleteButton();
         });
@@ -361,7 +364,7 @@ public class ViewerMenu : MonoBehaviour
 
     void UpdateDeleteButton()
     {
-        int count = m_ToDelete.Count(file => ViewerLibrary.all.Any(e => e.file == file));
+        int count = m_ToDelete.Count(key => ViewerLibrary.all.Any(e => e.deleteKey == key));
         if (m_DeleteButton == null)
             return;
         m_DeleteButton.gameObject.SetActive(count > 0);
@@ -372,18 +375,20 @@ public class ViewerMenu : MonoBehaviour
 
     void DeleteChecked()
     {
-        var entries = ViewerLibrary.all.Where(e => e.canDelete && m_ToDelete.Contains(e.file)).ToList();
+        var entries = ViewerLibrary.all.Where(e => (e.canDelete || e.inApp) && m_ToDelete.Contains(e.deleteKey)).ToList();
         m_ToDelete.Clear();
         if (entries.Count == 0)
             return;
 
-        var (deleted, asked) = ViewerLibrary.Delete(entries);
-        if (entries.Any(e => IsShown(e) && !File.Exists(e.file)))
+        int fromApp = ViewerLibrary.RemoveFromApp(entries.Where(e => e.inApp));
+        var (deleted, asked) = ViewerLibrary.Delete(entries.Where(e => !e.inApp));
+        if (entries.Any(e => IsShown(e) && (e.inApp || !File.Exists(e.file))))
             m_Viewer.Clear();
         if (asked > 0)
             StartCoroutine(WaitForHeadsetDelete(entries.Where(e => e.isDeviceMedia).ToList()));
-        int failed = entries.Count - deleted - asked;
-        m_Message = (deleted > 0 ? $"Deleted {deleted}. " : string.Empty)
+        int failed = entries.Count - fromApp - deleted - asked;
+        m_Message = (fromApp > 0 ? $"{fromApp} built into the app will be gone from every headset after the next build. " : string.Empty)
+            + (deleted > 0 ? $"Deleted {deleted}. " : string.Empty)
             + (asked > 0 ? $"Answer the headset's prompt to delete {asked} of its own. " : string.Empty)
             + (failed > 0 ? $"Couldn't delete {failed}." : string.Empty);
         BuildList(true);

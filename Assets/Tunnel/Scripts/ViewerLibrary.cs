@@ -62,6 +62,10 @@ public static class ViewerLibrary
 
         public bool isDeviceMedia => !string.IsNullOrEmpty(fullPath);
         public bool canDelete => !string.IsNullOrEmpty(file);
+        /// <summary>Built into the app: deleting it marks it to come out of the app at the next build.</summary>
+        public bool inApp => !onHeadset && !isDeviceMedia;
+        /// <summary>Tells marked entries apart: the file, or the kind and name for media built into the app.</summary>
+        public string deleteKey => file ?? $"app\t{(int)kind}\t{name}";
     }
 
     [Serializable]
@@ -110,8 +114,13 @@ public static class ViewerLibrary
             s_BuiltIn = builtIn;
         }
 
+        // Media marked to come out of the app is hidden at once; once an install no longer has it, the mark is done.
+        var removeList = ReadRemoveList();
+        if (removeList.RemoveAll(line => !s_BuiltIn.Any(e => IsSame(e, line.kind, line.name))) > 0)
+            WriteRemoveList(removeList);
+
         s_All.Clear();
-        s_All.AddRange(s_BuiltIn);
+        s_All.AddRange(s_BuiltIn.Where(e => !removeList.Any(line => IsSame(e, line.kind, line.name))));
         foreach (var entry in ScanFolder(HeadsetRoot, true, true))
         {
             if (!s_All.Any(e => e.kind == entry.kind && string.Equals(e.name, entry.name, StringComparison.OrdinalIgnoreCase)))
@@ -432,6 +441,94 @@ public static class ViewerLibrary
         catch (Exception e)
         {
             Debug.LogWarning($"[Viewer] can't write {saveListPath}: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The headset's list of media to take out of the app: one line per entry, "kind&lt;tab&gt;name". Before every build
+    /// the Editor deletes them from Assets/StreamingAssets/Viewer (see Tunnel/Editor/ViewerSavedMedia.cs), so they're
+    /// gone from every headset after the next install; until then this headset just doesn't list them.
+    /// </summary>
+    public const string RemoveListFile = "remove-from-app.txt";
+
+    static string removeListPath => Path.Combine(HeadsetRoot, RemoveListFile);
+
+    static bool IsSame(Entry entry, int kind, string name) =>
+        (int)entry.kind == kind && string.Equals(entry.name, name, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Marks media built into the app to come out of it at the next build, and deletes this headset's own copies of it
+    /// (and its Save marks, so the build doesn't copy it straight back in). Returns how many were marked.
+    /// </summary>
+    public static int RemoveFromApp(IEnumerable<Entry> entries)
+    {
+        var lines = ReadRemoveList();
+        var saveList = ReadSaveList();
+        int marked = 0;
+        foreach (var entry in entries.Where(e => e.inApp))
+        {
+            if (!lines.Any(line => IsSame(entry, line.kind, line.name)))
+                lines.Add(((int)entry.kind, entry.name));
+            marked++;
+            saveList.RemoveAll(line => line.kind == (int)entry.kind
+                && string.Equals(Path.GetFileNameWithoutExtension(line.path), entry.name, StringComparison.OrdinalIgnoreCase));
+
+            string folder = Path.Combine(HeadsetRoot, KindFolders[(int)entry.kind]);
+            try
+            {
+                if (!Directory.Exists(folder))
+                    continue;
+                foreach (string file in Directory.GetFiles(folder))
+                {
+                    var copy = EntryForFile(file, entry.kind);
+                    if (copy != null && string.Equals(copy.name, entry.name, StringComparison.OrdinalIgnoreCase))
+                        File.Delete(file);
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[Viewer] can't delete this headset's copy of {entry.name}: {e.Message}");
+            }
+        }
+
+        WriteRemoveList(lines);
+        WriteSaveList(saveList);
+        Debug.Log($"[Viewer] marked {marked} to come out of the app at the next build");
+        return marked;
+    }
+
+    public static List<(int kind, string name)> ReadRemoveList()
+    {
+        var lines = new List<(int, string)>();
+        try
+        {
+            if (!File.Exists(removeListPath))
+                return lines;
+            foreach (string line in File.ReadAllLines(removeListPath))
+            {
+                var parts = line.Split('\t');
+                if (parts.Length == 2 && int.TryParse(parts[0], out int kind) && kind >= 0 && kind < KindFolders.Length)
+                    lines.Add((kind, parts[1]));
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[Viewer] can't read {removeListPath}: {e.Message}");
+        }
+
+        return lines;
+    }
+
+    static void WriteRemoveList(List<(int kind, string name)> lines)
+    {
+        try
+        {
+            Directory.CreateDirectory(HeadsetRoot);
+            File.WriteAllLines(removeListPath, lines.Select(line => $"{line.kind}\t{line.name}"));
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[Viewer] can't write {removeListPath}: {e.Message}");
         }
     }
 

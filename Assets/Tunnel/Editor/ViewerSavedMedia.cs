@@ -12,7 +12,9 @@ using Debug = UnityEngine.Debug;
 /// Copies the media marked Save in a Viewer list into the app: from every connected headset (over adb) and from this
 /// Mac's own Viewer folder, into Assets/StreamingAssets/Viewer/&lt;kind&gt;, so the next build has them on every headset.
 /// Each headset keeps its marks in Android/data/&lt;package&gt;/files/Viewer/save-to-app.txt (see
-/// <see cref="ViewerLibrary.SaveListFile"/>). Files already in the app are skipped. Runs before every build (from
+/// <see cref="ViewerLibrary.SaveListFile"/>). Files already in the app are skipped.
+/// First it deletes from there the built-in media deleted in a Viewer list (remove-from-app.txt, see
+/// <see cref="ViewerLibrary.RemoveListFile"/>), and never copies those back in. Runs before every build (from
 /// <see cref="ViewerMediaIndex"/>) and from Tunnel > Viewer > Copy Saved Media Into App.
 /// </summary>
 static class ViewerSavedMedia
@@ -34,46 +36,45 @@ static class ViewerSavedMedia
     public static int CopyIntoApp()
     {
         int copied = 0;
+        string adb = FindAdb();
+        string folder = $"/sdcard/Android/data/{PlayerSettings.applicationIdentifier}/files/{ViewerLibrary.FolderName}";
+        var serials = adb != null ? Devices(adb).ToList() : new List<string>();
+
+        // Deleted in a Viewer list: on this Mac (Play mode) or any connected headset.
+        var removed = new HashSet<(int kind, string name)>(ViewerLibrary.ReadRemoveList().Select(Key));
+        foreach (string serial in serials)
+            removed.UnionWith(ReadList(adb, serial, $"{folder}/{ViewerLibrary.RemoveListFile}").Select(Key));
+        RemoveFromApp(removed);
 
         // This Mac (Play mode in the Editor marks files in its own Viewer folder).
         foreach (var (kind, path) in ViewerLibrary.ReadSaveList())
         {
             string destination = Destination(kind, path);
-            if (File.Exists(destination) || !File.Exists(path))
+            if (File.Exists(destination) || !File.Exists(path) || removed.Contains(Key((kind, NameOf(path)))))
                 continue;
             File.Copy(path, destination);
             copied++;
             Debug.Log($"[Viewer] saved into the app: {destination}");
         }
 
-        string adb = FindAdb();
-        if (adb == null)
-            return copied;
-
-        string list = $"/sdcard/Android/data/{PlayerSettings.applicationIdentifier}/files/{ViewerLibrary.FolderName}/{ViewerLibrary.SaveListFile}";
-        foreach (string serial in Devices(adb))
+        foreach (string serial in serials)
         {
-            if (!Run(adb, $"-s {serial} shell cat \"{list}\"", k_ListTimeoutMs, out string text) || text.Contains("No such file"))
-                continue;
-            foreach (string line in text.Split('\n').Select(l => l.Trim('\r')).Where(l => l.Length > 0))
+            foreach (var (kind, path) in ReadList(adb, serial, $"{folder}/{ViewerLibrary.SaveListFile}"))
             {
-                var parts = line.Split('\t');
-                if (parts.Length != 2 || !int.TryParse(parts[0], out int kind) || kind < 0 || kind >= ViewerLibrary.KindFolders.Length)
-                    continue;
-                string destination = Destination(kind, parts[1]);
-                if (File.Exists(destination))
+                string destination = Destination(kind, path);
+                if (File.Exists(destination) || removed.Contains(Key((kind, NameOf(path)))))
                     continue;
                 EditorUtility.DisplayProgressBar("Viewer", $"Copying {Path.GetFileName(destination)} from headset {serial}", 0.5f);
                 try
                 {
-                    if (Run(adb, $"-s {serial} pull \"{parts[1]}\" \"{destination}\"", k_PullTimeoutMs, out string output) && File.Exists(destination))
+                    if (Run(adb, $"-s {serial} pull \"{path}\" \"{destination}\"", k_PullTimeoutMs, out string output) && File.Exists(destination))
                     {
                         copied++;
                         Debug.Log($"[Viewer] saved into the app from {serial}: {destination}");
                     }
                     else
                     {
-                        Debug.LogWarning($"[Viewer] couldn't copy {parts[1]} from {serial}: {output.Trim()}");
+                        Debug.LogWarning($"[Viewer] couldn't copy {path} from {serial}: {output.Trim()}");
                     }
                 }
                 finally
@@ -84,6 +85,47 @@ static class ViewerSavedMedia
         }
 
         return copied;
+    }
+
+    static (int kind, string name) Key((int kind, string name) line) => (line.kind, line.name.ToLowerInvariant());
+
+    static string NameOf(string path) => Path.GetFileNameWithoutExtension(path.Replace('\\', '/'));
+
+    /// <summary>A headset's Save or remove list: "kind&lt;tab&gt;path or name" lines.</summary>
+    static List<(int kind, string text)> ReadList(string adb, string serial, string path)
+    {
+        var lines = new List<(int, string)>();
+        if (!Run(adb, $"-s {serial} shell cat \"{path}\"", k_ListTimeoutMs, out string text) || text.Contains("No such file"))
+            return lines;
+        foreach (string line in text.Split('\n').Select(l => l.Trim('\r')).Where(l => l.Length > 0))
+        {
+            var parts = line.Split('\t');
+            if (parts.Length == 2 && int.TryParse(parts[0], out int kind) && kind >= 0 && kind < ViewerLibrary.KindFolders.Length)
+                lines.Add((kind, parts[1]));
+        }
+
+        return lines;
+    }
+
+    /// <summary>Deletes built-in media (the file, or a link file, of that name in the kind's folder) and its .meta.</summary>
+    static void RemoveFromApp(HashSet<(int kind, string name)> removed)
+    {
+        foreach (var (kind, name) in removed)
+        {
+            string folder = Path.Combine(builtInRoot, ViewerLibrary.KindFolders[kind]);
+            if (!Directory.Exists(folder))
+                continue;
+            foreach (string file in Directory.GetFiles(folder))
+            {
+                var entry = ViewerLibrary.EntryForFile(file, (ViewerMediaKind)kind);
+                if (entry == null || !string.Equals(entry.name, name, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                File.Delete(file);
+                if (File.Exists(file + ".meta"))
+                    File.Delete(file + ".meta");
+                Debug.Log($"[Viewer] taken out of the app: {file}");
+            }
+        }
     }
 
     static string Destination(int kind, string path)
