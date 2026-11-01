@@ -10,7 +10,8 @@ using UnityEngine.XR.ARFoundation;
 /// ("[Occlusion] ...") so the headset log shows whether depth is reaching the shaders.
 /// It also gives the shaders the world-to-tracking-space transform: the depth matrices are in the headset's tracking
 /// space, which stops matching the world as soon as the XR Origin is moved (QR co-location, table seats, teleport).
-/// And it gives <see cref="RealDepthOcclusionFeature"/> the real floor's height (the tracking space's origin).
+/// And it gives <see cref="RealDepthOcclusionFeature"/> the floor's height: the tunnel's floor (co-location lays it on
+/// the real floor), else the tracking space's origin.
 /// </summary>
 [RequireComponent(typeof(AROcclusionManager))]
 public class OcclusionSafety : MonoBehaviour
@@ -29,6 +30,7 @@ public class OcclusionSafety : MonoBehaviour
 
     AROcclusionManager m_Manager;
     Transform m_TrackingSpace;
+    UnityEngine.XR.Templates.MRTTabletopAssets.TunnelSegmentGeometry m_Tunnel;
     float m_LastFrameTime = float.NegativeInfinity;
     bool m_On;
     int m_Frames;
@@ -67,7 +69,16 @@ public class OcclusionSafety : MonoBehaviour
         }
 
         Shader.SetGlobalMatrix(k_WorldToTrackingSpace, m_TrackingSpace != null ? m_TrackingSpace.worldToLocalMatrix : Matrix4x4.identity);
-        Shader.SetGlobalFloat(k_FloorHeight, m_TrackingSpace != null ? m_TrackingSpace.position.y : 0f);
+        Shader.SetGlobalFloat(k_FloorHeight, FloorHeight());
+    }
+
+    float FloorHeight()
+    {
+        if (m_Tunnel == null || !m_Tunnel.isActiveAndEnabled)
+            m_Tunnel = FindFirstObjectByType<UnityEngine.XR.Templates.MRTTabletopAssets.TunnelSegmentGeometry>();
+        if (m_Tunnel != null)
+            return m_Tunnel.transform.position.y;
+        return m_TrackingSpace != null ? m_TrackingSpace.position.y : 0f;
     }
 
     void OnFrameReceived(AROcclusionFrameEventArgs args)
@@ -112,6 +123,9 @@ public class OcclusionSafety : MonoBehaviour
             m_NextStatus = Time.unscaledTime + m_StatusInterval;
             Debug.Log($"[Occlusion] status: {(m_On ? "ON" : "OFF")}, depth frames so far {m_Frames}, " +
                 $"current depth mode {m_Manager.currentEnvironmentDepthMode}, " +
+                $"floor {FloorHeight():F2} (tunnel {(m_Tunnel != null ? m_Tunnel.transform.position.y.ToString("F2") : "none")}, " +
+                $"tracking space {(m_TrackingSpace != null ? m_TrackingSpace.position.y.ToString("F2") : "none")}), " +
+                $"camera {transform.position.y:F2}, " +
                 $"subsystem {(m_Manager.subsystem != null ? (m_Manager.subsystem.running ? "running" : "not running") : "missing")}");
         }
     }

@@ -33,6 +33,10 @@ public class RealDepthOcclusionFeature : ScriptableRendererFeature
     [Tooltip("Real surfaces are treated as this much farther (meters), so virtual things lying on them stay visible.")]
     float m_PushBack = 0.03f;
 
+    [SerializeField]
+    [Tooltip("Tints red, over everything, where a real surface hides what's behind it (to check the occlusion).")]
+    bool m_ShowDebug;
+
     static readonly int k_MinHeight = Shader.PropertyToID("_RealDepthMinHeight");
     static readonly int k_MaxHeight = Shader.PropertyToID("_RealDepthMaxHeight");
     static readonly int k_MaxDistance = Shader.PropertyToID("_RealDepthMaxDistance");
@@ -40,12 +44,14 @@ public class RealDepthOcclusionFeature : ScriptableRendererFeature
 
     Material m_Material;
     RealDepthPass m_Pass;
+    RealDepthPass m_DebugPass;
 
     public override void Create()
     {
         if (m_Shader == null)
             m_Shader = Shader.Find("Hidden/Tunnel/RealDepthPrepass");
         m_Pass = new RealDepthPass { renderPassEvent = RenderPassEvent.BeforeRenderingOpaques };
+        m_DebugPass = new RealDepthPass { renderPassEvent = RenderPassEvent.AfterRenderingTransparents, debug = true };
     }
 
     public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
@@ -60,6 +66,11 @@ public class RealDepthOcclusionFeature : ScriptableRendererFeature
         m_Material.SetFloat(k_PushBack, m_PushBack);
         m_Pass.material = m_Material;
         renderer.EnqueuePass(m_Pass);
+        if (m_ShowDebug)
+        {
+            m_DebugPass.material = m_Material;
+            renderer.EnqueuePass(m_DebugPass);
+        }
     }
 
     protected override void Dispose(bool disposing)
@@ -71,20 +82,26 @@ public class RealDepthOcclusionFeature : ScriptableRendererFeature
     class RealDepthPass : ScriptableRenderPass
     {
         public Material material;
+        /// <summary>Draws the red debug tint into the colour instead of writing depth.</summary>
+        public bool debug;
 
         class PassData
         {
             public Material material;
+            public int pass;
         }
 
         public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
         {
             var resources = frameData.Get<UniversalResourceData>();
-            using var builder = renderGraph.AddRasterRenderPass<PassData>("Real depth occlusion", out var passData);
+            using var builder = renderGraph.AddRasterRenderPass<PassData>(debug ? "Real depth occlusion debug" : "Real depth occlusion", out var passData);
             passData.material = material;
+            passData.pass = debug ? 1 : 0;
+            if (debug)
+                builder.SetRenderAttachment(resources.activeColorTexture, 0, AccessFlags.ReadWrite);
             builder.SetRenderAttachmentDepth(resources.activeDepthTexture, AccessFlags.ReadWrite);
             builder.SetRenderFunc((PassData data, RasterGraphContext context) =>
-                Blitter.BlitTexture(context.cmd, new Vector4(1f, 1f, 0f, 0f), data.material, 0));
+                Blitter.BlitTexture(context.cmd, new Vector4(1f, 1f, 0f, 0f), data.material, data.pass));
         }
     }
 }
