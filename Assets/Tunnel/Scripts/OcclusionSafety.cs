@@ -10,12 +10,14 @@ using UnityEngine.XR.ARFoundation;
 /// ("[Occlusion] ...") so the headset log shows whether depth is reaching the shaders.
 /// It also gives the shaders the world-to-tracking-space transform: the depth matrices are in the headset's tracking
 /// space, which stops matching the world as soon as the XR Origin is moved (QR co-location, table seats, teleport).
+/// And it gives <see cref="RealDepthOcclusionFeature"/> the real floor's height (the tracking space's origin).
 /// </summary>
 [RequireComponent(typeof(AROcclusionManager))]
 public class OcclusionSafety : MonoBehaviour
 {
     static readonly int k_IsOcclusionOn = Shader.PropertyToID("_IsOcclusionOn");
     static readonly int k_WorldToTrackingSpace = Shader.PropertyToID("_OcclusionWorldToTrackingSpace");
+    static readonly int k_FloorHeight = Shader.PropertyToID("_RealDepthFloorHeight");
 
     [SerializeField]
     [Tooltip("Occlusion is switched off if no depth frame has arrived for this long (seconds).")]
@@ -65,6 +67,7 @@ public class OcclusionSafety : MonoBehaviour
         }
 
         Shader.SetGlobalMatrix(k_WorldToTrackingSpace, m_TrackingSpace != null ? m_TrackingSpace.worldToLocalMatrix : Matrix4x4.identity);
+        Shader.SetGlobalFloat(k_FloorHeight, m_TrackingSpace != null ? m_TrackingSpace.position.y : 0f);
     }
 
     void OnFrameReceived(AROcclusionFrameEventArgs args)

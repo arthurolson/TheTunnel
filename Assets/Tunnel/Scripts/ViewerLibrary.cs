@@ -685,7 +685,9 @@ public static class ViewerLibrary
     {
         using var media = new AndroidJavaClass(IsVideoKind(entry.kind) ? "android.provider.MediaStore$Video$Media" : "android.provider.MediaStore$Images$Media");
         using var collection = media.GetStatic<AndroidJavaObject>("EXTERNAL_CONTENT_URI");
-        using var cursor = resolver.Call<AndroidJavaObject>("query", collection, new[] { "_id" }, "_data=?", new[] { entry.file }, "_id");
+        // MediaStore keeps the real path (/storage/emulated/0/...), not the /sdcard link the folders are read through.
+        string realPath = entry.file.StartsWith("/sdcard/") ? "/storage/emulated/0/" + entry.file.Substring("/sdcard/".Length) : entry.file;
+        using var cursor = resolver.Call<AndroidJavaObject>("query", collection, new[] { "_id" }, "_data=? OR _data=?", new[] { realPath, entry.file }, "_id");
         AndroidJavaObject uri = null;
         if (cursor != null && cursor.Call<bool>("moveToFirst"))
         {

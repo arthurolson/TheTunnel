@@ -285,7 +285,7 @@ public class ViewerMenu : MonoBehaviour
             ((RectTransform)row.transform).anchoredPosition = new Vector2(0f, -i * m_RowSpacing);
             string note = entry.isLink ? "  <color=#8CF>(link)</color>"
                 : entry.isDeviceMedia ? "  <color=#AAA>(Quest)</color>"
-                : entry.onHeadset ? "  <color=#AAA>(this headset)</color>" : string.Empty;
+                : entry.onHeadset ? "  <color=#AAA>(this headset)</color>" : "  <color=#AAA>(in app)</color>";
             var label = row.transform.Find("Label").GetComponent<TMP_Text>();
             string text = entry.name + note;
             row.onClick.AddListener(() => Choose(entry));
