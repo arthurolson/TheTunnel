@@ -2,6 +2,7 @@
 #define VIVOX_SUPPORTED
 #endif
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using Unity.Netcode;
 using Unity.Services.Vivox;
@@ -174,30 +175,49 @@ namespace XRMultiplayer
         }
 
         /// <summary>
-        /// True while voice chat has stopped sending this player's voice because a Quest recording is running.
+        /// True while the microphone is given to Quest recordings (the Viewer's Mic button): voice chat stops using it, so
+        /// a recording made with Include Mic Audio gets this player's voice, but the other players can't hear it.
         /// </summary>
-        public static bool s_PausedForRecording { get; private set; }
-
-        float m_NextRecordingCheck;
-        float m_LastOtherRecording;
-        string m_LastRecordingSources;
-        AndroidJavaObject m_AudioManager;
-        const int k_VoiceRecognitionSource = 6, k_VoiceCommunicationSource = 7;
+        public static bool s_MicForRecording { get; private set; }
 
         /// <summary>
-        /// While a Quest recording runs, stop sending this player's voice so the recorder gets the microphone: Android
-        /// silences every other recorder while voice chat holds it. Recordings are told apart by their audio source:
-        /// voice chat records as VOICE_COMMUNICATION and the Tunnel's own microphone as VOICE_RECOGNITION, so anything
-        /// else is another app (the Quest's recorder). Voice chat sends again once that has been gone for 2 s.
+        /// True while voice chat has let go of the microphone itself (its input set to Vivox's "No Device"), not just
+        /// stopped sending: Android silences every other recorder while voice chat holds it.
+        /// </summary>
+        public static bool s_MicReleased { get; private set; }
+
+        VivoxInputDevice m_InputBeforeRecording;
+        float m_NextRecordingCheck;
+        string m_LastRecordingSources;
+        AndroidJavaObject m_AudioManager;
+
+        /// <summary>
+        /// Gives the microphone to Quest recordings, or back to voice chat. Outside a shared session nothing in the
+        /// Tunnel holds it; the choice is kept and applied when voice chat starts.
+        /// </summary>
+        public static void GiveMicToRecording(bool on)
+        {
+            s_MicForRecording = on;
+            Debug.Log($"[Voice Chat] microphone given to {(on ? "recordings" : "voice chat")}");
+            PlayerHudNotification.Instance.ShowText(on ? "Mic for recording: others can't hear you" : "Mic back to voice chat", 3.0f);
+#if VIVOX_SUPPORTED
+            var manager = FindAnyObjectByType<VoiceChatManager>();
+            if (manager != null)
+                manager.ApplyMicForRecording();
+#endif
+        }
+
+        /// <summary>
+        /// Logs which recordings use the microphone whenever that changes (audio sources: 6 is the Tunnel's own
+        /// microphone, 7 voice chat, 8 an app's sound without the microphone, as the Quest's recorder takes it).
         /// </summary>
         void Update()
         {
-#if VIVOX_SUPPORTED && UNITY_ANDROID && !UNITY_EDITOR
-            if (Time.unscaledTime < m_NextRecordingCheck || (!m_ConnectedToRoom && !s_PausedForRecording))
+#if UNITY_ANDROID && !UNITY_EDITOR
+            if (Time.unscaledTime < m_NextRecordingCheck)
                 return;
-            m_NextRecordingCheck = Time.unscaledTime + 0.5f;
+            m_NextRecordingCheck = Time.unscaledTime + 1f;
 
-            int others = 0;
             var sources = new StringBuilder();
             try
             {
@@ -212,11 +232,7 @@ namespace XRMultiplayer
                 for (int i = 0; i < count; i++)
                 {
                     using var config = configs.Call<AndroidJavaObject>("get", i);
-                    int source = config.Call<int>("getClientAudioSource");
-                    bool silenced = config.Call<bool>("isClientSilenced");
-                    sources.Append($"{source}{(silenced ? " silenced" : "")}; ");
-                    if (source != k_VoiceRecognitionSource && source != k_VoiceCommunicationSource)
-                        others++;
+                    sources.Append($"{config.Call<int>("getClientAudioSource")}{(config.Call<bool>("isClientSilenced") ? " silenced" : "")}; ");
                 }
             }
             catch (System.Exception e)
@@ -226,36 +242,65 @@ namespace XRMultiplayer
                 return;
             }
 
-            // Logged on every change, to see what the recorder and voice chat look like on a headset.
             if (sources.ToString() != m_LastRecordingSources)
             {
                 m_LastRecordingSources = sources.ToString();
                 Debug.Log($"[Voice Chat] microphone recordings (audio source): {(m_LastRecordingSources.Length > 0 ? m_LastRecordingSources : "none")}");
             }
-
-            if (others > 0)
-                m_LastOtherRecording = Time.unscaledTime;
-            if (!s_PausedForRecording && m_ConnectedToRoom && others > 0)
-                SetPausedForRecording(true);
-            else if (s_PausedForRecording && (!m_ConnectedToRoom || Time.unscaledTime - m_LastOtherRecording > 2f))
-                SetPausedForRecording(false);
 #endif
         }
 
 #if VIVOX_SUPPORTED
-        async void SetPausedForRecording(bool paused)
+        /// <summary>
+        /// Puts voice chat's microphone where <see cref="s_MicForRecording"/> says. Muting or not sending would keep the
+        /// microphone open, so voice chat's input is switched to "No Device", and back to the one it had.
+        /// </summary>
+        async void ApplyMicForRecording()
         {
-            s_PausedForRecording = paused;
-            Debug.Log($"[Voice Chat] recording {(paused ? "started: voice chat microphone paused" : "ended: voice chat microphone back")}");
-            PlayerHudNotification.Instance.ShowText(paused ? "Recording: others can't hear you" : "Voice chat microphone back on", 3.0f);
             try
             {
-                if (m_ConnectedToRoom)
-                    await VivoxService.Instance.SetChannelTransmissionModeAsync(paused ? TransmissionMode.None : TransmissionMode.Single, m_CurrentLobbyId);
+                if (!VivoxService.Instance.IsLoggedIn)
+                    return;
+                var devices = VivoxService.Instance.AvailableInputDevices;
+                var noDevice = devices.FirstOrDefault(d => d.DeviceName == "No Device" || d.DeviceID == "No Device");
+                if (s_MicForRecording)
+                {
+                    if (noDevice != null)
+                    {
+                        if (VivoxService.Instance.ActiveInputDevice != noDevice)
+                        {
+                            m_InputBeforeRecording = VivoxService.Instance.ActiveInputDevice;
+                            await VivoxService.Instance.SetActiveInputDeviceAsync(noDevice);
+                        }
+                        s_MicReleased = true;
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[Voice Chat] no \"No Device\" input to free the microphone (inputs: {string.Join(", ", devices.Select(d => d.DeviceName))}); muting instead");
+                        VivoxService.Instance.MuteInputDevice();
+                    }
+                    if (m_ConnectedToRoom)
+                        await VivoxService.Instance.SetChannelTransmissionModeAsync(TransmissionMode.None, m_CurrentLobbyId);
+                }
+                else
+                {
+                    if (s_MicReleased)
+                    {
+                        var input = m_InputBeforeRecording ?? devices.FirstOrDefault(d => d != noDevice);
+                        if (input != null)
+                            await VivoxService.Instance.SetActiveInputDeviceAsync(input);
+                        s_MicReleased = false;
+                    }
+                    if (!m_SelfMuted.Value)
+                        VivoxService.Instance.UnmuteInputDevice();
+                    if (m_ConnectedToRoom)
+                        await VivoxService.Instance.SetChannelTransmissionModeAsync(TransmissionMode.Single, m_CurrentLobbyId);
+                }
+                Debug.Log($"[Voice Chat] voice chat input: {VivoxService.Instance.ActiveInputDevice?.DeviceName}");
             }
             catch (System.Exception e)
             {
-                Utils.Log($"{k_DebugPrepend}Couldn't change voice transmission: {e.Message}", 1);
+                Utils.Log($"{k_DebugPrepend}Couldn't move the microphone: {e.Message}", 1);
             }
         }
 #endif
@@ -586,6 +631,8 @@ namespace XRMultiplayer
                 Utils.Log($"{k_DebugPrepend}Joined Voice Channel: {m_CurrentLobbyId}");
                 m_ConnectionStatus.Value = "Joined Voice Channel";
                 PlayerHudNotification.Instance.ShowText("Joined Voice Chat", 3.0f);
+                if (s_MicForRecording)
+                    ApplyMicForRecording();
             }
             else
             {

@@ -326,6 +326,8 @@ static class ViewerPrefabBuilder
 
     // Above the bar, right of Unsnap / Snap.
     static readonly Vector2 k_MicIndicatorPosition = new(-270f, 82f);
+    // Right of the mic indicator.
+    static readonly Vector2 k_MicButtonPosition = new(-10f, 82f);
 
     /// <summary>Whether the headset's microphone is being recorded (see <see cref="ViewerMicIndicator"/>), in the
     /// bar buttons' text style.</summary>
@@ -351,6 +353,14 @@ static class ViewerPrefabBuilder
         text.alignment = TextAlignmentOptions.Left;
         var indicator = label.AddComponent<ViewerMicIndicator>();
         Set(indicator, "m_Label", text);
+
+        // Its button, right of it: gives the microphone to recordings or back to voice chat.
+        var oldButton = bar.Find("Mic Button");
+        if (oldButton != null)
+            Object.DestroyImmediate(oldButton.gameObject);
+        var template = bar.Find("Paste Button").gameObject;
+        var button = CloneButton(template, bar, "Mic Button", k_MicButtonPosition, new Vector2(180f, 48.5f), 1f, "Mic to recording", k_ButtonFontSize);
+        Set(indicator, "m_Button", button);
     }
 
     [MenuItem("Tunnel/Viewer/Add Mic Indicator")]
@@ -361,7 +371,7 @@ static class ViewerPrefabBuilder
         {
             var bar = root.transform.Find("Menu Bar");
             AddMicIndicator(bar, Label(bar.Find("Paste Button").GetComponent<Button>()));
-            return PrefabUtility.SaveAsPrefabAsset(root, k_ViewerPath) != null ? "Mic indicator added" : "FAILED";
+            return PrefabUtility.SaveAsPrefabAsset(root, k_ViewerPath) != null ? "Mic indicator and button added" : "FAILED";
         }
         finally
         {
