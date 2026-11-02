@@ -192,6 +192,7 @@ static class ViewerPrefabBuilder
         Set(menu, "m_PasteButton", paste);
         var clear = CloneButton(buttonTemplate, bar, "Clear Button", k_TopButtonPosition - new Vector2(140f, 0f), new Vector2(130f, 48.5f), 1f, "Clear", k_ButtonFontSize);
         Set(menu, "m_ClearButton", clear);
+        AddMicIndicator(bar, Label(paste));
 
         // < and >: the menu places them on the screen's edges.
         var previous = CloneButton(buttonTemplate, bar, "Previous Button", new Vector2(-700f, -400f), new Vector2(70f, 120f), 1f, "<", 48f);
@@ -321,6 +322,51 @@ static class ViewerPrefabBuilder
         toggle.targetGraphic = box;
         toggle.graphic = check;
         toggle.isOn = false;
+    }
+
+    // Above the bar, right of Unsnap / Snap.
+    static readonly Vector2 k_MicIndicatorPosition = new(-270f, 82f);
+
+    /// <summary>Whether the headset's microphone is being recorded (see <see cref="ViewerMicIndicator"/>), in the
+    /// bar buttons' text style.</summary>
+    static void AddMicIndicator(Transform bar, TMP_Text style)
+    {
+        var old = bar.Find("Mic Indicator");
+        if (old != null)
+            Object.DestroyImmediate(old.gameObject);
+        var label = Object.Instantiate(style.gameObject, bar, false);
+        label.name = "Mic Indicator";
+        var rect = (RectTransform)label.transform;
+        rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.anchoredPosition3D = new Vector3(k_MicIndicatorPosition.x, k_MicIndicatorPosition.y, 0f);
+        rect.sizeDelta = new Vector2(330f, 48.5f);
+        rect.localScale = Vector3.one;
+        var text = label.GetComponent<TMP_Text>();
+        text.text = "";
+        text.richText = true;
+        text.raycastTarget = false;
+        text.enableAutoSizing = true;
+        text.fontSizeMin = 10f;
+        text.fontSizeMax = k_ButtonFontSize;
+        text.alignment = TextAlignmentOptions.Left;
+        var indicator = label.AddComponent<ViewerMicIndicator>();
+        Set(indicator, "m_Label", text);
+    }
+
+    [MenuItem("Tunnel/Viewer/Add Mic Indicator")]
+    public static string AddMicIndicatorToPrefab()
+    {
+        var root = PrefabUtility.LoadPrefabContents(k_ViewerPath);
+        try
+        {
+            var bar = root.transform.Find("Menu Bar");
+            AddMicIndicator(bar, Label(bar.Find("Paste Button").GetComponent<Button>()));
+            return PrefabUtility.SaveAsPrefabAsset(root, k_ViewerPath) != null ? "Mic indicator added" : "FAILED";
+        }
+        finally
+        {
+            PrefabUtility.UnloadPrefabContents(root);
+        }
     }
 
     static GameObject NewUI(string name, Transform parent)
