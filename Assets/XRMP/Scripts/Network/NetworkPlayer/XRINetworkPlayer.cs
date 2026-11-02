@@ -419,6 +419,8 @@ namespace XRMultiplayer
             {
                 m_VivoxParticipant.ParticipantAudioEnergyChanged += ParticipantAudioEnergyChanged;
                 m_PlayerNameTag.PlayerConnectedToVoice();
+                if (!IsOwner)
+                    PlayVoiceFromHead();
             }
             else
             {
@@ -430,6 +432,26 @@ namespace XRMultiplayer
                 VoiceChatManager.AddNewVivoxPlayer(playerVoiceId, this);
             }
         }
+        /// <summary>
+        /// Plays this (remote) player's voice through a Unity AudioSource at their head instead of Vivox's own output:
+        /// Vivox plays voice as a call, which the Quest's recordings leave out, while Unity's sound is recorded.
+        /// </summary>
+        void PlayVoiceFromHead()
+        {
+            var tap = m_VivoxParticipant.CreateVivoxParticipantTap($"Voice: {playerVoiceId}");
+            if (tap == null)
+                return;
+            tap.transform.SetParent(head, false);
+            var source = tap.GetComponent<AudioSource>();
+            if (source != null)
+            {
+                source.spatialBlend = 1f;
+                source.rolloffMode = AudioRolloffMode.Linear;
+                source.minDistance = 1f;
+                source.maxDistance = m_VoiceChat.AudibleDistance;
+            }
+        }
+
         private void ParticipantAudioEnergyChanged()
         {
             UpdatePlayerVoiceEnergy((float)m_VivoxParticipant.AudioEnergy);
