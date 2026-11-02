@@ -61,6 +61,9 @@ public class ViewerMicIndicator : MonoBehaviour
 
             // The Tunnel only opens the microphone for voice chat in a shared session (or a mouth-moving avatar).
             bool ours = Microphone.IsRecording(null) || VoiceChatInUse();
+            // Paused, voice chat should have let go: anything still silenced means the recorder still gets nothing.
+            if (XRMultiplayer.VoiceChatManager.s_PausedForRecording)
+                return silenced > 0 ? "<color=#F55>Mic: recorded but silenced</color>" : "<color=#4F4>Mic: being recorded (chat paused)</color>";
             if (heard > (ours ? 1 : 0))
                 return "<color=#4F4>Mic: being recorded</color>";
             if (ours && heard > 0)

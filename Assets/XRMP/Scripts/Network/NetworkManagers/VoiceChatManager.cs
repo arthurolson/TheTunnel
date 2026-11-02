@@ -174,6 +174,93 @@ namespace XRMultiplayer
         }
 
         /// <summary>
+        /// True while voice chat has stopped sending this player's voice because a Quest recording is running.
+        /// </summary>
+        public static bool s_PausedForRecording { get; private set; }
+
+        float m_NextRecordingCheck;
+        float m_LastOtherRecording;
+        string m_LastRecordingSources;
+        AndroidJavaObject m_AudioManager;
+        const int k_VoiceRecognitionSource = 6, k_VoiceCommunicationSource = 7;
+
+        /// <summary>
+        /// While a Quest recording runs, stop sending this player's voice so the recorder gets the microphone: Android
+        /// silences every other recorder while voice chat holds it. Recordings are told apart by their audio source:
+        /// voice chat records as VOICE_COMMUNICATION and the Tunnel's own microphone as VOICE_RECOGNITION, so anything
+        /// else is another app (the Quest's recorder). Voice chat sends again once that has been gone for 2 s.
+        /// </summary>
+        void Update()
+        {
+#if VIVOX_SUPPORTED && UNITY_ANDROID && !UNITY_EDITOR
+            if (Time.unscaledTime < m_NextRecordingCheck || (!m_ConnectedToRoom && !s_PausedForRecording))
+                return;
+            m_NextRecordingCheck = Time.unscaledTime + 0.5f;
+
+            int others = 0;
+            var sources = new StringBuilder();
+            try
+            {
+                if (m_AudioManager == null)
+                {
+                    using var player = new AndroidJavaClass("com.unity3d.player.UnityPlayer");
+                    using var activity = player.GetStatic<AndroidJavaObject>("currentActivity");
+                    m_AudioManager = activity.Call<AndroidJavaObject>("getSystemService", "audio");
+                }
+                using var configs = m_AudioManager.Call<AndroidJavaObject>("getActiveRecordingConfigurations");
+                int count = configs.Call<int>("size");
+                for (int i = 0; i < count; i++)
+                {
+                    using var config = configs.Call<AndroidJavaObject>("get", i);
+                    int source = config.Call<int>("getClientAudioSource");
+                    bool silenced = config.Call<bool>("isClientSilenced");
+                    sources.Append($"{source}{(silenced ? " silenced" : "")}; ");
+                    if (source != k_VoiceRecognitionSource && source != k_VoiceCommunicationSource)
+                        others++;
+                }
+            }
+            catch (System.Exception e)
+            {
+                Utils.Log($"{k_DebugPrepend}Can't read the microphone's recordings: {e.Message}", 1);
+                m_NextRecordingCheck = float.MaxValue;
+                return;
+            }
+
+            // Logged on every change, to see what the recorder and voice chat look like on a headset.
+            if (sources.ToString() != m_LastRecordingSources)
+            {
+                m_LastRecordingSources = sources.ToString();
+                Debug.Log($"[Voice Chat] microphone recordings (audio source): {(m_LastRecordingSources.Length > 0 ? m_LastRecordingSources : "none")}");
+            }
+
+            if (others > 0)
+                m_LastOtherRecording = Time.unscaledTime;
+            if (!s_PausedForRecording && m_ConnectedToRoom && others > 0)
+                SetPausedForRecording(true);
+            else if (s_PausedForRecording && (!m_ConnectedToRoom || Time.unscaledTime - m_LastOtherRecording > 2f))
+                SetPausedForRecording(false);
+#endif
+        }
+
+#if VIVOX_SUPPORTED
+        async void SetPausedForRecording(bool paused)
+        {
+            s_PausedForRecording = paused;
+            Debug.Log($"[Voice Chat] recording {(paused ? "started: voice chat microphone paused" : "ended: voice chat microphone back")}");
+            PlayerHudNotification.Instance.ShowText(paused ? "Recording: others can't hear you" : "Voice chat microphone back on", 3.0f);
+            try
+            {
+                if (m_ConnectedToRoom)
+                    await VivoxService.Instance.SetChannelTransmissionModeAsync(paused ? TransmissionMode.None : TransmissionMode.Single, m_CurrentLobbyId);
+            }
+            catch (System.Exception e)
+            {
+                Utils.Log($"{k_DebugPrepend}Couldn't change voice transmission: {e.Message}", 1);
+            }
+        }
+#endif
+
+        /// <summary>
         /// Callback for when the local player connection state is updated.
         /// </summary>
         /// <param name="connected">Wether or not a player is connected.</param>
