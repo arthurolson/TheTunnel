@@ -3,7 +3,8 @@
 // not just the occlusion shaders. Drawn by RealDepthOcclusionFeature, one full-screen triangle per eye.
 // Only real surfaces inside the tunnel's reach count: within _RealDepthMaxDistance, above the floor band and below
 // the top of the walls, so the real floor never cuts holes and the arch still covers the real ceiling.
-// Pass 1 (debug) tints red, over everything, where a real surface counts: brighter the closer it is.
+// Pass 1 (debug) tints red, over everything, where a real surface counts: brighter the closer it is. Pass 2 (debug)
+// draws green at 8 m, depth tested: it shows wherever no depth nearer than that was written.
 Shader "Hidden/Tunnel/RealDepthPrepass"
 {
     HLSLINCLUDE
@@ -21,15 +22,31 @@ Shader "Hidden/Tunnel/RealDepthPrepass"
     float _RealDepthPushBack;
     float _RealDepthMaxDistance;
 
+    struct RealVaryings
+    {
+        float4 positionCS : SV_POSITION;
+        // The pixel's clip-space position as the GPU draws it: unprojecting it with the camera's own (GPU) matrix
+        // gives the right ray whether or not this target is drawn flipped. (Screen UVs came out upside down on the
+        // Quest's eye textures and right way up in the Editor.)
+        float2 clipXY : TEXCOORD0;
+        UNITY_VERTEX_OUTPUT_STEREO
+    };
+
+    RealVaryings RealVert(Attributes input)
+    {
+        RealVaryings output;
+        UNITY_SETUP_INSTANCE_ID(input);
+        UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
+        output.positionCS = GetFullScreenTriangleVertexPosition(input.vertexID);
+        output.clipXY = output.positionCS.xy;
+        return output;
+    }
+
     // Where this pixel's ray meets a real surface that counts: its distance from the eye, else false.
-    bool FindRealSurface(Varyings input, out float3 eyeWS, out float3 ray, out float t)
+    bool FindRealSurface(RealVaryings input, out float3 eyeWS, out float3 ray, out float t)
     {
         eyeWS = _WorldSpaceCameraPos;
-        float2 screenUV = GetNormalizedScreenSpaceUV(input.positionCS);
-        // Drawing into the Quest's eye textures, this comes out upside down for ComputeWorldSpacePosition (which
-        // flips again): without this the occlusion showed mirrored top to bottom.
-        screenUV.y = 1.0f - screenUV.y;
-        const float3 farWS = ComputeWorldSpacePosition(screenUV, UNITY_RAW_FAR_CLIP_VALUE, UNITY_MATRIX_I_VP);
+        const float3 farWS = ComputeWorldSpacePosition(float4(input.clipXY, UNITY_RAW_FAR_CLIP_VALUE, 1.0f), UNITY_MATRIX_I_VP);
         ray = normalize(farWS - eyeWS);
         t = 1.5f;
         if (_IsOcclusionOn == 0)
@@ -54,7 +71,7 @@ Shader "Hidden/Tunnel/RealDepthPrepass"
         return t > 0.05f && t <= _RealDepthMaxDistance && height >= _RealDepthMinHeight && height <= _RealDepthMaxHeight;
     }
 
-    void FragDepth(Varyings input, out float outDepth : SV_Depth)
+    void FragDepth(RealVaryings input, out float outDepth : SV_Depth)
     {
         UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
         float3 eyeWS, ray;
@@ -69,7 +86,7 @@ Shader "Hidden/Tunnel/RealDepthPrepass"
         #endif
     }
 
-    float4 FragDebug(Varyings input) : SV_Target
+    float4 FragDebug(RealVaryings input) : SV_Target
     {
         UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
         float3 eyeWS, ray;
@@ -77,6 +94,21 @@ Shader "Hidden/Tunnel/RealDepthPrepass"
         if (!FindRealSurface(input, eyeWS, ray, t))
             discard;
         return float4(1.0f, 0.0f, 0.0f, lerp(0.6f, 0.15f, saturate(t / _RealDepthMaxDistance)));
+    }
+
+    // Debug probe: green at 8 m, depth tested, so it only shows where the depth buffer holds nothing nearer. On a
+    // real surface that hides things it should stay out (red only); green there means the depth never got written.
+    float4 FragProbe(RealVaryings input, out float outDepth : SV_Depth) : SV_Target
+    {
+        UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
+        const float3 eyeWS = _WorldSpaceCameraPos;
+        const float3 farWS = ComputeWorldSpacePosition(float4(input.clipXY, UNITY_RAW_FAR_CLIP_VALUE, 1.0f), UNITY_MATRIX_I_VP);
+        const float4 clipCS = mul(UNITY_MATRIX_VP, float4(eyeWS + normalize(farWS - eyeWS) * 8.0f, 1.0f));
+        outDepth = clipCS.z / clipCS.w;
+        #if !UNITY_REVERSED_Z
+            outDepth = outDepth * 0.5f + 0.5f;
+        #endif
+        return float4(0.0f, 1.0f, 0.0f, 0.35f);
     }
     ENDHLSL
 
@@ -92,7 +124,7 @@ Shader "Hidden/Tunnel/RealDepthPrepass"
             Cull Off
 
             HLSLPROGRAM
-            #pragma vertex Vert
+            #pragma vertex RealVert
             #pragma fragment FragDepth
             ENDHLSL
         }
@@ -106,8 +138,22 @@ Shader "Hidden/Tunnel/RealDepthPrepass"
             Blend SrcAlpha OneMinusSrcAlpha
 
             HLSLPROGRAM
-            #pragma vertex Vert
+            #pragma vertex RealVert
             #pragma fragment FragDebug
+            ENDHLSL
+        }
+
+        Pass
+        {
+            Name "RealDepthProbe"
+            ZWrite Off
+            ZTest LEqual
+            Cull Off
+            Blend SrcAlpha OneMinusSrcAlpha
+
+            HLSLPROGRAM
+            #pragma vertex RealVert
+            #pragma fragment FragProbe
             ENDHLSL
         }
     }

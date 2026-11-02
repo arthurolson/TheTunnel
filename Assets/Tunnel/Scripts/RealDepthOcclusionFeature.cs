@@ -34,7 +34,7 @@ public class RealDepthOcclusionFeature : ScriptableRendererFeature
     float m_PushBack = 0.03f;
 
     [SerializeField]
-    [Tooltip("Tints red, over everything, where a real surface hides what's behind it (to check the occlusion).")]
+    [Tooltip("Tints red, over everything, where a real surface hides what's behind it, and green where no depth nearer than 8 m was written (to check the occlusion).")]
     bool m_ShowDebug;
 
     static readonly int k_MinHeight = Shader.PropertyToID("_RealDepthMinHeight");
@@ -101,7 +101,12 @@ public class RealDepthOcclusionFeature : ScriptableRendererFeature
                 builder.SetRenderAttachment(resources.activeColorTexture, 0, AccessFlags.ReadWrite);
             builder.SetRenderAttachmentDepth(resources.activeDepthTexture, AccessFlags.ReadWrite);
             builder.SetRenderFunc((PassData data, RasterGraphContext context) =>
-                Blitter.BlitTexture(context.cmd, new Vector4(1f, 1f, 0f, 0f), data.material, data.pass));
+            {
+                // Debug: the green depth probe first, then the red tint over everything.
+                if (data.pass == 1)
+                    Blitter.BlitTexture(context.cmd, new Vector4(1f, 1f, 0f, 0f), data.material, 2);
+                Blitter.BlitTexture(context.cmd, new Vector4(1f, 1f, 0f, 0f), data.material, data.pass);
+            });
         }
     }
 }
