@@ -37,7 +37,7 @@ public class RealDepthOcclusionFeature : ScriptableRendererFeature
     [SerializeField]
     [Range(0f, 1f)]
     [Tooltip("At outlines, how far the nearer surface wins: 0 smooths only, 1 widens what's in front by about two depth texels.")]
-    float m_Widen = 0.5f;
+    float m_Widen = 0.25f;
 
     [SerializeField]
     [Tooltip("Tints red, over everything, where a real surface hides what's behind it, and green where no depth nearer than 8 m was written (to check the occlusion).")]

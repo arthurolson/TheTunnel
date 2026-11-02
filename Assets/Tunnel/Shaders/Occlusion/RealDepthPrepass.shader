@@ -55,13 +55,13 @@ Shader "Hidden/Tunnel/RealDepthPrepass"
     }
 
     // The sensor's depth is low resolution and noisy, so outlines flicker texel by texel. Five filtered samples
-    // 1.5 texels apart (about 4 x 4 texels): their average smooths the outline, their nearest widens what's in
+    // a texel apart (about 3 x 3 texels): their average smooths the outline, their nearest widens what's in
     // front a little, so single noisy texels no longer flip it.
     float SmoothedLinearDepthAt(const float2 uv)
     {
         uint width, height, layers;
         _EnvironmentDepthTexture.GetDimensions(width, height, layers);
-        const float2 offset = 1.5f / float2(max(width, 1u), max(height, 1u));
+        const float2 offset = 1.0f / float2(max(width, 1u), max(height, 1u));
         const float centre = LinearDepthAt(uv);
         const float a = LinearDepthAt(uv + float2(offset.x, offset.y));
         const float b = LinearDepthAt(uv + float2(-offset.x, offset.y));

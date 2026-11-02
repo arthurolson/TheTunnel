@@ -82,6 +82,12 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
 
         bool m_MicInitialized = false;
 
+        /// <summary>
+        /// Off: the microphone stays free while playing alone (the mouth doesn't move), so the Quest's own recordings
+        /// can hear it. Voice chat in a shared session still opens it.
+        /// </summary>
+        [SerializeField] bool m_ListenToMicrophone = false;
+
         /// <inheritdoc/>
         void Start()
         {
@@ -96,6 +102,8 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
             XRINetworkGameManager.LocalPlayerColor.Subscribe(UpdatePlayerColor);
             XRINetworkGameManager.Connected.Subscribe((bool connected) => gameObject.SetActive(!connected));
 
+            if (!m_ListenToMicrophone)
+                return;
             if (VoiceChatManager.s_HasMicrophonePermission.Value)
                 InitMic();
             else
@@ -175,6 +183,8 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         /// </summary>
         void StopMicrophone()
         {
+            if (!m_MicInitialized)
+                return;
             m_MicInitialized = false;
             if (Permission.HasUserAuthorizedPermission(Permission.Microphone))
             {
