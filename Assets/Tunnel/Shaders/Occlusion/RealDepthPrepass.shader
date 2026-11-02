@@ -21,6 +21,8 @@ Shader "Hidden/Tunnel/RealDepthPrepass"
     // Real surfaces are pushed back this far (meters), so a virtual surface lying on a real one stays visible.
     float _RealDepthPushBack;
     float _RealDepthMaxDistance;
+    // How far the nearer surface wins at an outline (0 = plain smoothing, 1 = nearest of the neighbours).
+    float _RealDepthWiden;
 
     struct RealVaryings
     {
@@ -42,6 +44,34 @@ Shader "Hidden/Tunnel/RealDepthPrepass"
         return output;
     }
 
+    float LinearDepthAt(const float2 uv)
+    {
+        const float raw = SAMPLE_TEXTURE2D_ARRAY_LOD(_EnvironmentDepthTexture, sampler_LinearClamp, uv, unity_StereoEyeIndex, 0).r;
+        #ifdef XR_LINEAR_DEPTH
+            return raw;
+        #else
+            return LinearizeDepth(ConvertDepthToSymmetricRange(raw));
+        #endif
+    }
+
+    // The sensor's depth is low resolution and noisy, so outlines flicker texel by texel. Five filtered samples
+    // 1.5 texels apart (about 4 x 4 texels): their average smooths the outline, their nearest widens what's in
+    // front a little, so single noisy texels no longer flip it.
+    float SmoothedLinearDepthAt(const float2 uv)
+    {
+        uint width, height, layers;
+        _EnvironmentDepthTexture.GetDimensions(width, height, layers);
+        const float2 offset = 1.5f / float2(max(width, 1u), max(height, 1u));
+        const float centre = LinearDepthAt(uv);
+        const float a = LinearDepthAt(uv + float2(offset.x, offset.y));
+        const float b = LinearDepthAt(uv + float2(-offset.x, offset.y));
+        const float c = LinearDepthAt(uv + float2(offset.x, -offset.y));
+        const float d = LinearDepthAt(uv + float2(-offset.x, -offset.y));
+        const float average = (2.0f * centre + a + b + c + d) / 6.0f;
+        const float nearest = min(centre, min(min(a, b), min(c, d)));
+        return lerp(average, nearest, _RealDepthWiden);
+    }
+
     // Where this pixel's ray meets a real surface that counts: its distance from the eye, else false.
     bool FindRealSurface(RealVaryings input, out float3 eyeWS, out float3 ray, out float t)
     {
@@ -53,7 +83,7 @@ Shader "Hidden/Tunnel/RealDepthPrepass"
             return false;
 
         // The depth camera sits almost at the eye: find where the ray meets the real surface by scaling a guess by
-        // real depth / guessed depth a few times.
+        // real depth / guessed depth a few times (single samples to get close, the smoothed depth for the last).
         [unroll]
         for (int i = 0; i < 3; i++)
         {
@@ -63,7 +93,7 @@ Shader "Hidden/Tunnel/RealDepthPrepass"
             if (any(uv < 0.0f) || any(uv > 1.0f))
                 return false;
             const float guessed = LinearizeDepth(clip.z / clip.w);
-            const float real = SampleEnvironmentDepthLinear(uv);
+            const float real = i < 2 ? LinearDepthAt(uv) : SmoothedLinearDepthAt(uv);
             t *= real / max(guessed, 0.001f);
         }
 

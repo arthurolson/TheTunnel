@@ -7,7 +7,8 @@ using UnityEngine.Rendering.Universal;
 /// Lets real people and objects hide every virtual object behind them, whatever its material: before anything virtual
 /// is drawn, the headset's live depth of the room is written into the depth buffer (Hidden/Tunnel/RealDepthPrepass),
 /// so virtual pixels behind a real surface fail the depth test and the passthrough shows there. Hard edges, at the
-/// depth sensor's resolution; the tunnel's own occlusion shaders still fade their edges softly.
+/// depth sensor's resolution, smoothed and slightly widened so they flicker less; the tunnel's own occlusion shaders
+/// still fade their edges softly.
 /// Real surfaces only count above the floor band and below the top of the tunnel walls (see the shader), so the real
 /// floor never cuts holes and the arch still covers the real ceiling. Runs only while depth frames arrive
 /// (<see cref="OcclusionSafety"/>), and only for the headset's eyes.
@@ -34,6 +35,11 @@ public class RealDepthOcclusionFeature : ScriptableRendererFeature
     float m_PushBack = 0.03f;
 
     [SerializeField]
+    [Range(0f, 1f)]
+    [Tooltip("At outlines, how far the nearer surface wins: 0 smooths only, 1 widens what's in front by about two depth texels.")]
+    float m_Widen = 0.5f;
+
+    [SerializeField]
     [Tooltip("Tints red, over everything, where a real surface hides what's behind it, and green where no depth nearer than 8 m was written (to check the occlusion).")]
     bool m_ShowDebug;
 
@@ -41,6 +47,7 @@ public class RealDepthOcclusionFeature : ScriptableRendererFeature
     static readonly int k_MaxHeight = Shader.PropertyToID("_RealDepthMaxHeight");
     static readonly int k_MaxDistance = Shader.PropertyToID("_RealDepthMaxDistance");
     static readonly int k_PushBack = Shader.PropertyToID("_RealDepthPushBack");
+    static readonly int k_Widen = Shader.PropertyToID("_RealDepthWiden");
 
     Material m_Material;
     RealDepthPass m_Pass;
@@ -64,6 +71,7 @@ public class RealDepthOcclusionFeature : ScriptableRendererFeature
         m_Material.SetFloat(k_MaxHeight, m_MaxHeight);
         m_Material.SetFloat(k_MaxDistance, m_MaxDistance);
         m_Material.SetFloat(k_PushBack, m_PushBack);
+        m_Material.SetFloat(k_Widen, m_Widen);
         m_Pass.material = m_Material;
         renderer.EnqueuePass(m_Pass);
         if (m_ShowDebug)
