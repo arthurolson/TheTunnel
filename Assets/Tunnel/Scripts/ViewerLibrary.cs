@@ -129,14 +129,15 @@ public static class ViewerLibrary
 
         s_All.AddRange(ScanDeviceMedia());
 
-        // By kind; the app's own media by name, then the Quest's photos and videos, newest first.
+        // By kind; the app's own media by name as listed (captures by date), then the Quest's photos and videos, newest
+        // first.
         s_All.Sort((a, b) =>
         {
             if (a.kind != b.kind)
                 return a.kind.CompareTo(b.kind);
             if (a.isDeviceMedia != b.isDeviceMedia)
                 return a.isDeviceMedia ? 1 : -1;
-            return a.isDeviceMedia ? b.modified.CompareTo(a.modified) : string.Compare(a.name, b.name, StringComparison.OrdinalIgnoreCase);
+            return a.isDeviceMedia ? b.modified.CompareTo(a.modified) : string.Compare(LabelFor(a.name), LabelFor(b.name), StringComparison.OrdinalIgnoreCase);
         });
     }
 
@@ -194,6 +195,23 @@ public static class ViewerLibrary
         }
 
         return entries;
+    }
+
+    // A headset capture's file name: the app that made it, then the date and time ("edu.scripps.tunnel-20261102-143228-0").
+    static readonly System.Text.RegularExpressions.Regex s_CaptureName = new(
+        @"^[A-Za-z][\w]*(\.[\w]+)+-(?<y>\d{4})(?<mo>\d{2})(?<d>\d{2})-(?<h>\d{2})(?<mi>\d{2})(?<s>\d{2})(-\d+)?$");
+
+    /// <summary>
+    /// How a list shows a name: a headset capture as only when it was made ("2026-11-02 14:32:28"), since the app's
+    /// name before it is longer than the list's label; any other name as it is.
+    /// </summary>
+    public static string LabelFor(string name)
+    {
+        var match = s_CaptureName.Match(name ?? string.Empty);
+        if (!match.Success)
+            return name;
+        var g = match.Groups;
+        return $"{g["y"].Value}-{g["mo"].Value}-{g["d"].Value} {g["h"].Value}:{g["mi"].Value}:{g["s"].Value}";
     }
 
     /// <summary>A file in a kind's folder as an entry: media of that kind, or a link file; null for anything else.</summary>

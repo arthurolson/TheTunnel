@@ -276,7 +276,8 @@ public class ViewerMenu : MonoBehaviour
 
         var all = ViewerLibrary.OfKind(kind.Value).ToList();
         var marked = ViewerLibrary.ReadSaveList().Select(line => line.path).ToHashSet();
-        var shown = m_Typed.Length == 0 ? all : all.Where(e => e.name.IndexOf(m_Typed, System.StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+        var shown = m_Typed.Length == 0 ? all : all.Where(e => e.name.IndexOf(m_Typed, System.StringComparison.OrdinalIgnoreCase) >= 0
+            || ViewerLibrary.LabelFor(e.name).IndexOf(m_Typed, System.StringComparison.OrdinalIgnoreCase) >= 0).ToList();
         for (int i = 0; i < shown.Count; i++)
         {
             var entry = shown[i];
@@ -287,7 +288,7 @@ public class ViewerMenu : MonoBehaviour
                 : entry.isDeviceMedia ? "  <color=#AAA>(Quest)</color>"
                 : entry.onHeadset ? "  <color=#AAA>(this headset)</color>" : "  <color=#AAA>(in app)</color>";
             var label = row.transform.Find("Label").GetComponent<TMP_Text>();
-            string text = entry.name + note;
+            string text = ViewerLibrary.LabelFor(entry.name) + note;
             row.onClick.AddListener(() => Choose(entry));
             SetUpCheckBoxes(row, entry, label, text, marked.Contains(entry.file ?? string.Empty));
         }
@@ -321,7 +322,7 @@ public class ViewerMenu : MonoBehaviour
             save.onValueChanged.AddListener(on =>
             {
                 ViewerLibrary.MarkToSave(entry, on);
-                ShowNotice(on ? $"{entry.name} goes into the app at the next build." : $"{entry.name} won't go into the app.");
+                ShowNotice(on ? $"{ViewerLibrary.LabelFor(entry.name)} goes into the app at the next build." : $"{ViewerLibrary.LabelFor(entry.name)} won't go into the app.");
             });
         }
 

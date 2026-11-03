@@ -181,32 +181,38 @@ public class TunnelMoleculeMenu : NetworkBehaviour
     /// Beside the menu's wall, at the list's height, just past the list's far edge, inside the tunnel; if another
     /// molecule is already there, the first free spot further along the tunnel.
     /// </summary>
-    Vector3 PlaceOnWall(GameObject molecule)
+    Vector3 PlaceOnWall(GameObject molecule) =>
+        PlaceBesideList(m_Geometry, (RectTransform)m_ListPanel.transform, molecule, WorldRadius(molecule), m_GapFromList, m_GapFromWall);
+
+    /// <summary>
+    /// Where to put something new of this radius beside a TS Menu list: on the menu's wall, at the list's height,
+    /// past the list's far edge, the first spot along the tunnel that no molecule takes up.
+    /// </summary>
+    public static Vector3 PlaceBesideList(TunnelSegmentGeometry geometry, RectTransform list, GameObject placing, float radius, float gapFromList, float gapFromWall)
     {
-        Transform frame = m_Geometry.transform;
-        float radius = WorldRadius(molecule);
+        Transform frame = geometry.transform;
 
         // The menu sits on one of the side walls; use that one.
-        Vector3 listCenter = frame.InverseTransformPoint(m_ListPanel.transform.position);
+        Vector3 listCenter = frame.InverseTransformPoint(list.position);
         float side = listCenter.x >= 0f ? 1f : -1f;
 
-        // The list's corners in the segment's frame: the new molecule goes beyond the corner furthest along the
-        // tunnel from the menu (the list opens away from the near end).
+        // The list's corners in the segment's frame: the new thing goes beyond the corner furthest along the tunnel
+        // from the menu (the list opens away from the near end).
         var corners = new Vector3[4];
-        ((RectTransform)m_ListPanel.transform).GetWorldCorners(corners);
+        list.GetWorldCorners(corners);
         float farZ = float.MinValue;
         foreach (var corner in corners)
             farZ = Mathf.Max(farZ, frame.InverseTransformPoint(corner).z);
 
-        float halfLength = m_Geometry.length * 0.5f;
-        float firstZ = Mathf.Min(farZ + m_GapFromList + radius, halfLength - radius);
-        float x = side * (m_Geometry.width * 0.5f - radius - m_GapFromWall);
+        float halfLength = geometry.length * 0.5f;
+        float firstZ = Mathf.Min(farZ + gapFromList + radius, halfLength - radius);
+        float x = side * (geometry.width * 0.5f - radius - gapFromWall);
 
         Physics.SyncTransforms(); // molecules placed moments ago
         for (float z = firstZ; z <= halfLength - radius; z += k_FreeSpotStep)
         {
             var position = frame.TransformPoint(new Vector3(x, listCenter.y, z));
-            if (!OverlapsOtherMolecule(molecule, position, radius))
+            if (!OverlapsOtherMolecule(placing, position, radius))
                 return position;
         }
 
@@ -221,21 +227,34 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         for (int i = 0; i < count; i++)
         {
             var body = s_Overlaps[i].attachedRigidbody;
-            if (body != null && body.gameObject != molecule && body.GetComponent<MoleculeGravity>() != null)
+            if (body != null && body.gameObject != molecule && (body.GetComponent<MoleculeGravity>() != null || body.GetComponent<TunnelContainer>() != null))
                 return true;
         }
 
         return false;
     }
 
-    static float WorldRadius(GameObject molecule)
+    /// <summary>The radius of a sphere around the molecule's collider (read from the collider's own settings: it is
+    /// still inactive while it's placed, so it has no bounds yet).</summary>
+    public static float WorldRadius(GameObject molecule)
     {
-        // Molecules carry one sphere collider at their outer radius (see Tunnel > Molecules > Update Molecule Library).
-        var sphere = molecule.GetComponentInChildren<SphereCollider>(true);
-        if (sphere != null)
+        // Molecules carry one collider: a sphere at their outer radius, or an oriented box or ellipsoid around their
+        // surface (see Tunnel > Molecules > Update Molecule Library).
+        var collider = molecule.GetComponentInChildren<Collider>(true);
+        if (collider != null)
         {
-            var scale = sphere.transform.lossyScale;
-            return sphere.radius * Mathf.Max(scale.x, Mathf.Max(scale.y, scale.z));
+            var scale = collider.transform.lossyScale;
+            float offset = (collider.transform.position - molecule.transform.position).magnitude;
+            switch (collider)
+            {
+                case SphereCollider sphere:
+                    return offset + sphere.radius * Mathf.Max(scale.x, Mathf.Max(scale.y, scale.z));
+                case BoxCollider box:
+                    return offset + Vector3.Scale(box.size, scale).magnitude * 0.5f;
+                case MeshCollider mesh when mesh.sharedMesh != null:
+                    var extents = Vector3.Scale(mesh.sharedMesh.bounds.extents, scale);
+                    return offset + Mathf.Max(extents.x, Mathf.Max(extents.y, extents.z));
+            }
         }
 
         var renderer = molecule.GetComponentInChildren<Renderer>(true);

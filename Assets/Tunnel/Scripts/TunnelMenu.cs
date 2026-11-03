@@ -6,8 +6,8 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 
 /// <summary>
 /// The Tunnel Segment's "TS Menu" button: opens and closes the panel holding the segment's buttons
-/// (Colors, Textures, Molecules, New Browser, Add Segment, Remove Segment, Align to QR). The colour chooser, the
-/// texture list and the molecule list open beside it, one at a time; closing the menu also closes them. Everyone sees
+/// (Colors, Textures, Molecules, Containers, New Browser, New Viewer, Add Segment, Remove Segment, Align to QR). The
+/// colour chooser, the texture list, the molecule list and the container list open beside it, one at a time; closing the menu also closes them. Everyone sees
 /// the same menu: whoever presses a button opens or closes it for all players (the colour chooser shares itself the
 /// same way). Works locally when not connected.
 /// </summary>
@@ -18,6 +18,7 @@ public class TunnelMenu : NetworkBehaviour
         None,
         Textures,
         Molecules,
+        Containers,
     }
 
     [SerializeField]
@@ -45,6 +46,12 @@ public class TunnelMenu : NetworkBehaviour
     TMP_Text m_MoleculesLabel;
 
     [SerializeField]
+    Button m_ContainersButton;
+
+    [SerializeField]
+    TMP_Text m_ContainersLabel;
+
+    [SerializeField]
     TunnelSegmentAppearance m_Appearance;
 
     [SerializeField]
@@ -52,6 +59,9 @@ public class TunnelMenu : NetworkBehaviour
 
     [SerializeField]
     TunnelMoleculeMenu m_Molecules;
+
+    [SerializeField]
+    TunnelContainerMenu m_Containers;
 
     readonly NetworkVariable<bool> m_Open = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<SidePanel> m_Panel = new(SidePanel.None, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
@@ -74,6 +84,8 @@ public class TunnelMenu : NetworkBehaviour
             m_TexturesButton.onClick.AddListener(ToggleTextures);
         if (m_MoleculesButton != null)
             m_MoleculesButton.onClick.AddListener(ToggleMolecules);
+        if (m_ContainersButton != null)
+            m_ContainersButton.onClick.AddListener(() => ToggleSidePanel(SidePanel.Containers));
         // The appearance component toggles the chooser itself; just keep the lists out of its way.
         if (m_ColorsButton != null)
             m_ColorsButton.onClick.AddListener(() => SetState(isOpen, SidePanel.None));
@@ -164,6 +176,15 @@ public class TunnelMenu : NetworkBehaviour
             m_MenuLabel.text = open ? "Close Menu" : "TS Menu";
         ShowTextures(side == SidePanel.Textures);
         ShowMolecules(side == SidePanel.Molecules);
+        ShowContainers(side == SidePanel.Containers);
+    }
+
+    void ShowContainers(bool show)
+    {
+        if (m_Containers != null)
+            m_Containers.ShowList(show);
+        if (m_ContainersLabel != null)
+            m_ContainersLabel.text = show ? "Hide Containers" : "Containers";
     }
 
     void ShowMolecules(bool show)

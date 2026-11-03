@@ -11,8 +11,9 @@ using UnityEngine.XR.Interaction.Toolkit.AffordanceSystem.Rendering;
 /// Keeps the TS Menu's Molecules list in step with Assets/Molecules: each sub-folder is one molecule, named after the
 /// folder. A folder with a networked toy prefab is used as it is; a folder with only a model (GLB, glTF, OBJ, FBX, in
 /// ångström) gets a toy made for it from the 2PLV one, so every molecule behaves the same: weightless and heavily
-/// damped, grabbable and scalable with the same gestures, shared over the network, with one sphere collider at its
-/// outer radius, at the same ångström-to-meter scale as 2PLV and coloured by subunit type with 2PLV's chain colours.
+/// damped, grabbable and scalable with the same gestures, shared over the network, at the same ångström-to-meter scale
+/// as 2PLV and coloured by subunit type with 2PLV's chain colours. Its collider is the smallest that encloses the
+/// whole surface: an oriented box or an ellipsoid, whichever has less volume (see <see cref="MoleculeColliderFit"/>).
 /// The new toys are added to the network prefab list and to the molecule list in TunnelPrefabs.asset.
 /// Runs from Tunnel > Molecules > Update Molecule Library, and by itself when a model is added under Assets/Molecules.
 /// </summary>
@@ -154,13 +155,37 @@ static class MoleculeLibraryBuilder
             }
         }
 
-        toy.GetComponentInChildren<SphereCollider>(true).radius = radius;
+        // The tightest collider around every vertex: an oriented box or an ellipsoid, whichever is smaller.
+        var points = meshes.SelectMany(m => m.vertices).ToList();
+        var box = MoleculeColliderFit.Box(points);
+        var ellipsoid = MoleculeColliderFit.Ellipsoid(points);
+        var fit = box.volume <= ellipsoid.volume ? box : ellipsoid;
+        var sphere = toy.GetComponentInChildren<SphereCollider>(true);
+        var holder = sphere.gameObject;
+        Object.DestroyImmediate(sphere);
+        holder.transform.localPosition = fit.center;
+        holder.transform.localRotation = fit.rotation;
+        holder.transform.localScale = Vector3.one;
+        if (fit.kind == MoleculeColliderFit.Kind.Box)
+        {
+            holder.AddComponent<BoxCollider>().size = fit.size;
+        }
+        else
+        {
+            var hull = MoleculeColliderFit.EllipsoidMesh(fit.size, $"{name}_Collider");
+            AssetDatabase.AddObjectToAsset(hull, meshPath);
+            var collider = holder.AddComponent<MeshCollider>();
+            collider.sharedMesh = hull;
+            collider.convex = true;
+        }
+        float sphereVolume = 4f / 3f * Mathf.PI * radius * radius * radius;
 
         string prefabPath = $"{folder}/{toy.name}.prefab";
         var prefab = PrefabUtility.SaveAsPrefabAsset(toy, prefabPath);
         Object.DestroyImmediate(toy);
         Debug.Log($"[Molecules] made {prefabPath} from {Path.GetFileName(modelPath)}: {meshes.Count} subunit type(s), " +
-            $"{filters.Count} subunits, outer radius {radius / k_UnitsPerAngstrom:0} Å");
+            $"{filters.Count} subunits, outer radius {radius / k_UnitsPerAngstrom:0} Å; collider {fit.kind} " +
+            $"(box {box.volume / sphereVolume:P0}, ellipsoid {ellipsoid.volume / sphereVolume:P0} of the outer sphere's volume)");
         return prefab;
     }
 
