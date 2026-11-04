@@ -144,14 +144,14 @@ static class ContainerBuilder
             Object.DestroyImmediate(list.transform.Find("Magnification").gameObject);
             Object.DestroyImmediate(list.transform.Find("Scroll View").gameObject);
             var panelRect = (RectTransform)list.transform;
-            panelRect.sizeDelta = new Vector2(540f, 460f);
-            panelRect.anchoredPosition = ((RectTransform)moleculeList).anchoredPosition + new Vector2(0f, 70f);
+            panelRect.sizeDelta = new Vector2(540f, 560f);
+            panelRect.anchoredPosition = ((RectTransform)moleculeList).anchoredPosition + new Vector2(0f, 20f);
 
             var title = (RectTransform)list.transform.Find("Title");
-            title.anchoredPosition = new Vector2(title.anchoredPosition.x, 190f);
+            title.anchoredPosition = new Vector2(title.anchoredPosition.x, 240f);
             title.GetComponent<TMPro.TMP_Text>().text = "Containers";
             var status = (RectTransform)list.transform.Find("Status");
-            status.anchoredPosition = new Vector2(0f, 115f);
+            status.anchoredPosition = new Vector2(0f, 165f);
             status.sizeDelta = new Vector2(500f, 100f);
 
             var template = list.transform.Find("Row Template");
@@ -171,12 +171,14 @@ static class ContainerBuilder
                 row.GetComponentInChildren<TMPro.TMP_Text>(true).text = text;
                 return b;
             }
-            var boxRow = Row("Box Row", 15f, "■  Box");
-            var sphereRow = Row("Sphere Row", -50f, "□  Sphere");
-            var place = Row("Place Button", -150f, "Place Container");
+            var boxRow = Row("Box Row", 65f, "■  Box");
+            var sphereRow = Row("Sphere Row", 0f, "□  Sphere");
+            var place = Row("Place Button", -95f, "Place Container");
             var placeLabel = place.GetComponentInChildren<TMPro.TMP_Text>(true);
             placeLabel.alignment = TMPro.TextAlignmentOptions.Center;
             placeLabel.fontStyle = TMPro.FontStyles.Bold;
+            var colliderRow = Row("Collider Row", -195f, "□  Collider");
+            colliderRow.GetComponentInChildren<TMPro.TMP_Text>(true).richText = true;
             Object.DestroyImmediate(template.gameObject);
             list.SetActive(false);
 
@@ -190,6 +192,7 @@ static class ContainerBuilder
             so.FindProperty("m_BoxRow").objectReferenceValue = boxRow;
             so.FindProperty("m_SphereRow").objectReferenceValue = sphereRow;
             so.FindProperty("m_PlaceButton").objectReferenceValue = place;
+            so.FindProperty("m_ColliderRow").objectReferenceValue = colliderRow;
             so.FindProperty("m_StatusText").objectReferenceValue = status.GetComponent<TMPro.TMP_Text>();
             so.ApplyModifiedPropertiesWithoutUndo();
 

@@ -63,6 +63,9 @@ public class TunnelContainer : NetworkBehaviour
     public Shape shape => m_Shape;
     public bool isCollider => IsSpawned ? m_IsCollider.Value : m_LocalIsCollider;
 
+    /// <summary>The container placed or picked up last: the one the TS Menu's Collider check box switches.</summary>
+    public static TunnelContainer current { get; private set; }
+
     readonly NetworkVariable<bool> m_IsCollider = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     bool m_LocalIsCollider;
 
@@ -97,7 +100,21 @@ public class TunnelContainer : NetworkBehaviour
         BuildWalls();
         FitToScale();
         Apply(isCollider);
+        current = this;
+        if (m_Grab != null)
+            m_Grab.selectEntered.AddListener(OnGrabbed);
     }
+
+    public override void OnDestroy()
+    {
+        if (m_Grab != null)
+            m_Grab.selectEntered.RemoveListener(OnGrabbed);
+        if (current == this)
+            current = null;
+        base.OnDestroy();
+    }
+
+    void OnGrabbed(UnityEngine.XR.Interaction.Toolkit.SelectEnterEventArgs args) => current = this;
 
     public override void OnNetworkSpawn()
     {
@@ -176,7 +193,9 @@ public class TunnelContainer : NetworkBehaviour
             bool clicked = hand.selectInput.ReadWasPerformedThisFrame() || hand.activateInput.ReadWasPerformedThisFrame();
             if (!clicked)
                 continue;
-            if (Vector3.Dot(hand.transform.forward, Vector3.up) < m_PointingUp)
+            float up = Vector3.Dot(hand.transform.forward, Vector3.up);
+            Debug.Log($"[Containers] {hand.name} ({hand.handedness}) clicked while {holder.name} ({holder.handedness}) holds {name}: pointing up {up:F2} (needs {m_PointingUp:F2}), {Time.unscaledTime - m_LastClick:F2} s since the last click");
+            if (up < m_PointingUp)
             {
                 m_LastClick = -10f;
                 continue;

@@ -6,7 +6,8 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 
 /// <summary>
 /// The TS Menu's "Containers" list: check a shape (Box or Sphere), then Place Container puts one for everyone inside
-/// the tunnel, beside the list like a new molecule (see <see cref="TunnelContainer"/>). Works locally when not
+/// the tunnel, beside the list like a new molecule (see <see cref="TunnelContainer"/>). The Collider check box shows
+/// and switches whether the container placed or held last is a collider (red) or not (green). Works locally when not
 /// connected.
 /// </summary>
 public class TunnelContainerMenu : NetworkBehaviour
@@ -30,6 +31,9 @@ public class TunnelContainerMenu : NetworkBehaviour
     Button m_PlaceButton;
 
     [SerializeField]
+    Button m_ColliderRow;
+
+    [SerializeField]
     TMP_Text m_StatusText;
 
     [SerializeField]
@@ -50,6 +54,8 @@ public class TunnelContainerMenu : NetworkBehaviour
             m_SphereRow.onClick.AddListener(() => Check(TunnelContainer.Shape.Sphere));
         if (m_PlaceButton != null)
             m_PlaceButton.onClick.AddListener(Place);
+        if (m_ColliderRow != null)
+            m_ColliderRow.onClick.AddListener(ToggleCollider);
         ShowChecks();
     }
 
@@ -59,7 +65,30 @@ public class TunnelContainerMenu : NetworkBehaviour
             return;
         m_ListPanel.SetActive(show);
         if (show)
-            SetStatus("Check a shape, then Place Container.\nRed or green: hold it, point the other hand up and double-click it.");
+            SetStatus("Check a shape, then Place Container.\nCollider switches the container placed or held last: red holds things in, green lets them through.");
+    }
+
+    void Update()
+    {
+        if (m_ColliderRow == null || m_ListPanel == null || !m_ListPanel.activeInHierarchy)
+            return;
+        var container = TunnelContainer.current;
+        string text = container == null
+            ? "□  Collider  <color=#AAA>(place a container first)</color>"
+            : (container.isCollider ? "■  Collider  <color=#F66>(red)</color>" : "□  Collider  <color=#6F6>(green)</color>")
+                + $"  <color=#AAA>{container.shape.ToString().ToLowerInvariant()} held or placed last</color>";
+        var label = m_ColliderRow.GetComponentInChildren<TMP_Text>(true);
+        if (label.text != text)
+            label.text = text;
+    }
+
+    void ToggleCollider()
+    {
+        var container = TunnelContainer.current;
+        if (container == null)
+            SetStatus("Place a container first.");
+        else
+            container.ToggleCollider();
     }
 
     void Check(TunnelContainer.Shape shape)
