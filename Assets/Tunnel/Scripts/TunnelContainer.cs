@@ -79,6 +79,36 @@ public class TunnelContainer : NetworkBehaviour
     readonly NetworkVariable<float> m_Viscosity = new(1f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     float m_LocalViscosity = 1f;
 
+    /// <summary>How the heat inside moves the molecules there (see <see cref="temperature"/>).</summary>
+    public enum Motion : byte
+    {
+        /// <summary>Brownian: the medium jostles them, so their direction keeps changing at random.</summary>
+        Random,
+        /// <summary>Like a gas: each flies straight at its thermal speed until a collision turns it.</summary>
+        Ballistic,
+    }
+
+    /// <summary>
+    /// How much kinetic energy the molecules inside have, 0 to 10 (continuous): the energy is proportional to it, as
+    /// to an absolute temperature, with 10 room temperature (20 °C, 293 K) and 0 absolute zero (no thermal motion,
+    /// the default). Each molecule's thermal speed goes as the square root of temperature over its mass, so heavier
+    /// (or more magnified) molecules move more slowly. Set from the TS Menu's Containers list.
+    /// </summary>
+    public float temperature => IsSpawned ? m_Temperature.Value : m_LocalTemperature;
+
+    public Motion motion => IsSpawned ? (Motion)m_Motion.Value : m_LocalMotion;
+
+    public const float k_MaxTemperature = 10f;
+    public const float k_RoomKelvin = 293.15f;
+
+    /// <summary>The temperature setting in kelvin (10 is 293 K, 20 °C).</summary>
+    public static float Kelvin(float setting) => setting / k_MaxTemperature * k_RoomKelvin;
+
+    readonly NetworkVariable<float> m_Temperature = new(0f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<byte> m_Motion = new((byte)Motion.Random, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    float m_LocalTemperature;
+    Motion m_LocalMotion = Motion.Random;
+
     static readonly List<TunnelContainer> s_All = new();
 
     const int k_IgnoreRaycastLayer = 2;
@@ -182,6 +212,36 @@ public class TunnelContainer : NetworkBehaviour
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     void SetViscosityRpc(float value) => m_Viscosity.Value = Mathf.Clamp01(value);
 
+    /// <summary>Sets the temperature inside (0 to 10, to the nearest 0.05) for everyone.</summary>
+    public void SetTemperature(float value)
+    {
+        value = Mathf.Clamp(Mathf.Round(value * 20f) / 20f, 0f, k_MaxTemperature);
+        if (Mathf.Approximately(value, temperature))
+            return;
+        if (IsSpawned)
+            SetTemperatureRpc(value);
+        else
+            m_LocalTemperature = value;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void SetTemperatureRpc(float value) => m_Temperature.Value = Mathf.Clamp(value, 0f, k_MaxTemperature);
+
+    /// <summary>Sets how the heat inside moves molecules, for everyone.</summary>
+    public void SetMotion(Motion value)
+    {
+        if (value == motion)
+            return;
+        Debug.Log($"[Containers] {m_Shape} motion {value}");
+        if (IsSpawned)
+            SetMotionRpc((byte)value);
+        else
+            m_LocalMotion = value;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void SetMotionRpc(byte value) => m_Motion.Value = value;
+
     void OnEnable() => s_All.Add(this);
 
     void OnDisable() => s_All.Remove(this);
@@ -197,12 +257,13 @@ public class TunnelContainer : NetworkBehaviour
     }
 
     /// <summary>
-    /// The viscosity at a point: that of the smallest container it is inside (so a container inside another has its
-    /// own), or 1 outside them all.
+    /// The container whose medium a point is in: the smallest one it is inside (so a container inside another has its
+    /// own), or null outside them all.
     /// </summary>
-    public static float ViscosityAt(Vector3 world)
+    public static TunnelContainer At(Vector3 world)
     {
-        float result = 1f, smallest = float.MaxValue;
+        TunnelContainer result = null;
+        float smallest = float.MaxValue;
         foreach (var container in s_All)
         {
             if (container == null || !container.Contains(world))
@@ -212,10 +273,17 @@ public class TunnelContainer : NetworkBehaviour
             if (size < smallest)
             {
                 smallest = size;
-                result = container.viscosity;
+                result = container;
             }
         }
         return result;
+    }
+
+    /// <summary>The viscosity at a point: that of the container it is in (see <see cref="At"/>), or 1 outside.</summary>
+    public static float ViscosityAt(Vector3 world)
+    {
+        var container = At(world);
+        return container != null ? container.viscosity : 1f;
     }
 
     void Apply(bool collider)

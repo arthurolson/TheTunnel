@@ -156,16 +156,18 @@ static class ContainerBuilder
             var list = Object.Instantiate(moleculeList.gameObject, control, false);
             list.name = "Container List";
             Object.DestroyImmediate(list.transform.Find("Scroll View").gameObject);
+            // Two columns: the rows on the left, the thermometer on the right.
             var panelRect = (RectTransform)list.transform;
-            panelRect.sizeDelta = new Vector2(540f, 680f);
-            panelRect.anchoredPosition = ((RectTransform)moleculeList).anchoredPosition + new Vector2(0f, -40f);
+            panelRect.sizeDelta = new Vector2(680f, 800f);
+            panelRect.anchoredPosition = ((RectTransform)moleculeList).anchoredPosition + new Vector2(-70f, -100f);
+            const float rowsX = -80f, rowsWidth = 460f, thermometerX = 225f;
 
             var title = (RectTransform)list.transform.Find("Title");
-            title.anchoredPosition = new Vector2(title.anchoredPosition.x, 300f);
+            title.anchoredPosition = new Vector2(title.anchoredPosition.x - 70f, 360f);
             title.GetComponent<TMPro.TMP_Text>().text = "Containers";
             var status = (RectTransform)list.transform.Find("Status");
-            status.anchoredPosition = new Vector2(0f, 225f);
-            status.sizeDelta = new Vector2(500f, 100f);
+            status.anchoredPosition = new Vector2(0f, 285f);
+            status.sizeDelta = new Vector2(620f, 100f);
 
             var template = list.transform.Find("Row Template");
             Button Row(string name, float y, string text)
@@ -174,29 +176,33 @@ static class ContainerBuilder
                 row.name = name;
                 row.SetActive(true);
                 var rect = (RectTransform)row.transform;
-                rect.anchorMin = new Vector2(0f, 0.5f);
-                rect.anchorMax = new Vector2(1f, 0.5f);
-                rect.pivot = new Vector2(0.5f, 0.5f);
-                rect.sizeDelta = new Vector2(-60f, 56f);
-                rect.anchoredPosition = new Vector2(0f, y);
+                rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f);
+                rect.sizeDelta = new Vector2(rowsWidth, 56f);
+                rect.anchoredPosition = new Vector2(rowsX, y);
                 var b = row.GetComponent<Button>();
                 b.onClick = new Button.ButtonClickedEvent();
-                row.GetComponentInChildren<TMPro.TMP_Text>(true).text = text;
+                var rowLabel = row.GetComponentInChildren<TMPro.TMP_Text>(true);
+                rowLabel.text = text;
+                rowLabel.richText = true;
                 return b;
             }
-            var boxRow = Row("Box Row", 125f, "■  Box");
-            var sphereRow = Row("Sphere Row", 60f, "□  Sphere");
-            var place = Row("Place Button", -35f, "Place Container");
+            var boxRow = Row("Box Row", 185f, "■  Box");
+            var sphereRow = Row("Sphere Row", 120f, "□  Sphere");
+            var place = Row("Place Button", 30f, "Place Container");
             var placeLabel = place.GetComponentInChildren<TMPro.TMP_Text>(true);
             placeLabel.alignment = TMPro.TextAlignmentOptions.Center;
             placeLabel.fontStyle = TMPro.FontStyles.Bold;
-            var colliderRow = Row("Collider Row", -135f, "□  Collider");
-            colliderRow.GetComponentInChildren<TMPro.TMP_Text>(true).richText = true;
+            var colliderRow = Row("Collider Row", -60f, "□  Collider");
+            var randomRow = Row("Random Row", -150f, "■  Random motion");
+            var ballisticRow = Row("Ballistic Row", -215f, "□  Ballistic motion");
 
             // Viscosity: the molecule list's Magnification slider, 0 to 1 in tenths.
             var viscosity = list.transform.Find("Magnification");
+            // (its copy, made first, becomes the thermometer)
+            var heat = Object.Instantiate(viscosity.gameObject, list.transform, false).transform;
             viscosity.name = "Viscosity";
-            ((RectTransform)viscosity).anchoredPosition = new Vector2(0f, -255f);
+            ((RectTransform)viscosity).anchoredPosition = new Vector2(rowsX, -320f);
+            ((RectTransform)viscosity).sizeDelta = new Vector2(rowsWidth, 60f);
             var viscositySlider = viscosity.GetComponentInChildren<Slider>(true);
             viscositySlider.name = "Viscosity Slider";
             viscositySlider.onValueChanged = new Slider.SliderEvent();
@@ -218,6 +224,8 @@ static class ContainerBuilder
                 tick.anchorMin = tick.anchorMax = new Vector2(i / 10f, 0.5f);
                 tick.GetComponent<TMPro.TMP_Text>().text = i == 0 ? "0" : i == 10 ? "1" : $".{i}";
             }
+
+            var thermometer = BuildThermometer(heat, thermometerX, out var temperatureSlider, out var temperatureText);
             Object.DestroyImmediate(template.gameObject);
             list.SetActive(false);
 
@@ -235,6 +243,10 @@ static class ContainerBuilder
             so.FindProperty("m_StatusText").objectReferenceValue = status.GetComponent<TMPro.TMP_Text>();
             so.FindProperty("m_ViscositySlider").objectReferenceValue = viscositySlider;
             so.FindProperty("m_ViscosityText").objectReferenceValue = viscosityText;
+            so.FindProperty("m_RandomRow").objectReferenceValue = randomRow;
+            so.FindProperty("m_BallisticRow").objectReferenceValue = ballisticRow;
+            so.FindProperty("m_TemperatureSlider").objectReferenceValue = temperatureSlider;
+            so.FindProperty("m_TemperatureText").objectReferenceValue = temperatureText;
             so.ApplyModifiedPropertiesWithoutUndo();
 
             var tunnelMenu = control.GetComponent<TunnelMenu>();
@@ -253,5 +265,105 @@ static class ContainerBuilder
         {
             PrefabUtility.UnloadPrefabContents(root);
         }
+    }
+    /// <summary>
+    /// The Containers list's thermometer, made from a copy of the Magnification slider: a vertical tube that fills red
+    /// from a red bulb as the temperature rises (0 to 10, continuous), with its scale beside it and the reading (the
+    /// setting, kelvin and °C) under the bulb. Laid out in the panel's own coordinates, around x.
+    /// </summary>
+    static Transform BuildThermometer(Transform group, float x, out Slider slider, out TMPro.TMP_Text reading)
+    {
+        group.name = "Temperature";
+        var groupRect = (RectTransform)group;
+        groupRect.anchorMin = groupRect.anchorMax = groupRect.pivot = new Vector2(0.5f, 0.5f);
+        groupRect.anchoredPosition = Vector2.zero;
+        groupRect.sizeDelta = Vector2.zero;
+        groupRect.localScale = Vector3.one;
+
+        RectTransform Place(Transform t, Vector2 position, Vector2 size)
+        {
+            var rect = (RectTransform)t;
+            rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.anchoredPosition = position;
+            rect.sizeDelta = size;
+            return rect;
+        }
+
+        const float tubeTop = 160f, tubeBottom = -250f, tubeWidth = 34f;
+        var red = new Color(0.86f, 0.16f, 0.12f);
+
+        var title = group.Find("Magnification Text").GetComponent<TMPro.TMP_Text>();
+        title.name = "Temperature Title";
+        title.text = "Temperature";
+        title.alignment = TMPro.TextAlignmentOptions.Center;
+        Place(title.transform, new Vector2(x + 20f, 200f), new Vector2(190f, 36f));
+
+        slider = group.GetComponentInChildren<Slider>(true);
+        slider.name = "Thermometer";
+        slider.onValueChanged = new Slider.SliderEvent();
+        slider.direction = Slider.Direction.BottomToTop;
+        slider.minValue = 0f;
+        slider.maxValue = TunnelContainer.k_MaxTemperature;
+        slider.wholeNumbers = false;
+        Place(slider.transform, new Vector2(x, (tubeTop + tubeBottom) / 2f), new Vector2(tubeWidth, tubeTop - tubeBottom));
+        foreach (string unused in new[] { "Value Text", "Type Text" })
+        {
+            var t = slider.transform.Find(unused);
+            if (t != null)
+                Object.DestroyImmediate(t.gameObject);
+        }
+
+        // The fill and handle run up the tube (the slider sets their position along it, not across).
+        var fill = slider.fillRect;
+        fill.anchorMin = new Vector2(0f, 0f);
+        fill.anchorMax = new Vector2(1f, 0f);
+        fill.sizeDelta = Vector2.zero;
+        fill.GetComponent<Image>().color = red;
+        var handle = slider.handleRect;
+        handle.anchorMin = new Vector2(0f, 0f);
+        handle.anchorMax = new Vector2(1f, 0f);
+        handle.sizeDelta = new Vector2(26f, 26f);
+        slider.SetValueWithoutNotify(0f);
+
+        // The bulb: a red disc over the tube's foot, in the handle's round shape.
+        var bulbObject = new GameObject("Bulb", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+        bulbObject.layer = group.gameObject.layer;
+        bulbObject.transform.SetParent(group, false);
+        var bulb = bulbObject.GetComponent<Image>();
+        bulb.sprite = handle.GetComponent<Image>().sprite;
+        bulb.type = Image.Type.Simple;
+        bulb.color = red;
+        bulb.raycastTarget = false;
+        Place(bulbObject.transform, new Vector2(x, tubeBottom - 18f), new Vector2(72f, 72f));
+
+        // The scale, 0 to 10, beside the tube.
+        var ticks = group.Find("Ticks");
+        Place(ticks, Vector2.zero, Vector2.zero);
+        var tickTemplate = ticks.GetChild(0).gameObject;
+        for (int i = ticks.childCount - 1; i >= 1; i--)
+            Object.DestroyImmediate(ticks.GetChild(i).gameObject);
+        for (int i = 0; i <= 10; i++)
+        {
+            var tick = i == 0 ? tickTemplate : Object.Instantiate(tickTemplate, ticks, false);
+            tick.name = $"Tick {i}";
+            var text = tick.GetComponent<TMPro.TMP_Text>();
+            text.text = i == 10 ? "10 <size=70%>20 °C</size>" : i.ToString();
+            text.richText = true;
+            text.alignment = TMPro.TextAlignmentOptions.Left;
+            text.textWrappingMode = TMPro.TextWrappingModes.NoWrap;
+            var rect = Place(tick.transform, new Vector2(x + 30f + 50f, tubeBottom + i / 10f * (tubeTop - tubeBottom)), new Vector2(100f, 30f));
+            rect.pivot = new Vector2(0.5f, 0.5f);
+        }
+
+        // The reading, under the bulb.
+        var readingObject = Object.Instantiate(title.gameObject, group, false);
+        readingObject.name = "Temperature Reading";
+        reading = readingObject.GetComponent<TMPro.TMP_Text>();
+        reading.richText = true;
+        reading.text = "<b>0.0</b>\n<size=75%>0 K\n-273 °C</size>";
+        reading.alignment = TMPro.TextAlignmentOptions.Top;
+        reading.enableAutoSizing = false;
+        Place(readingObject.transform, new Vector2(x + 20f, -350f), new Vector2(190f, 100f));
+        return group;
     }
 }

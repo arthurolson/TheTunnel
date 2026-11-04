@@ -9,7 +9,9 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// the tunnel, beside the list like a new molecule (see <see cref="TunnelContainer"/>). The Collider check box shows
 /// and switches whether the container placed or held last is a collider (red) or not (green); the Viscosity slider
 /// (0 to 1 in steps of 0.1) shows and sets how thick the medium inside that container is
-/// (see <see cref="TunnelContainer.viscosity"/>). Works locally when not connected.
+/// (see <see cref="TunnelContainer.viscosity"/>); Random motion / Ballistic motion and the thermometer (0 to 10,
+/// continuous, 10 being room temperature) show and set the heat inside it (see <see cref="TunnelContainer.temperature"/>).
+/// Works locally when not connected.
 /// </summary>
 public class TunnelContainerMenu : NetworkBehaviour
 {
@@ -44,6 +46,18 @@ public class TunnelContainerMenu : NetworkBehaviour
     TMP_Text m_ViscosityText;
 
     [SerializeField]
+    Button m_RandomRow;
+
+    [SerializeField]
+    Button m_BallisticRow;
+
+    [SerializeField]
+    Slider m_TemperatureSlider;
+
+    [SerializeField]
+    TMP_Text m_TemperatureText;
+
+    [SerializeField]
     float m_GapFromList = 0.05f;
 
     [SerializeField]
@@ -54,6 +68,8 @@ public class TunnelContainerMenu : NetworkBehaviour
     // The container and value the slider shows, so it follows a change made by another player but not its own.
     TunnelContainer m_ViscosityFor;
     float m_ViscosityShown = -1f;
+    TunnelContainer m_TemperatureFor;
+    float m_TemperatureShown = -1f;
 
     void Awake()
     {
@@ -75,6 +91,18 @@ public class TunnelContainerMenu : NetworkBehaviour
             m_ViscositySlider.wholeNumbers = true;
             m_ViscositySlider.SetValueWithoutNotify(10f);
             m_ViscositySlider.onValueChanged.AddListener(OnViscosityMoved);
+        }
+        if (m_RandomRow != null)
+            m_RandomRow.onClick.AddListener(() => TunnelContainer.current?.SetMotion(TunnelContainer.Motion.Random));
+        if (m_BallisticRow != null)
+            m_BallisticRow.onClick.AddListener(() => TunnelContainer.current?.SetMotion(TunnelContainer.Motion.Ballistic));
+        if (m_TemperatureSlider != null)
+        {
+            m_TemperatureSlider.minValue = 0f;
+            m_TemperatureSlider.maxValue = TunnelContainer.k_MaxTemperature;
+            m_TemperatureSlider.wholeNumbers = false;
+            m_TemperatureSlider.SetValueWithoutNotify(0f);
+            m_TemperatureSlider.onValueChanged.AddListener(OnTemperatureMoved);
         }
         ShowChecks();
     }
@@ -101,6 +129,53 @@ public class TunnelContainerMenu : NetworkBehaviour
         if (label.text != text)
             label.text = text;
         ShowViscosity(container);
+        ShowHeat(container);
+    }
+
+    void ShowHeat(TunnelContainer container)
+    {
+        var motion = container != null ? container.motion : TunnelContainer.Motion.Random;
+        SetRow(m_RandomRow, (motion == TunnelContainer.Motion.Random ? "■" : "□") + "  Random motion  <color=#AAA>Brownian</color>", container != null);
+        SetRow(m_BallisticRow, (motion == TunnelContainer.Motion.Ballistic ? "■" : "□") + "  Ballistic motion  <color=#AAA>like a gas</color>", container != null);
+
+        if (m_TemperatureSlider == null)
+            return;
+        m_TemperatureSlider.interactable = container != null;
+        float value = container != null ? container.temperature : 0f;
+        if (container != m_TemperatureFor || !Mathf.Approximately(value, m_TemperatureShown))
+        {
+            m_TemperatureFor = container;
+            m_TemperatureShown = value;
+            m_TemperatureSlider.SetValueWithoutNotify(value);
+        }
+
+        if (m_TemperatureText == null)
+            return;
+        float shown = m_TemperatureSlider.value;
+        float kelvin = TunnelContainer.Kelvin(shown);
+        string text = $"<b>{shown:0.0}</b>\n<size=75%>{kelvin:0} K\n{kelvin - 273.15f:0} °C</size>";
+        if (m_TemperatureText.text != text)
+            m_TemperatureText.text = text;
+    }
+
+    static void SetRow(Button row, string text, bool interactable)
+    {
+        if (row == null)
+            return;
+        row.interactable = interactable;
+        var label = row.GetComponentInChildren<TMP_Text>(true);
+        if (label.text != text)
+            label.text = text;
+    }
+
+    void OnTemperatureMoved(float value)
+    {
+        var container = TunnelContainer.current;
+        if (container == null)
+            return;
+        m_TemperatureFor = container;
+        m_TemperatureShown = Mathf.Round(value * 20f) / 20f;
+        container.SetTemperature(value);
     }
 
     void ShowViscosity(TunnelContainer container)
