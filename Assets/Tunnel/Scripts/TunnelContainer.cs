@@ -117,7 +117,7 @@ public class TunnelContainer : NetworkBehaviour
     void OnGrabbed(UnityEngine.XR.Interaction.Toolkit.SelectEnterEventArgs args)
     {
         if (TunnelMenu.deleteMode)
-            TunnelMenu.Delete(gameObject);
+            TunnelMenu.DeleteGrabbed(this, m_Grab);
         else
             current = this;
     }

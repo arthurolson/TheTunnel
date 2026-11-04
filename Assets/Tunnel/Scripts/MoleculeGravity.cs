@@ -108,7 +108,7 @@ public class MoleculeGravity : MonoBehaviour
     {
         if (TunnelMenu.deleteMode)
         {
-            TunnelMenu.Delete(gameObject);
+            TunnelMenu.DeleteGrabbed(this, m_Grab);
             return;
         }
 

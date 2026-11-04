@@ -1,7 +1,10 @@
+using System.Collections;
+using System.Collections.Generic;
 using TMPro;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
 using UnityEngine.XR.Templates.MRTTabletopAssets;
 using XRMultiplayer;
 
@@ -137,6 +140,45 @@ public class TunnelMenu : NetworkBehaviour
             m_DeleteLabel.text = text;
     }
 
+    static readonly HashSet<GameObject> s_Deleting = new();
+
+    /// <summary>
+    /// Deletes a molecule or container its player has just grabbed with Delete on. Called from the grab event, but
+    /// deletes it only on the next frame: the interaction toolkit finishes the grab after that event (it gives the
+    /// hand focus on what it grabbed), and an object deleted in the middle of it leaves the hand focused on
+    /// something that's gone, which breaks grabbing for the rest of the session. Next frame the hand lets go of it
+    /// properly, and then it's deleted.
+    /// </summary>
+    public static void DeleteGrabbed(MonoBehaviour owner, XRBaseInteractable grab)
+    {
+        if (owner == null || !s_Deleting.Add(owner.gameObject))
+            return;
+        Debug.Log($"[TS Menu] {owner.name} grabbed with Delete on");
+        owner.StartCoroutine(DeleteAfterGrab(owner.gameObject, grab));
+    }
+
+    static IEnumerator DeleteAfterGrab(GameObject target, XRBaseInteractable grab)
+    {
+        yield return null;
+        s_Deleting.Remove(target);
+        if (target == null)
+            yield break;
+
+        if (grab != null)
+        {
+            var manager = grab.interactionManager;
+            if (manager != null)
+            {
+                manager.CancelInteractableSelection((IXRSelectInteractable)grab);
+                manager.CancelInteractableFocus((IXRFocusInteractable)grab);
+                manager.CancelInteractableHover((IXRHoverInteractable)grab);
+            }
+            grab.enabled = false; // nothing grabs it again before it's gone
+        }
+
+        Delete(target);
+    }
+
     /// <summary>
     /// Deletes a molecule or container for everyone: the host removes it from the session (asked through any
     /// tunnel segment's menu); when not connected it is simply destroyed.
@@ -149,22 +191,37 @@ public class TunnelMenu : NetworkBehaviour
         PlayerHudNotification.Instance?.ShowText($"Deleted {target.name.Replace("(Clone)", "").Replace("_Networked", "").Replace("Toy_", "").Replace('_', ' ').Trim()}", 2f);
         if (target.TryGetComponent(out NetworkObject networkObject) && networkObject.IsSpawned)
         {
-            var menu = FindAnyObjectByType<TunnelMenu>();
-            if (menu != null && menu.IsSpawned)
+            if (networkObject.NetworkManager != null && networkObject.NetworkManager.IsServer)
             {
-                target.SetActive(false); // gone here at once; the host removes it for everyone
-                menu.DeleteRpc(networkObject);
+                networkObject.Despawn(true);
                 return;
             }
+
+            // A player who isn't the host asks the host, through any segment's menu that is in the session.
+            TunnelMenu menu = null;
+            foreach (var candidate in FindObjectsByType<TunnelMenu>(FindObjectsSortMode.None))
+                if (candidate.IsSpawned)
+                {
+                    menu = candidate;
+                    break;
+                }
+            target.SetActive(false); // gone here at once; the host removes it for everyone
+            if (menu != null)
+                menu.DeleteRpc(networkObject);
+            else
+                Debug.LogWarning($"[TS Menu] no tunnel segment menu in the session to ask the host to delete {target.name}; hidden here only");
+            return;
         }
 
         Destroy(target);
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    void DeleteRpc(NetworkObjectReference reference)
+    void DeleteRpc(NetworkObjectReference reference, RpcParams rpcParams = default)
     {
-        if (reference.TryGet(out var networkObject) && networkObject.IsSpawned)
+        bool found = reference.TryGet(out var networkObject) && networkObject.IsSpawned;
+        Debug.Log($"[TS Menu] player {rpcParams.Receive.SenderClientId} asked to delete {(found ? networkObject.name : "an object that's already gone")}");
+        if (found)
             networkObject.Despawn(true);
     }
 
