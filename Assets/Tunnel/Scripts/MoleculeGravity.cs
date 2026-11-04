@@ -7,7 +7,8 @@ using XRMultiplayer;
 /// A molecule's physics. It weighs what its volume would at the density of water: the volume enclosed by its
 /// surface (worked out in the Editor, see Tunnel > Molecules > Update Molecule Library) at its current size, so a
 /// larger molecule, or one made larger, is heavier. When something pushes it (another molecule, a container, a held
-/// molecule) it moves off in that direction and bounces, slowing down over a second or two. With the host's palm
+/// molecule) it moves off in that direction and bounces, slowing down over a second or two; inside a Container it
+/// slows by that container's viscosity instead (see <see cref="TunnelContainer.viscosity"/>). With the host's palm
 /// Gravity button on (which switches <see cref="Physics.gravity"/> for everyone) it falls like the other toys
 /// (scaled like their small-scale physics). A molecule just placed from the TS Menu stays frozen on the wall until
 /// someone first grabs it or something pushes it, connected or not (in a session the network interactable's spawn
@@ -144,11 +145,18 @@ public class MoleculeGravity : MonoBehaviour
         if (gravityOn != m_GravityApplied)
         {
             m_GravityApplied = gravityOn;
-            m_Rigidbody.linearDamping = gravityOn ? m_FallingDrag : m_FloatingDrag;
-            m_Rigidbody.angularDamping = gravityOn ? m_FallingAngularDrag : m_FloatingAngularDrag;
             if (gravityOn)
                 m_Rigidbody.WakeUp();
         }
+
+        // Inside a container its viscosity scales the drag (1 outside them all).
+        float viscosity = TunnelContainer.ViscosityAt(m_Rigidbody.worldCenterOfMass);
+        float drag = (gravityOn ? m_FallingDrag : m_FloatingDrag) * viscosity;
+        float angularDrag = (gravityOn ? m_FallingAngularDrag : m_FloatingAngularDrag) * viscosity;
+        if (m_Rigidbody.linearDamping != drag)
+            m_Rigidbody.linearDamping = drag;
+        if (m_Rigidbody.angularDamping != angularDrag)
+            m_Rigidbody.angularDamping = angularDrag;
 
         if (gravityOn && !m_Rigidbody.isKinematic)
             m_Rigidbody.AddForce(Physics.gravity * m_GravityScale, ForceMode.Acceleration);

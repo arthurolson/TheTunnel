@@ -155,17 +155,16 @@ static class ContainerBuilder
             var moleculeList = control.Find("Molecule List");
             var list = Object.Instantiate(moleculeList.gameObject, control, false);
             list.name = "Container List";
-            Object.DestroyImmediate(list.transform.Find("Magnification").gameObject);
             Object.DestroyImmediate(list.transform.Find("Scroll View").gameObject);
             var panelRect = (RectTransform)list.transform;
-            panelRect.sizeDelta = new Vector2(540f, 560f);
-            panelRect.anchoredPosition = ((RectTransform)moleculeList).anchoredPosition + new Vector2(0f, 20f);
+            panelRect.sizeDelta = new Vector2(540f, 680f);
+            panelRect.anchoredPosition = ((RectTransform)moleculeList).anchoredPosition + new Vector2(0f, -40f);
 
             var title = (RectTransform)list.transform.Find("Title");
-            title.anchoredPosition = new Vector2(title.anchoredPosition.x, 240f);
+            title.anchoredPosition = new Vector2(title.anchoredPosition.x, 300f);
             title.GetComponent<TMPro.TMP_Text>().text = "Containers";
             var status = (RectTransform)list.transform.Find("Status");
-            status.anchoredPosition = new Vector2(0f, 165f);
+            status.anchoredPosition = new Vector2(0f, 225f);
             status.sizeDelta = new Vector2(500f, 100f);
 
             var template = list.transform.Find("Row Template");
@@ -185,14 +184,40 @@ static class ContainerBuilder
                 row.GetComponentInChildren<TMPro.TMP_Text>(true).text = text;
                 return b;
             }
-            var boxRow = Row("Box Row", 65f, "■  Box");
-            var sphereRow = Row("Sphere Row", 0f, "□  Sphere");
-            var place = Row("Place Button", -95f, "Place Container");
+            var boxRow = Row("Box Row", 125f, "■  Box");
+            var sphereRow = Row("Sphere Row", 60f, "□  Sphere");
+            var place = Row("Place Button", -35f, "Place Container");
             var placeLabel = place.GetComponentInChildren<TMPro.TMP_Text>(true);
             placeLabel.alignment = TMPro.TextAlignmentOptions.Center;
             placeLabel.fontStyle = TMPro.FontStyles.Bold;
-            var colliderRow = Row("Collider Row", -195f, "□  Collider");
+            var colliderRow = Row("Collider Row", -135f, "□  Collider");
             colliderRow.GetComponentInChildren<TMPro.TMP_Text>(true).richText = true;
+
+            // Viscosity: the molecule list's Magnification slider, 0 to 1 in tenths.
+            var viscosity = list.transform.Find("Magnification");
+            viscosity.name = "Viscosity";
+            ((RectTransform)viscosity).anchoredPosition = new Vector2(0f, -255f);
+            var viscositySlider = viscosity.GetComponentInChildren<Slider>(true);
+            viscositySlider.name = "Viscosity Slider";
+            viscositySlider.onValueChanged = new Slider.SliderEvent();
+            viscositySlider.minValue = 0f;
+            viscositySlider.maxValue = 10f;
+            viscositySlider.wholeNumbers = true;
+            viscositySlider.SetValueWithoutNotify(10f);
+            var viscosityText = viscosity.Find("Magnification Text").GetComponent<TMPro.TMP_Text>();
+            viscosityText.name = "Viscosity Text";
+            viscosityText.richText = true;
+            viscosityText.text = "Viscosity: 1.0";
+            var ticks = viscosity.Find("Ticks");
+            while (ticks.childCount < 11)
+                Object.Instantiate(ticks.GetChild(ticks.childCount - 1).gameObject, ticks, false);
+            for (int i = 0; i < ticks.childCount; i++)
+            {
+                var tick = (RectTransform)ticks.GetChild(i);
+                tick.name = $"Tick {i / 10f:0.0}";
+                tick.anchorMin = tick.anchorMax = new Vector2(i / 10f, 0.5f);
+                tick.GetComponent<TMPro.TMP_Text>().text = i == 0 ? "0" : i == 10 ? "1" : $".{i}";
+            }
             Object.DestroyImmediate(template.gameObject);
             list.SetActive(false);
 
@@ -208,6 +233,8 @@ static class ContainerBuilder
             so.FindProperty("m_PlaceButton").objectReferenceValue = place;
             so.FindProperty("m_ColliderRow").objectReferenceValue = colliderRow;
             so.FindProperty("m_StatusText").objectReferenceValue = status.GetComponent<TMPro.TMP_Text>();
+            so.FindProperty("m_ViscositySlider").objectReferenceValue = viscositySlider;
+            so.FindProperty("m_ViscosityText").objectReferenceValue = viscosityText;
             so.ApplyModifiedPropertiesWithoutUndo();
 
             var tunnelMenu = control.GetComponent<TunnelMenu>();

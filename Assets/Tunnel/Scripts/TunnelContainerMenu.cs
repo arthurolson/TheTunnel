@@ -7,8 +7,9 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// <summary>
 /// The TS Menu's "Containers" list: check a shape (Box or Sphere), then Place Container puts one for everyone inside
 /// the tunnel, beside the list like a new molecule (see <see cref="TunnelContainer"/>). The Collider check box shows
-/// and switches whether the container placed or held last is a collider (red) or not (green). Works locally when not
-/// connected.
+/// and switches whether the container placed or held last is a collider (red) or not (green); the Viscosity slider
+/// (0 to 1 in steps of 0.1) shows and sets how thick the medium inside that container is
+/// (see <see cref="TunnelContainer.viscosity"/>). Works locally when not connected.
 /// </summary>
 public class TunnelContainerMenu : NetworkBehaviour
 {
@@ -37,12 +38,22 @@ public class TunnelContainerMenu : NetworkBehaviour
     TMP_Text m_StatusText;
 
     [SerializeField]
+    Slider m_ViscositySlider;
+
+    [SerializeField]
+    TMP_Text m_ViscosityText;
+
+    [SerializeField]
     float m_GapFromList = 0.05f;
 
     [SerializeField]
     float m_GapFromWall = 0.1f;
 
     TunnelContainer.Shape m_Chosen = TunnelContainer.Shape.Box;
+
+    // The container and value the slider shows, so it follows a change made by another player but not its own.
+    TunnelContainer m_ViscosityFor;
+    float m_ViscosityShown = -1f;
 
     void Awake()
     {
@@ -56,6 +67,15 @@ public class TunnelContainerMenu : NetworkBehaviour
             m_PlaceButton.onClick.AddListener(Place);
         if (m_ColliderRow != null)
             m_ColliderRow.onClick.AddListener(ToggleCollider);
+        if (m_ViscositySlider != null)
+        {
+            // Steps of 0.1: the slider counts tenths.
+            m_ViscositySlider.minValue = 0f;
+            m_ViscositySlider.maxValue = 10f;
+            m_ViscositySlider.wholeNumbers = true;
+            m_ViscositySlider.SetValueWithoutNotify(10f);
+            m_ViscositySlider.onValueChanged.AddListener(OnViscosityMoved);
+        }
         ShowChecks();
     }
 
@@ -80,6 +100,40 @@ public class TunnelContainerMenu : NetworkBehaviour
         var label = m_ColliderRow.GetComponentInChildren<TMP_Text>(true);
         if (label.text != text)
             label.text = text;
+        ShowViscosity(container);
+    }
+
+    void ShowViscosity(TunnelContainer container)
+    {
+        if (m_ViscositySlider == null)
+            return;
+        m_ViscositySlider.interactable = container != null;
+        float value = container == null ? 1f : container.viscosity;
+        if (container != m_ViscosityFor || !Mathf.Approximately(value, m_ViscosityShown))
+        {
+            m_ViscosityFor = container;
+            m_ViscosityShown = value;
+            m_ViscositySlider.SetValueWithoutNotify(Mathf.Round(value * 10f));
+        }
+
+        if (m_ViscosityText == null)
+            return;
+        string text = container == null
+            ? "Viscosity  <color=#AAA>(place a container first)</color>"
+            : $"Viscosity: {m_ViscositySlider.value / 10f:0.0}  <color=#AAA>{container.shape.ToString().ToLowerInvariant()} held or placed last</color>";
+        if (m_ViscosityText.text != text)
+            m_ViscosityText.text = text;
+    }
+
+    void OnViscosityMoved(float tenths)
+    {
+        var container = TunnelContainer.current;
+        if (container == null)
+            return;
+        float value = tenths / 10f;
+        m_ViscosityFor = container;
+        m_ViscosityShown = value;
+        container.SetViscosity(value);
     }
 
     void ToggleCollider()

@@ -69,6 +69,18 @@ public class TunnelContainer : NetworkBehaviour
     readonly NetworkVariable<bool> m_IsCollider = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     bool m_LocalIsCollider;
 
+    /// <summary>
+    /// How thick the medium inside is, 0 to 1 in steps of 0.1: a molecule inside slows down by this fraction of its
+    /// usual drag (1, the default, is as outside any container; 0 is no drag at all, so it keeps drifting and only
+    /// bounces slow it). Applies whether or not the container is a collider. Set from the TS Menu's Containers list.
+    /// </summary>
+    public float viscosity => IsSpawned ? m_Viscosity.Value : m_LocalViscosity;
+
+    readonly NetworkVariable<float> m_Viscosity = new(1f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    float m_LocalViscosity = 1f;
+
+    static readonly List<TunnelContainer> s_All = new();
+
     const int k_IgnoreRaycastLayer = 2;
     const int k_CircleSegments = 64;
     const int k_GrabSegments = 16;          // per sphere line
@@ -153,6 +165,58 @@ public class TunnelContainer : NetworkBehaviour
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     void SetColliderRpc(bool on) => m_IsCollider.Value = on;
+
+    /// <summary>Sets the viscosity inside (rounded to 0.1, between 0 and 1) for everyone.</summary>
+    public void SetViscosity(float value)
+    {
+        value = Mathf.Clamp01(Mathf.Round(value * 10f) / 10f);
+        if (Mathf.Approximately(value, viscosity))
+            return;
+        Debug.Log($"[Containers] {m_Shape} viscosity {value:0.0}");
+        if (IsSpawned)
+            SetViscosityRpc(value);
+        else
+            m_LocalViscosity = value;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void SetViscosityRpc(float value) => m_Viscosity.Value = Mathf.Clamp01(value);
+
+    void OnEnable() => s_All.Add(this);
+
+    void OnDisable() => s_All.Remove(this);
+
+    /// <summary>Whether a point is inside the container's volume.</summary>
+    public bool Contains(Vector3 world)
+    {
+        // In its own coordinates the box spans ±0.5 and the sphere has radius 0.5.
+        var p = transform.InverseTransformPoint(world);
+        return m_Shape == Shape.Box
+            ? Mathf.Abs(p.x) <= 0.5f && Mathf.Abs(p.y) <= 0.5f && Mathf.Abs(p.z) <= 0.5f
+            : p.sqrMagnitude <= 0.25f;
+    }
+
+    /// <summary>
+    /// The viscosity at a point: that of the smallest container it is inside (so a container inside another has its
+    /// own), or 1 outside them all.
+    /// </summary>
+    public static float ViscosityAt(Vector3 world)
+    {
+        float result = 1f, smallest = float.MaxValue;
+        foreach (var container in s_All)
+        {
+            if (container == null || !container.Contains(world))
+                continue;
+            var s = container.transform.lossyScale;
+            float size = Mathf.Abs(s.x * s.y * s.z);
+            if (size < smallest)
+            {
+                smallest = size;
+                result = container.viscosity;
+            }
+        }
+        return result;
+    }
 
     void Apply(bool collider)
     {
