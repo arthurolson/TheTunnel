@@ -48,6 +48,7 @@ static class MoleculeLibraryBuilder
                 continue;
             molecules.Add(new TunnelPrefabRegistry.Molecule { name = name, prefab = prefab });
             AddToNetworkList(prefab);
+            RecordVolume(prefab);
         }
 
         registry.molecules = molecules;
@@ -187,6 +188,45 @@ static class MoleculeLibraryBuilder
             $"{filters.Count} subunits, outer radius {radius / k_UnitsPerAngstrom:0} Å; collider {fit.kind} " +
             $"(box {box.volume / sphereVolume:P0}, ellipsoid {ellipsoid.volume / sphereVolume:P0} of the outer sphere's volume)");
         return prefab;
+    }
+
+    /// <summary>
+    /// Stores the volume enclosed by the molecule's surface (toy units) on its <see cref="MoleculeGravity"/>, which
+    /// weighs it by that volume: each surface mesh's signed volume, so a hollow shell counts only its protein.
+    /// </summary>
+    static void RecordVolume(GameObject prefab)
+    {
+        var physics = prefab.GetComponent<MoleculeGravity>();
+        if (physics == null)
+            return;
+        double volume = 0;
+        var toRoot = prefab.transform.worldToLocalMatrix;
+        foreach (var filter in prefab.GetComponentsInChildren<MeshFilter>(true))
+        {
+            var mesh = filter.sharedMesh;
+            if (mesh == null)
+                continue;
+            var m = toRoot * filter.transform.localToWorldMatrix;
+            var v = mesh.vertices;
+            var t = mesh.triangles;
+            double signed = 0;
+            for (int i = 0; i < t.Length; i += 3)
+            {
+                var a = m.MultiplyPoint3x4(v[t[i]]);
+                var b = m.MultiplyPoint3x4(v[t[i + 1]]);
+                var c = m.MultiplyPoint3x4(v[t[i + 2]]);
+                signed += Vector3.Dot(a, Vector3.Cross(b, c)) / 6.0;
+            }
+            volume += System.Math.Abs(signed);
+        }
+
+        if (Mathf.Abs(physics.volume - (float)volume) <= 1e-4f * (float)volume)
+            return;
+        var so = new SerializedObject(physics);
+        so.FindProperty("m_Volume").floatValue = (float)volume;
+        so.ApplyModifiedPropertiesWithoutUndo();
+        EditorUtility.SetDirty(prefab);
+        Debug.Log($"[Molecules] {prefab.name}: enclosed volume {volume / System.Math.Pow(k_UnitsPerAngstrom, 3):N0} Å³");
     }
 
     static void AddToNetworkList(GameObject prefab)

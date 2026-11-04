@@ -114,7 +114,13 @@ public class TunnelContainer : NetworkBehaviour
         base.OnDestroy();
     }
 
-    void OnGrabbed(UnityEngine.XR.Interaction.Toolkit.SelectEnterEventArgs args) => current = this;
+    void OnGrabbed(UnityEngine.XR.Interaction.Toolkit.SelectEnterEventArgs args)
+    {
+        if (TunnelMenu.deleteMode)
+            TunnelMenu.Delete(gameObject);
+        else
+            current = this;
+    }
 
     public override void OnNetworkSpawn()
     {

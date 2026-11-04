@@ -126,12 +126,26 @@ static class ContainerBuilder
             var label = containersButton.Find("Button Front/Text (TMP)").GetComponent<TMPro.TMP_Text>();
             label.text = "Containers";
 
-            string[] order = { "Colors Button", "Textures Button", "Molecules Button", "Containers Button", "New Browser Button",
-                "New Viewer Button", "Add Segment Button", "Remove Segment Button", "Align Button" };
+            // Delete, under Containers: while on, whatever molecule or container its player grabs is deleted.
+            var deleteButton = menuPanel.Find("Delete Button");
+            if (deleteButton == null)
+            {
+                deleteButton = Object.Instantiate(containersButton.gameObject, menuPanel, false).transform;
+                deleteButton.name = "Delete Button";
+                deleteButton.SetSiblingIndex(containersButton.GetSiblingIndex() + 1);
+            }
+            var delete = deleteButton.GetComponent<Button>();
+            delete.onClick = new Button.ButtonClickedEvent();
+            var deleteLabel = deleteButton.Find("Button Front/Text (TMP)").GetComponent<TMPro.TMP_Text>();
+            deleteLabel.text = "Delete";
+            deleteLabel.richText = true;
+
+            string[] order = { "Colors Button", "Textures Button", "Molecules Button", "Containers Button", "Delete Button",
+                "New Browser Button", "New Viewer Button", "Add Segment Button", "Remove Segment Button", "Align Button" };
             for (int i = 0; i < order.Length; i++)
             {
                 var rect = (RectTransform)menuPanel.Find(order[i]);
-                rect.anchoredPosition = new Vector2(rect.anchoredPosition.x, 248f - 62f * i);
+                rect.anchoredPosition = new Vector2(rect.anchoredPosition.x, 252f - 56f * i);
             }
 
             // The Containers list: the molecule list's panel, title and status, with two shape rows and a Place button.
@@ -201,6 +215,8 @@ static class ContainerBuilder
             menuSo.FindProperty("m_ContainersButton").objectReferenceValue = button;
             menuSo.FindProperty("m_ContainersLabel").objectReferenceValue = label;
             menuSo.FindProperty("m_Containers").objectReferenceValue = containerMenu;
+            menuSo.FindProperty("m_DeleteButton").objectReferenceValue = delete;
+            menuSo.FindProperty("m_DeleteLabel").objectReferenceValue = deleteLabel;
             menuSo.ApplyModifiedPropertiesWithoutUndo();
 
             bool saved = PrefabUtility.SaveAsPrefabAsset(root, k_SegmentPath) != null;

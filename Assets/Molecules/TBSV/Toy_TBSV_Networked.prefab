@@ -475,7 +475,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  GlobalObjectIdHash: 1475192683
+  GlobalObjectIdHash: 2067459049
   InScenePlacedSourceGlobalObjectIdHash: 3427325679
   m_InScenePlacedDisabledByDefault: 0
   DeferredDespawnTick: 0
@@ -603,6 +603,11 @@ MonoBehaviour:
   m_GravityScale: 0.5
   m_FallingDrag: 0.2
   m_FallingAngularDrag: 1
+  m_FloatingDrag: 1
+  m_FloatingAngularDrag: 1
+  m_Volume: 0.016358312
+  m_Density: 1000
+  m_Bounciness: 0.6
 --- !u!1 &3764095547672187423
 GameObject:
   m_ObjectHideFlags: 0

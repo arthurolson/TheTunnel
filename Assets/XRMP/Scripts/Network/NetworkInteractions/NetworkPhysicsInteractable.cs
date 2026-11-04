@@ -282,6 +282,29 @@ namespace XRMultiplayer
             m_ClientNetworkTransform.enabled = true;
         }
 
+        /// <summary>
+        /// Frees an object still parked by its spawn lock (as when something pushes it), on whichever player owns it.
+        /// </summary>
+        public void ReleaseSpawnLock()
+        {
+            if (!IsSpawned || !m_LockedOnSpawn.Value)
+                return;
+            if (IsOwner)
+                ReleaseSpawnLockLocal();
+            else
+                ReleaseSpawnLockRpc();
+        }
+
+        [Rpc(SendTo.Owner, InvokePermission = RpcInvokePermission.Everyone)]
+        void ReleaseSpawnLockRpc() => ReleaseSpawnLockLocal();
+
+        void ReleaseSpawnLockLocal()
+        {
+            if (m_LockedOnSpawn.Value)
+                m_LockedOnSpawn.Value = false;
+            m_Rigidbody.constraints = RigidbodyConstraints.None;
+        }
+
         /// <inheritdoc/>
         void OnCollisionEnter(Collision collision)
         {

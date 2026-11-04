@@ -3,13 +3,16 @@ using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.XR.Templates.MRTTabletopAssets;
+using XRMultiplayer;
 
 /// <summary>
 /// The Tunnel Segment's "TS Menu" button: opens and closes the panel holding the segment's buttons
-/// (Colors, Textures, Molecules, Containers, New Browser, New Viewer, Add Segment, Remove Segment, Align to QR). The
-/// colour chooser, the texture list, the molecule list and the container list open beside it, one at a time; closing the menu also closes them. Everyone sees
+/// (Colors, Textures, Molecules, Containers, Delete, New Browser, New Viewer, Add Segment, Remove Segment, Align to
+/// QR). The colour chooser, the texture list, the molecule list and the container list open beside it, one at a time; closing the menu also closes them. Everyone sees
 /// the same menu: whoever presses a button opens or closes it for all players (the colour chooser shares itself the
 /// same way). Works locally when not connected.
+/// Delete is each player's own switch: while it is on, any molecule or container that player grabs is deleted for
+/// everyone (see <see cref="Delete"/>).
 /// </summary>
 public class TunnelMenu : NetworkBehaviour
 {
@@ -52,6 +55,12 @@ public class TunnelMenu : NetworkBehaviour
     TMP_Text m_ContainersLabel;
 
     [SerializeField]
+    Button m_DeleteButton;
+
+    [SerializeField]
+    TMP_Text m_DeleteLabel;
+
+    [SerializeField]
     TunnelSegmentAppearance m_Appearance;
 
     [SerializeField]
@@ -73,6 +82,9 @@ public class TunnelMenu : NetworkBehaviour
     SidePanel m_Shown = (SidePanel)255;
     bool m_ShownOpen;
 
+    /// <summary>While on, a molecule or container this player grabs is deleted. Off when the app starts.</summary>
+    public static bool deleteMode { get; private set; }
+
     bool isOpen => IsSpawned ? m_Open.Value : m_LocalOpen;
     SidePanel panel => IsSpawned ? m_Panel.Value : m_LocalPanel;
 
@@ -86,6 +98,8 @@ public class TunnelMenu : NetworkBehaviour
             m_MoleculesButton.onClick.AddListener(ToggleMolecules);
         if (m_ContainersButton != null)
             m_ContainersButton.onClick.AddListener(() => ToggleSidePanel(SidePanel.Containers));
+        if (m_DeleteButton != null)
+            m_DeleteButton.onClick.AddListener(ToggleDeleteMode);
         // The appearance component toggles the chooser itself; just keep the lists out of its way.
         if (m_ColorsButton != null)
             m_ColorsButton.onClick.AddListener(() => SetState(isOpen, SidePanel.None));
@@ -105,6 +119,53 @@ public class TunnelMenu : NetworkBehaviour
         base.OnNetworkDespawn();
         m_Open.OnValueChanged -= OnOpenChanged;
         m_Panel.OnValueChanged -= OnPanelChanged;
+    }
+
+    void ToggleDeleteMode()
+    {
+        deleteMode = !deleteMode;
+        PlayerHudNotification.Instance?.ShowText(deleteMode ? "Delete on: grab a molecule or container to delete it" : "Delete off", 3f);
+    }
+
+    void Update()
+    {
+        // Every segment's menu shows the one switch.
+        if (m_DeleteLabel == null)
+            return;
+        string text = deleteMode ? "<color=#F55>Delete: ON</color>" : "Delete";
+        if (m_DeleteLabel.text != text)
+            m_DeleteLabel.text = text;
+    }
+
+    /// <summary>
+    /// Deletes a molecule or container for everyone: the host removes it from the session (asked through any
+    /// tunnel segment's menu); when not connected it is simply destroyed.
+    /// </summary>
+    public static void Delete(GameObject target)
+    {
+        if (target == null)
+            return;
+        Debug.Log($"[TS Menu] deleting {target.name}");
+        PlayerHudNotification.Instance?.ShowText($"Deleted {target.name.Replace("(Clone)", "").Replace("_Networked", "").Replace("Toy_", "").Replace('_', ' ').Trim()}", 2f);
+        if (target.TryGetComponent(out NetworkObject networkObject) && networkObject.IsSpawned)
+        {
+            var menu = FindAnyObjectByType<TunnelMenu>();
+            if (menu != null && menu.IsSpawned)
+            {
+                target.SetActive(false); // gone here at once; the host removes it for everyone
+                menu.DeleteRpc(networkObject);
+                return;
+            }
+        }
+
+        Destroy(target);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void DeleteRpc(NetworkObjectReference reference)
+    {
+        if (reference.TryGet(out var networkObject) && networkObject.IsSpawned)
+            networkObject.Despawn(true);
     }
 
     void ToggleMenu()
