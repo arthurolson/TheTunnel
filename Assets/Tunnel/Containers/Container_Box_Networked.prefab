@@ -366,6 +366,10 @@ MonoBehaviour:
   m_OpenColor: {r: 0.15, g: 1, b: 0.3, a: 1}
   m_DoubleClickTime: 0.5
   m_PointingUp: 0.7
+  m_WallMaterial: {fileID: 2100000, guid: b2f5dceb01f764f2485116173abf1096, type: 2}
+  m_WindowMaterial: {fileID: 2100000, guid: 4a4a0a386f05b42a08541eb6cdb093a8, type: 2}
+  m_SnapDistance: 0.25
+  m_OcclusionMargin: 0.05
 --- !u!114 &4843898452584592835
 MonoBehaviour:
   m_ObjectHideFlags: 0

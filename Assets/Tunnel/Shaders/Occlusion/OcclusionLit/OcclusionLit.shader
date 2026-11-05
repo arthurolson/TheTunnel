@@ -63,6 +63,9 @@ Shader "Occlusion/OcclusionLit"
         _OcclusionDepthBias("Occlusion Depth Bias (m)", Float) = 0.0
         _OcclusionMaxDistance("Occlusion Max Distance (m, 0 = none)", Float) = 0.0
         _OcclusionIgnoreAbove("Never Occluded Above Height (m, 0 = off)", Float) = 0.0
+        // Tunnel addition: 6 (not equal) leaves this surface out where a Container's mixed reality box shows its
+        // inside (its window writes stencil 16), so the tunnel wall opens there; 8 (always) draws it everywhere.
+        [Enum(UnityEngine.Rendering.CompareFunction)] _WindowStencilComp("Hidden Behind Container Windows (6 = yes)", Float) = 8.0
 
         [ToggleUI] _ReceiveShadows("Receive Shadows", Float) = 1.0
         // Editmode props
@@ -112,6 +115,13 @@ Shader "Occlusion/OcclusionLit"
             ZWrite[_ZWrite]
             Cull[_Cull]
             AlphaToMask[_AlphaToMask]
+
+            Stencil
+            {
+                Ref 16
+                ReadMask 255
+                Comp [_WindowStencilComp]
+            }
 
             HLSLPROGRAM
             #pragma target 2.0
@@ -252,6 +262,13 @@ Shader "Occlusion/OcclusionLit"
             ZTest LEqual
             Cull[_Cull]
 
+            Stencil
+            {
+                Ref 16
+                ReadMask 255
+                Comp [_WindowStencilComp]
+            }
+
             HLSLPROGRAM
             #pragma target 4.5
 
@@ -335,6 +352,13 @@ Shader "Occlusion/OcclusionLit"
             ColorMask R
             Cull[_Cull]
 
+            Stencil
+            {
+                Ref 16
+                ReadMask 255
+                Comp [_WindowStencilComp]
+            }
+
             HLSLPROGRAM
             #pragma target 2.0
 
@@ -377,6 +401,13 @@ Shader "Occlusion/OcclusionLit"
             // Render State Commands
             ZWrite On
             Cull[_Cull]
+
+            Stencil
+            {
+                Ref 16
+                ReadMask 255
+                Comp [_WindowStencilComp]
+            }
 
             HLSLPROGRAM
             #pragma target 2.0

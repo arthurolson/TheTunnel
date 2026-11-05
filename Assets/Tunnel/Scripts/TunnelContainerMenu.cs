@@ -9,7 +9,9 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// the tunnel, beside the list like a new molecule (see <see cref="TunnelContainer"/>). The Collider check box shows
 /// and switches whether the container placed or held last is a collider (red) or not (green); the Viscosity slider
 /// (0 to 1 in steps of 0.1) shows and sets how thick the medium inside that container is
-/// (see <see cref="TunnelContainer.viscosity"/>); Random motion / Ballistic motion and the thermometer (0 to 10,
+/// (see <see cref="TunnelContainer.viscosity"/>); the Mixed reality box check box makes that container, if it is a
+/// box, a mixed reality box that sets itself into a tunnel wall (see <see cref="TunnelContainer.isMixedReality"/>);
+/// Random motion / Ballistic motion and the thermometer (0 to 10,
 /// continuous, 10 being room temperature) show and set the heat inside it (see <see cref="TunnelContainer.temperature"/>).
 /// Works locally when not connected.
 /// </summary>
@@ -35,6 +37,9 @@ public class TunnelContainerMenu : NetworkBehaviour
 
     [SerializeField]
     Button m_ColliderRow;
+
+    [SerializeField]
+    Button m_MixedRealityRow;
 
     [SerializeField]
     TMP_Text m_StatusText;
@@ -83,6 +88,8 @@ public class TunnelContainerMenu : NetworkBehaviour
             m_PlaceButton.onClick.AddListener(Place);
         if (m_ColliderRow != null)
             m_ColliderRow.onClick.AddListener(ToggleCollider);
+        if (m_MixedRealityRow != null)
+            m_MixedRealityRow.onClick.AddListener(ToggleMixedReality);
         if (m_ViscositySlider != null)
         {
             // Steps of 0.1: the slider counts tenths.
@@ -128,8 +135,30 @@ public class TunnelContainerMenu : NetworkBehaviour
         var label = m_ColliderRow.GetComponentInChildren<TMP_Text>(true);
         if (label.text != text)
             label.text = text;
+        ShowMixedReality(container);
         ShowViscosity(container);
         ShowHeat(container);
+    }
+
+    void ShowMixedReality(TunnelContainer container)
+    {
+        if (container == null)
+            SetRow(m_MixedRealityRow, "□  Mixed reality box  <color=#AAA>(place a box first)</color>", false);
+        else if (container.shape != TunnelContainer.Shape.Box)
+            SetRow(m_MixedRealityRow, "□  Mixed reality box  <color=#AAA>(boxes only)</color>", false);
+        else
+            SetRow(m_MixedRealityRow, container.isMixedReality
+                ? "■  Mixed reality box  <color=#AAA>let go at a wall</color>"
+                : "□  Mixed reality box  <color=#AAA>free-standing</color>", true);
+    }
+
+    void ToggleMixedReality()
+    {
+        var container = TunnelContainer.current;
+        if (container == null || container.shape != TunnelContainer.Shape.Box)
+            SetStatus("Place a box first: only boxes can be mixed reality boxes.");
+        else
+            container.SetMixedReality(!container.isMixedReality);
     }
 
     void ShowHeat(TunnelContainer container)

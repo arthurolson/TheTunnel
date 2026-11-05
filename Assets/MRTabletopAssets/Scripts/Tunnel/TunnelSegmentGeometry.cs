@@ -88,7 +88,65 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         /// <summary>Distance around the profile (walls and arch), in meters. One texture height spans this.</summary>
         public float perimeter { get; private set; } = 1f;
 
-        void OnEnable() => Build();
+        /// <summary>Every tunnel segment in the scene.</summary>
+        public static readonly List<TunnelSegmentGeometry> all = new();
+
+        /// <summary>Goes up whenever any segment's colliders are rebuilt (so whoever ignores them can do it again).</summary>
+        public static int collidersVersion { get; private set; }
+
+        // Openings in the flat walls, by whoever made them: the wall (-1 for -X, 1 for +X) and the rectangle, in the
+        // wall's own coordinates (x along the tunnel, local Z; y up from the floor).
+        readonly Dictionary<object, (int side, Rect rect)> m_Openings = new();
+
+        void OnEnable()
+        {
+            if (!all.Contains(this))
+                all.Add(this);
+            Build();
+        }
+
+        void OnDisable() => all.Remove(this);
+
+        /// <summary>
+        /// Makes (or moves) a hole in a flat wall's collider, so things pass through it there and lasers reach past it:
+        /// where a Container's mixed reality box is set into the wall. The rectangle is in the wall's own coordinates
+        /// (x along the tunnel, local Z; y up from the floor). Only the collider has the hole; the shell is drawn.
+        /// </summary>
+        public void SetWallOpening(object owner, int side, Rect rect)
+        {
+            if (m_Openings.TryGetValue(owner, out var current) && current.side == side
+                && Vector2.Distance(current.rect.min, rect.min) < 0.002f && Vector2.Distance(current.rect.max, rect.max) < 0.002f)
+                return;
+            m_Openings[owner] = (side, rect);
+            if (m_ColliderRoot != null && Application.isPlaying)
+                BuildColliders();
+        }
+
+        /// <summary>Closes the hole <see cref="SetWallOpening"/> made.</summary>
+        public void ClearWallOpening(object owner)
+        {
+            if (m_Openings.Remove(owner) && m_ColliderRoot != null && Application.isPlaying)
+                BuildColliders();
+        }
+
+        /// <summary>Whether these colliders pass through every segment's walls, arch and floor (or collide again).</summary>
+        public static void IgnoreWalls(IReadOnlyList<Collider> colliders, bool ignore)
+        {
+            foreach (var segment in all)
+            {
+                if (segment == null || segment.m_ColliderRoot == null)
+                    continue;
+                foreach (Transform box in segment.m_ColliderRoot)
+                {
+                    var wall = box.GetComponent<Collider>();
+                    if (wall == null)
+                        continue;
+                    foreach (var collider in colliders)
+                        if (collider != null)
+                            Physics.IgnoreCollision(collider, wall, ignore);
+                }
+            }
+        }
 
         void Start()
         {
@@ -221,19 +279,29 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
                 m_ColliderRoot.SetParent(transform, false);
             }
 
-            int needed = 3 + m_ArchColliderSegments;
-            while (m_ColliderRoot.childCount < needed)
-                new GameObject("Box", typeof(BoxCollider)).transform.SetParent(m_ColliderRoot, false);
-            for (int i = m_ColliderRoot.childCount - 1; i >= needed; i--)
-                Destroy(m_ColliderRoot.GetChild(i).gameObject);
-
             float t = m_ColliderThickness;
             float halfWidth = width * 0.5f;
             float l = length;
 
-            SetBox(0, "Wall -X", new Vector3(-(halfWidth + t * 0.5f), wallHeight * 0.5f, 0f), 0f, new Vector3(t, wallHeight, l));
-            SetBox(1, "Wall +X", new Vector3(halfWidth + t * 0.5f, wallHeight * 0.5f, 0f), 0f, new Vector3(t, wallHeight, l));
-            SetBox(2, "Floor", new Vector3(0f, -t * 0.5f, 0f), 0f, new Vector3(width + 2f * t, t, l));
+            // The flat walls, in pieces around any openings.
+            var walls = new List<(string name, Vector3 center, Vector3 size)>();
+            foreach (int side in new[] { -1, 1 })
+                AddWallPieces(walls, side, halfWidth, t);
+
+            int needed = 1 + m_ArchColliderSegments + walls.Count;
+            while (m_ColliderRoot.childCount < needed)
+                new GameObject("Box", typeof(BoxCollider)).transform.SetParent(m_ColliderRoot, false);
+            for (int i = m_ColliderRoot.childCount - 1; i >= needed; i--)
+            {
+                var extra = m_ColliderRoot.GetChild(i);
+                extra.SetParent(null, false); // out of the count at once
+                Destroy(extra.gameObject);
+            }
+            collidersVersion++;
+
+            SetBox(0, "Floor", new Vector3(0f, -t * 0.5f, 0f), 0f, new Vector3(width + 2f * t, t, l));
+            for (int i = 0; i < walls.Count; i++)
+                SetBox(1 + m_ArchColliderSegments + i, walls[i].name, walls[i].center, 0f, walls[i].size);
 
             float sagitta = apexHeight - wallHeight;
             float radius = (halfWidth * halfWidth + sagitta * sagitta) / (2f * sagitta);
@@ -252,7 +320,62 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
                 Vector2 c = mid + outward * (t * 0.5f);
                 float angle = Mathf.Atan2(along.y, along.x) * Mathf.Rad2Deg;
                 // A little extra length closes the gaps between neighbouring segments.
-                SetBox(3 + i, $"Arch {i}", new Vector3(c.x, c.y, 0f), angle, new Vector3(along.magnitude + t, t, l));
+                SetBox(1 + i, $"Arch {i}", new Vector3(c.x, c.y, 0f), angle, new Vector3(along.magnitude + t, t, l));
+            }
+        }
+
+        /// <summary>
+        /// One wall's collider as boxes that cover it except its openings: the wall is cut into columns at the
+        /// openings' sides, and each column into the stretches no opening covers.
+        /// </summary>
+        void AddWallPieces(List<(string name, Vector3 center, Vector3 size)> pieces, int side, float halfWidth, float t)
+        {
+            float halfLength = length * 0.5f, height = wallHeight;
+            var wallRect = Rect.MinMaxRect(-halfLength, 0f, halfLength, height);
+            var holes = new List<Rect>();
+            foreach (var (holeSide, rect) in m_Openings.Values)
+            {
+                if (holeSide != side || !rect.Overlaps(wallRect))
+                    continue;
+                holes.Add(Rect.MinMaxRect(Mathf.Max(rect.xMin, -halfLength), Mathf.Max(rect.yMin, 0f),
+                    Mathf.Min(rect.xMax, halfLength), Mathf.Min(rect.yMax, height)));
+            }
+
+            string name = side < 0 ? "Wall -X" : "Wall +X";
+            float x = side * (halfWidth + t * 0.5f);
+            if (holes.Count == 0)
+            {
+                pieces.Add((name, new Vector3(x, height * 0.5f, 0f), new Vector3(t, height, length)));
+                return;
+            }
+
+            var cuts = new List<float> { -halfLength, halfLength };
+            foreach (var hole in holes)
+            {
+                cuts.Add(hole.xMin);
+                cuts.Add(hole.xMax);
+            }
+            cuts.Sort();
+            for (int c = 0; c < cuts.Count - 1; c++)
+            {
+                float z0 = cuts[c], z1 = cuts[c + 1];
+                if (z1 - z0 < 0.001f)
+                    continue;
+                // The stretches of this column the openings cover, merged; the wall is what's left.
+                var covered = new List<Vector2>();
+                foreach (var hole in holes)
+                    if (hole.xMin < z1 - 0.0005f && hole.xMax > z0 + 0.0005f)
+                        covered.Add(new Vector2(hole.yMin, hole.yMax));
+                covered.Sort((a, b) => a.x.CompareTo(b.x));
+                float y = 0f;
+                foreach (var span in covered)
+                {
+                    if (span.x > y + 0.001f)
+                        pieces.Add(($"{name} piece", new Vector3(x, (y + span.x) * 0.5f, (z0 + z1) * 0.5f), new Vector3(t, span.x - y, z1 - z0)));
+                    y = Mathf.Max(y, span.y);
+                }
+                if (height > y + 0.001f)
+                    pieces.Add(($"{name} piece", new Vector3(x, (y + height) * 0.5f, (z0 + z1) * 0.5f), new Vector3(t, height - y, z1 - z0)));
             }
         }
 

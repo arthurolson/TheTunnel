@@ -1,8 +1,11 @@
+using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.XR.Interaction.Toolkit;
 using UnityEngine.XR.Interaction.Toolkit.Interactables;
 using UnityEngine.XR.Interaction.Toolkit.Interactors;
+using UnityEngine.XR.Templates.MRTTabletopAssets;
 using XRMultiplayer;
 
 /// <summary>
@@ -17,6 +20,14 @@ using XRMultiplayer;
 /// <see cref="ContainerStretchTransformer"/>); with both hands on its corners it scales as a whole.
 /// The walls are on the Ignore Raycast layer, which the hands and lasers don't see, so they never get in the way of
 /// reaching or pointing at what's inside; the grab lines touch nothing physically, so only the walls ever push.
+/// A box can also be a mixed reality box (the TS Menu's Containers list switches it): its walls are opaque inside and
+/// out except its front, which is open, so what is inside is seen (and reached) only through the front. Let go of it
+/// against one of the tunnel's flat walls and it sets itself into the wall: its front on the wall's inside, facing
+/// into the tunnel, the rest of the box beyond the wall. There the tunnel wall opens to show it (the front marks the
+/// screen, see Tunnel/Container Window, and the shell leaves that part out), the wall's collider gets a hole there so
+/// molecules pass in and out and lasers reach inside, and the real room's depth doesn't hide what's in the box.
+/// Molecules inside a mixed reality box never collide with the tunnel's walls, wherever it is. Grab it by its front
+/// edges and pull it out to bring it back into the tunnel.
 /// Shared over the network like the molecules: size and pose by its network transform, collider or not here.
 /// </summary>
 [DefaultExecutionOrder(-1000)] // builds its colliders before the grab interactable collects them
@@ -59,6 +70,23 @@ public class TunnelContainer : NetworkBehaviour
     [SerializeField]
     [Tooltip("How straight up the other hand must point for its double-click to count (cosine of its angle from up).")]
     float m_PointingUp = 0.7f;
+
+    [Header("Mixed reality box")]
+    [SerializeField]
+    [Tooltip("Its walls, opaque (all but the front).")]
+    Material m_WallMaterial;
+
+    [SerializeField]
+    [Tooltip("Its front: marks where the tunnel wall opens (Tunnel/Container Window).")]
+    Material m_WindowMaterial;
+
+    [SerializeField]
+    [Tooltip("Let go with its side this close to a tunnel wall (meters), or through it, and it sets itself into the wall.")]
+    float m_SnapDistance = 0.25f;
+
+    [SerializeField]
+    [Tooltip("Real surfaces this close around it (meters) don't hide what it shows either (the depth is noisy).")]
+    float m_OcclusionMargin = 0.05f;
 
     public Shape shape => m_Shape;
     public bool isCollider => IsSpawned ? m_IsCollider.Value : m_LocalIsCollider;
@@ -111,6 +139,36 @@ public class TunnelContainer : NetworkBehaviour
 
     static readonly List<TunnelContainer> s_All = new();
 
+    /// <summary>
+    /// Whether this is a mixed reality box: opaque walls, an open front, and it sets itself into a tunnel wall when
+    /// let go against one (boxes only).
+    /// </summary>
+    public bool isMixedReality => m_Shape == Shape.Box && (IsSpawned ? m_MixedReality.Value : m_LocalMixedReality);
+
+    /// <summary>Which face is the mixed reality box's open front: axis * 2, + 1 on the axis's positive side.</summary>
+    public int frontFace => IsSpawned ? m_Front.Value : m_LocalFront;
+
+    readonly NetworkVariable<bool> m_MixedReality = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<byte> m_Front = new(k_DefaultFront, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    bool m_LocalMixedReality;
+    int m_LocalFront = k_DefaultFront;
+    const byte k_DefaultFront = 5; // +Z
+
+    Transform m_MixedRealityRoot;
+    MeshFilter m_WallFilter, m_WindowFilter;
+    Mesh m_WallMesh, m_WindowMesh;
+    int m_BuiltFront = -1;
+    readonly List<TunnelSegmentGeometry> m_OpenIn = new();
+    static readonly List<TunnelSegmentGeometry> s_Opened = new();
+    Rigidbody m_Body;
+
+    // The real-depth occlusion's exemption: every mixed reality box, for the shaders (see OcclusionComputation.hlsl).
+    const int k_MaxOcclusionBoxes = 8;
+    static readonly Matrix4x4[] s_BoxMatrices = new Matrix4x4[k_MaxOcclusionBoxes];
+    static int s_BoxesSetAt = -1;
+    static readonly int s_MixedRealityBoxes = Shader.PropertyToID("_MixedRealityBoxes");
+    static readonly int s_MixedRealityBoxCount = Shader.PropertyToID("_MixedRealityBoxCount");
+
     const int k_IgnoreRaycastLayer = 2;
     const int k_CircleSegments = 64;
     const int k_GrabSegments = 16;          // per sphere line
@@ -136,24 +194,43 @@ public class TunnelContainer : NetworkBehaviour
     void Awake()
     {
         m_Grab = GetComponent<XRGrabInteractable>();
+        m_Body = GetComponent<Rigidbody>();
         m_Block = new MaterialPropertyBlock();
         BuildLines();
         BuildGrabZones();
         BuildWalls();
+        BuildMixedReality();
         FitToScale();
         Apply(isCollider);
+        ShowMixedReality();
         current = this;
         if (m_Grab != null)
+        {
             m_Grab.selectEntered.AddListener(OnGrabbed);
+            m_Grab.selectExited.AddListener(OnReleased);
+        }
     }
 
     public override void OnDestroy()
     {
         if (m_Grab != null)
+        {
             m_Grab.selectEntered.RemoveListener(OnGrabbed);
+            m_Grab.selectExited.RemoveListener(OnReleased);
+        }
         if (current == this)
             current = null;
+        if (m_WallMesh != null)
+            Destroy(m_WallMesh);
+        if (m_WindowMesh != null)
+            Destroy(m_WindowMesh);
         base.OnDestroy();
+    }
+
+    void OnReleased(SelectExitEventArgs args)
+    {
+        if (isMixedReality && m_Grab != null && !m_Grab.isSelected && !TunnelMenu.deleteMode && isActiveAndEnabled)
+            StartCoroutine(SnapAfterRelease());
     }
 
     void OnGrabbed(UnityEngine.XR.Interaction.Toolkit.SelectEnterEventArgs args)
@@ -168,14 +245,23 @@ public class TunnelContainer : NetworkBehaviour
     {
         base.OnNetworkSpawn();
         m_IsCollider.OnValueChanged += OnColliderChanged;
+        m_MixedReality.OnValueChanged += OnMixedRealityChanged;
+        m_Front.OnValueChanged += OnFrontChanged;
         Apply(m_IsCollider.Value);
+        ShowMixedReality();
     }
 
     public override void OnNetworkDespawn()
     {
         m_IsCollider.OnValueChanged -= OnColliderChanged;
+        m_MixedReality.OnValueChanged -= OnMixedRealityChanged;
+        m_Front.OnValueChanged -= OnFrontChanged;
         base.OnNetworkDespawn();
     }
+
+    void OnMixedRealityChanged(bool previous, bool current) => ShowMixedReality();
+
+    void OnFrontChanged(byte previous, byte current) => ShowMixedReality();
 
     void OnColliderChanged(bool previous, bool current) => Apply(current);
 
@@ -242,9 +328,64 @@ public class TunnelContainer : NetworkBehaviour
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     void SetMotionRpc(byte value) => m_Motion.Value = value;
 
+    /// <summary>
+    /// Makes this box a mixed reality box or a free-standing one again, for everyone. Its open front is first the
+    /// face toward this player; set into a wall, the face toward the tunnel.
+    /// </summary>
+    public void SetMixedReality(bool on)
+    {
+        if (m_Shape != Shape.Box || on == isMixedReality)
+            return;
+        int front = frontFace;
+        var head = Camera.main;
+        if (on && head != null)
+            front = NearestFace(head.transform.position - transform.position);
+        Debug.Log($"[Containers] box mixed reality {(on ? "on" : "off")}, front face {front}");
+        PlayerHudNotification.Instance?.ShowText(on ? "Mixed reality box: let go of it against a tunnel wall to set it into the wall" : "Free-standing box", 3f);
+        if (IsSpawned)
+            SetMixedRealityRpc(on, (byte)front);
+        else
+        {
+            m_LocalMixedReality = on;
+            m_LocalFront = front;
+            ShowMixedReality();
+        }
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void SetMixedRealityRpc(bool on, byte front)
+    {
+        m_Front.Value = front;
+        m_MixedReality.Value = on;
+    }
+
+    void SetFront(int front)
+    {
+        if (front == frontFace)
+            return;
+        if (IsSpawned)
+            SetFrontRpc((byte)front);
+        else
+        {
+            m_LocalFront = front;
+            ShowMixedReality();
+        }
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void SetFrontRpc(byte front) => m_Front.Value = front;
+
     void OnEnable() => s_All.Add(this);
 
-    void OnDisable() => s_All.Remove(this);
+    void OnDisable()
+    {
+        s_All.Remove(this);
+        foreach (var segment in m_OpenIn)
+            if (segment != null)
+                segment.ClearWallOpening(this);
+        m_OpenIn.Clear();
+        SetOcclusionBoxes();
+    }
 
     /// <summary>Whether a point is inside the container's volume.</summary>
     public bool Contains(Vector3 world)
@@ -306,7 +447,300 @@ public class TunnelContainer : NetworkBehaviour
         if (transform.lossyScale != m_SizedFor)
             FitToScale();
         WatchForDoubleClick();
+        UpdateWallOpening();
     }
+
+    void LateUpdate()
+    {
+        // Once a frame, after everything has moved: where the boxes are, for the occlusion shaders.
+        if (s_BoxesSetAt != Time.frameCount)
+            SetOcclusionBoxes();
+    }
+
+    #region Mixed reality box
+
+    /// <summary>A face's outward normal in the box's own coordinates (face = axis * 2, + 1 on the positive side).</summary>
+    static Vector3 FaceNormal(int face)
+    {
+        var normal = Vector3.zero;
+        normal[face / 2] = face % 2 == 0 ? -1f : 1f;
+        return normal;
+    }
+
+    /// <summary>The face whose outward normal is nearest a world direction (only faces on other axes, if one is given).</summary>
+    int NearestFace(Vector3 direction, int otherThanAxis = -1)
+    {
+        int best = k_DefaultFront;
+        float bestDot = float.MinValue;
+        for (int face = 0; face < 6; face++)
+        {
+            if (face / 2 == otherThanAxis)
+                continue;
+            float dot = Vector3.Dot(transform.TransformDirection(FaceNormal(face)), direction);
+            if (dot > bestDot)
+            {
+                bestDot = dot;
+                best = face;
+            }
+        }
+        return best;
+    }
+
+    void BuildMixedReality()
+    {
+        if (m_Shape != Shape.Box)
+            return;
+        m_MixedRealityRoot = new GameObject("Mixed Reality").transform;
+        m_MixedRealityRoot.SetParent(transform, false);
+        m_WallFilter = AddRenderer("Walls", m_WallMaterial);
+        m_WindowFilter = AddRenderer("Window", m_WindowMaterial);
+        m_WallMesh = new Mesh { name = "Mixed Reality Box Walls" };
+        m_WindowMesh = new Mesh { name = "Mixed Reality Box Window" };
+        m_WallFilter.sharedMesh = m_WallMesh;
+        m_WindowFilter.sharedMesh = m_WindowMesh;
+        m_MixedRealityRoot.gameObject.SetActive(false);
+    }
+
+    MeshFilter AddRenderer(string name, Material material)
+    {
+        var go = new GameObject(name);
+        go.transform.SetParent(m_MixedRealityRoot, false);
+        var renderer = go.AddComponent<MeshRenderer>();
+        renderer.sharedMaterial = material;
+        renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        return go.AddComponent<MeshFilter>();
+    }
+
+    void ShowMixedReality()
+    {
+        if (m_MixedRealityRoot == null)
+            return;
+        bool on = isMixedReality;
+        m_MixedRealityRoot.gameObject.SetActive(on);
+        if (on && m_BuiltFront != frontFace)
+            BuildMixedRealityMeshes(frontFace);
+    }
+
+    /// <summary>
+    /// The five walls other than the front, each facing both in and out (so the box is opaque from outside too and
+    /// lit from inside), and the front's window.
+    /// </summary>
+    void BuildMixedRealityMeshes(int front)
+    {
+        m_BuiltFront = front;
+        var vertices = new List<Vector3>();
+        var normals = new List<Vector3>();
+        var triangles = new List<int>();
+        for (int face = 0; face < 6; face++)
+        {
+            if (face == front)
+                continue;
+            AddFace(vertices, normals, triangles, face, true);
+            AddFace(vertices, normals, triangles, face, false);
+        }
+        m_WallMesh.Clear();
+        m_WallMesh.SetVertices(vertices);
+        m_WallMesh.SetNormals(normals);
+        m_WallMesh.SetTriangles(triangles, 0);
+        m_WallMesh.RecalculateBounds();
+
+        vertices.Clear();
+        normals.Clear();
+        triangles.Clear();
+        AddFace(vertices, normals, triangles, front, true);
+        m_WindowMesh.Clear();
+        m_WindowMesh.SetVertices(vertices);
+        m_WindowMesh.SetNormals(normals);
+        m_WindowMesh.SetTriangles(triangles, 0);
+        m_WindowMesh.RecalculateBounds();
+    }
+
+    static void AddFace(List<Vector3> vertices, List<Vector3> normals, List<int> triangles, int face, bool outward)
+    {
+        int axis = face / 2, u = (axis + 1) % 3, v = (axis + 2) % 3;
+        var normal = FaceNormal(face);
+        int start = vertices.Count;
+        foreach (var (a, b) in new[] { (-1, -1), (1, -1), (1, 1), (-1, 1) })
+        {
+            var corner = normal * 0.5f;
+            corner[u] = a * 0.5f;
+            corner[v] = b * 0.5f;
+            vertices.Add(corner);
+            normals.Add(outward ? normal : -normal);
+        }
+        // Wound in this order the quad faces along +axis; flipped to face the other way.
+        bool alongAxis = (face % 2 == 1) == outward;
+        triangles.AddRange(alongAxis
+            ? new[] { start, start + 1, start + 2, start, start + 2, start + 3 }
+            : new[] { start, start + 2, start + 1, start, start + 3, start + 2 });
+    }
+
+    IEnumerator SnapAfterRelease()
+    {
+        // After the interaction toolkit and the network interactable have finished letting go.
+        yield return null;
+        if (m_Grab.isSelected || !isMixedReality)
+            yield break;
+        if (IsSpawned && !IsOwner)
+        {
+            Debug.Log("[Containers] mixed reality box let go before this player owned it; not set into the wall");
+            yield break;
+        }
+        TrySnapToWall();
+    }
+
+    /// <summary>
+    /// If the box was let go near one of the tunnel's flat walls (or through it), sets it into that wall: turned
+    /// square to the wall with its face toward the tunnel as the open front, the front on the wall's inside
+    /// surface (within the wall where it fits), the rest of it beyond the wall.
+    /// </summary>
+    bool TrySnapToWall()
+    {
+        var center = transform.position;
+        var half = Abs(transform.lossyScale) * 0.5f;
+        TunnelSegmentGeometry wall = null;
+        int wallSide = 0;
+        float nearest = float.MaxValue;
+        foreach (var segment in TunnelSegmentGeometry.all)
+        {
+            if (segment == null || !segment.isActiveAndEnabled)
+                continue;
+            var p = segment.transform.InverseTransformPoint(center);
+            if (Mathf.Abs(p.z) > segment.length * 0.5f + m_SnapDistance || p.y < -m_SnapDistance || p.y > segment.wallHeight + m_SnapDistance)
+                continue;
+            foreach (int side in new[] { -1, 1 })
+            {
+                var inward = segment.transform.TransformDirection(Vector3.right * -side);
+                float reach = 0f; // half the box's depth toward the wall
+                for (int axis = 0; axis < 3; axis++)
+                {
+                    var direction = Vector3.zero;
+                    direction[axis] = 1f;
+                    reach += Mathf.Abs(Vector3.Dot(transform.TransformDirection(direction), inward)) * half[axis];
+                }
+                float inside = segment.width * 0.5f - side * p.x; // the center's distance in from the wall
+                float gap = inside - reach;                       // its nearest side's (negative: through the wall)
+                if (gap > m_SnapDistance || inside < -reach - m_SnapDistance)
+                    continue;
+                if (Mathf.Abs(gap) < nearest)
+                {
+                    nearest = Mathf.Abs(gap);
+                    wall = segment;
+                    wallSide = side;
+                }
+            }
+        }
+        if (wall == null)
+            return false;
+
+        var wallTransform = wall.transform;
+        var into = wallTransform.TransformDirection(Vector3.right * -wallSide);
+        var up = wallTransform.up;
+        int front = NearestFace(into);
+        int top = NearestFace(up, front / 2);
+        var rotation = Quaternion.LookRotation(into, up) * Quaternion.Inverse(Quaternion.LookRotation(FaceNormal(front), FaceNormal(top)));
+
+        var size = Abs(transform.lossyScale);
+        float depth = size[front / 2], height = size[top / 2], width = size[3 - front / 2 - top / 2];
+        var local = wallTransform.InverseTransformPoint(center);
+        float halfLength = wall.length * 0.5f;
+        float z = width <= wall.length ? Mathf.Clamp(local.z, -halfLength + width * 0.5f, halfLength - width * 0.5f) : local.z;
+        float y = height <= wall.wallHeight ? Mathf.Clamp(local.y, height * 0.5f, wall.wallHeight - height * 0.5f) : Mathf.Max(local.y, height * 0.5f);
+        var onWall = wallTransform.TransformPoint(new Vector3(wallSide * wall.width * 0.5f, y, z));
+        var position = onWall - into * (depth * 0.5f);
+
+        transform.SetPositionAndRotation(position, rotation);
+        if (m_Body != null)
+        {
+            m_Body.position = position;
+            m_Body.rotation = rotation;
+        }
+        SetFront(front);
+        m_BuiltFront = -1;
+        ShowMixedReality();
+        Debug.Log($"[Containers] mixed reality box set into the {(wallSide < 0 ? "-X" : "+X")} wall of {wall.name} at {position:F2}, front face {front}");
+        PlayerHudNotification.Instance?.ShowText("Mixed reality box set into the wall: grab its front edges to pull it out", 3f);
+        return true;
+    }
+
+    static Vector3 Abs(Vector3 v) => new(Mathf.Abs(v.x), Mathf.Abs(v.y), Mathf.Abs(v.z));
+
+    /// <summary>
+    /// Opens the walls the mixed reality box's front lies in: square to a flat wall, on its inside surface. Worked out
+    /// from where it is, so every player's walls open alike.
+    /// </summary>
+    void UpdateWallOpening()
+    {
+        s_Opened.Clear();
+        if (isMixedReality)
+        {
+            var normal = FaceNormal(frontFace);
+            var facing = transform.TransformDirection(normal);
+            foreach (var segment in TunnelSegmentGeometry.all)
+            {
+                if (segment == null || !segment.isActiveAndEnabled)
+                    continue;
+                var wallTransform = segment.transform;
+                foreach (int side in new[] { -1, 1 })
+                {
+                    if (Vector3.Dot(facing, wallTransform.TransformDirection(Vector3.right * -side)) < 0.999f)
+                        continue;
+                    var frontCenter = wallTransform.InverseTransformPoint(transform.TransformPoint(normal * 0.5f));
+                    if (Mathf.Abs(frontCenter.x - side * segment.width * 0.5f) > 0.01f)
+                        continue;
+                    // The front's corners, in the wall's own coordinates (along the tunnel, up).
+                    int axis = frontFace / 2, u = (axis + 1) % 3, v = (axis + 2) % 3;
+                    float zMin = float.MaxValue, zMax = float.MinValue, yMin = float.MaxValue, yMax = float.MinValue;
+                    foreach (var (a, b) in new[] { (-1, -1), (1, -1), (1, 1), (-1, 1) })
+                    {
+                        var corner = normal * 0.5f;
+                        corner[u] = a * 0.5f;
+                        corner[v] = b * 0.5f;
+                        var p = wallTransform.InverseTransformPoint(transform.TransformPoint(corner));
+                        zMin = Mathf.Min(zMin, p.z);
+                        zMax = Mathf.Max(zMax, p.z);
+                        yMin = Mathf.Min(yMin, p.y);
+                        yMax = Mathf.Max(yMax, p.y);
+                    }
+                    float halfLength = segment.length * 0.5f;
+                    if (zMax <= -halfLength || zMin >= halfLength || yMax <= 0f || yMin >= segment.wallHeight)
+                        continue;
+                    segment.SetWallOpening(this, side, Rect.MinMaxRect(zMin, yMin, zMax, yMax));
+                    s_Opened.Add(segment);
+                    break;
+                }
+            }
+        }
+
+        foreach (var segment in m_OpenIn)
+            if (segment != null && !s_Opened.Contains(segment))
+                segment.ClearWallOpening(this);
+        m_OpenIn.Clear();
+        m_OpenIn.AddRange(s_Opened);
+    }
+
+    /// <summary>Gives the occlusion shaders every mixed reality box, a little larger (see OcclusionComputation.hlsl).</summary>
+    static void SetOcclusionBoxes()
+    {
+        s_BoxesSetAt = Time.frameCount;
+        int count = 0;
+        foreach (var container in s_All)
+        {
+            if (count == k_MaxOcclusionBoxes)
+                break;
+            if (container == null || !container.isMixedReality)
+                continue;
+            var t = container.transform;
+            var size = Abs(t.lossyScale) + Vector3.one * (2f * container.m_OcclusionMargin);
+            s_BoxMatrices[count++] = Matrix4x4.TRS(t.position, t.rotation, size).inverse;
+        }
+        for (int i = count; i < k_MaxOcclusionBoxes; i++)
+            s_BoxMatrices[i] = Matrix4x4.identity;
+        Shader.SetGlobalMatrixArray(s_MixedRealityBoxes, s_BoxMatrices);
+        Shader.SetGlobalFloat(s_MixedRealityBoxCount, count);
+    }
+
+    #endregion
 
     #region Double-click
 

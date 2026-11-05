@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.XR.Interaction.Toolkit;
 using UnityEngine.XR.Interaction.Toolkit.Interactables;
+using UnityEngine.XR.Templates.MRTTabletopAssets;
 using XRMultiplayer;
 
 /// <summary>
@@ -14,6 +15,7 @@ using XRMultiplayer;
 /// (scaled like their small-scale physics). A molecule just placed from the TS Menu stays frozen on the wall until
 /// someone first grabs it or something pushes it, connected or not (in a session the network interactable's spawn
 /// lock does the same for the headset that simulates it). While the TS Menu's Delete is on, grabbing it deletes it.
+/// Inside a Container's mixed reality box it passes through the tunnel's walls (the box is set into them).
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
 public class MoleculeGravity : MonoBehaviour
@@ -82,6 +84,9 @@ public class MoleculeGravity : MonoBehaviour
     NetworkPhysicsInteractable m_NetworkPhysics;
     bool? m_GravityApplied;
     Vector3 m_MassForScale;
+    Collider[] m_Colliders;
+    bool m_PassingWalls;
+    int m_WallsVersion = -1;
 
     void Awake()
     {
@@ -100,7 +105,8 @@ public class MoleculeGravity : MonoBehaviour
                 staticFriction = 0.05f,
                 frictionCombine = PhysicsMaterialCombine.Minimum,
             };
-        foreach (var collider in GetComponentsInChildren<Collider>(true))
+        m_Colliders = GetComponentsInChildren<Collider>(true);
+        foreach (var collider in m_Colliders)
             collider.sharedMaterial = s_Material;
         UpdateMass();
 
@@ -221,6 +227,14 @@ public class MoleculeGravity : MonoBehaviour
         // Inside a container its viscosity scales the drag (1 outside them all), and its heat may move it.
         var container = TunnelContainer.At(m_Rigidbody.worldCenterOfMass);
         float viscosity = container != null ? container.viscosity : 1f;
+        // In a mixed reality box (set into a tunnel wall, or on its way) the tunnel's walls don't touch it.
+        bool passWalls = container != null && container.isMixedReality;
+        if (passWalls != m_PassingWalls || (passWalls && m_WallsVersion != TunnelSegmentGeometry.collidersVersion))
+        {
+            m_PassingWalls = passWalls;
+            m_WallsVersion = TunnelSegmentGeometry.collidersVersion;
+            TunnelSegmentGeometry.IgnoreWalls(m_Colliders, passWalls);
+        }
         float drag = (gravityOn ? m_FallingDrag : m_FloatingDrag) * viscosity;
         float angularDrag = (gravityOn ? m_FallingAngularDrag : m_FloatingAngularDrag) * viscosity;
         // Only the player whose headset moves it (its owner) heats it; the others see it through the network.

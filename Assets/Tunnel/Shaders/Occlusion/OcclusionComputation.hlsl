@@ -35,6 +35,25 @@ float _OcclusionMaxDistance;
 // people and furniture still hide its lower part. 0 = off.
 float _OcclusionIgnoreAbove;
 
+// Tunnel addition: the Containers' mixed reality boxes (TunnelContainer), as world-to-box matrices (the box spans
+// +-0.5 in its own coordinates, a little larger than the box). Real surfaces inside one never hide anything (see
+// RealDepthPrepass): what the box shows is behind the tunnel wall, where the real room may well be. Set every frame
+// by TunnelContainer.
+float4x4 _MixedRealityBoxes[8];
+float _MixedRealityBoxCount;
+
+bool InMixedRealityBox(const float3 positionWS)
+{
+    const int count = min((int)_MixedRealityBoxCount, 8);
+    for (int i = 0; i < count; i++)
+    {
+        const float3 p = mul(_MixedRealityBoxes[i], float4(positionWS, 1.0f)).xyz;
+        if (all(abs(p) <= 0.5f))
+            return true;
+    }
+    return false;
+}
+
 float SampleEnvironmentDepth(const float2 uv)
 {
     return SAMPLE_TEXTURE2D_ARRAY(_EnvironmentDepthTexture, sampler_EnvironmentDepthTexture, uv, unity_StereoEyeIndex).r;

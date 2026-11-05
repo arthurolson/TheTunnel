@@ -3,6 +3,7 @@
 // not just the occlusion shaders. Drawn by RealDepthOcclusionFeature, one full-screen triangle per eye.
 // Only real surfaces inside the tunnel's reach count: within _RealDepthMaxDistance, above the floor band and below
 // the top of the walls, so the real floor never cuts holes and the arch still covers the real ceiling.
+// Real surfaces inside a Container's mixed reality box don't count either (see InMixedRealityBox).
 // Pass 1 (debug) tints red, over everything, where a real surface counts: brighter the closer it is. Pass 2 (debug)
 // draws green at 8 m, depth tested: it shows wherever no depth nearer than that was written.
 Shader "Hidden/Tunnel/RealDepthPrepass"
@@ -97,8 +98,11 @@ Shader "Hidden/Tunnel/RealDepthPrepass"
             t *= real / max(guessed, 0.001f);
         }
 
-        const float height = (eyeWS + ray * t).y - _RealDepthFloorHeight;
-        return t > 0.05f && t <= _RealDepthMaxDistance && height >= _RealDepthMinHeight && height <= _RealDepthMaxHeight;
+        const float3 surfaceWS = eyeWS + ray * t;
+        const float height = surfaceWS.y - _RealDepthFloorHeight;
+        // Real surfaces in a Container's mixed reality box (behind the tunnel wall) don't hide what the box shows.
+        return t > 0.05f && t <= _RealDepthMaxDistance && height >= _RealDepthMinHeight && height <= _RealDepthMaxHeight
+            && !InMixedRealityBox(surfaceWS);
     }
 
     void FragDepth(RealVaryings input, out float outDepth : SV_Depth)
