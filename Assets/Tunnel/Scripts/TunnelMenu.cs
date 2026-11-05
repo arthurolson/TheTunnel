@@ -14,8 +14,8 @@ using XRMultiplayer;
 /// QR). The colour chooser, the texture list, the molecule list and the container list open beside it, one at a time; closing the menu also closes them. Everyone sees
 /// the same menu: whoever presses a button opens or closes it for all players (the colour chooser shares itself the
 /// same way). Works locally when not connected.
-/// Delete is each player's own switch: while it is on, any molecule or container that player grabs is deleted for
-/// everyone (see <see cref="Delete"/>).
+/// Delete is one switch for everyone, like the rest of the menu: while it is on, any molecule or container anyone
+/// grabs is deleted for everyone (see <see cref="Delete"/>).
 /// </summary>
 public class TunnelMenu : NetworkBehaviour
 {
@@ -85,8 +85,15 @@ public class TunnelMenu : NetworkBehaviour
     SidePanel m_Shown = (SidePanel)255;
     bool m_ShownOpen;
 
-    /// <summary>While on, a molecule or container this player grabs is deleted. Off when the app starts.</summary>
-    public static bool deleteMode { get; private set; }
+    readonly NetworkVariable<bool> m_Delete = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    // The menu whose switch everyone reads (every segment's menu holds the same value), or the local one when not
+    // connected.
+    static TunnelMenu s_Shared;
+    static bool s_LocalDelete;
+
+    /// <summary>While on, a molecule or container anyone grabs is deleted. Off when the app starts.</summary>
+    public static bool deleteMode => s_Shared != null && s_Shared.IsSpawned ? s_Shared.m_Delete.Value : s_LocalDelete;
 
     bool isOpen => IsSpawned ? m_Open.Value : m_LocalOpen;
     SidePanel panel => IsSpawned ? m_Panel.Value : m_LocalPanel;
@@ -115,6 +122,13 @@ public class TunnelMenu : NetworkBehaviour
         m_Open.OnValueChanged += OnOpenChanged;
         m_Panel.OnValueChanged += OnPanelChanged;
         Apply(m_Open.Value, m_Panel.Value);
+        if (s_Shared == null || !s_Shared.IsSpawned)
+        {
+            s_Shared = this;
+            m_Delete.OnValueChanged += OnDeleteChanged;
+        }
+        if (IsServer && s_Shared != this)
+            m_Delete.Value = s_Shared.m_Delete.Value;
     }
 
     public override void OnNetworkDespawn()
@@ -122,13 +136,45 @@ public class TunnelMenu : NetworkBehaviour
         base.OnNetworkDespawn();
         m_Open.OnValueChanged -= OnOpenChanged;
         m_Panel.OnValueChanged -= OnPanelChanged;
+        if (s_Shared == this)
+        {
+            m_Delete.OnValueChanged -= OnDeleteChanged;
+            s_Shared = null;
+            foreach (var other in FindObjectsByType<TunnelMenu>(FindObjectsSortMode.None))
+                if (other != this && other.IsSpawned)
+                {
+                    s_Shared = other;
+                    other.m_Delete.OnValueChanged += other.OnDeleteChanged;
+                    break;
+                }
+        }
     }
 
     void ToggleDeleteMode()
     {
-        deleteMode = !deleteMode;
-        PlayerHudNotification.Instance?.ShowText(deleteMode ? "Delete on: grab a molecule or container to delete it" : "Delete off", 3f);
+        bool next = !deleteMode;
+        if (s_Shared != null && s_Shared.IsSpawned)
+            s_Shared.SetDeleteRpc(next);
+        else
+        {
+            s_LocalDelete = next;
+            ShowDeleteMode(next);
+        }
     }
+
+    // On every segment's menu, so whichever one a player reads has it.
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void SetDeleteRpc(bool on)
+    {
+        foreach (var menu in FindObjectsByType<TunnelMenu>(FindObjectsSortMode.None))
+            if (menu.IsSpawned)
+                menu.m_Delete.Value = on;
+    }
+
+    void OnDeleteChanged(bool previous, bool current) => ShowDeleteMode(current);
+
+    static void ShowDeleteMode(bool on) =>
+        PlayerHudNotification.Instance?.ShowText(on ? "Delete on for everyone: grab a molecule or container to delete it" : "Delete off", 3f);
 
     void Update()
     {

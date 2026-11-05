@@ -14,6 +14,8 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// and Unsnap from wall pulls it back out into the tunnel (see <see cref="TunnelContainer.Unsnap"/>);
 /// Random motion / Ballistic motion and the thermometer (0 to 10,
 /// continuous, 10 being room temperature) show and set the heat inside it (see <see cref="TunnelContainer.temperature"/>).
+/// In a session everyone sees the same menu: the shape checked, the container it shows (the one placed or held last
+/// by anyone) and its messages.
 /// Works locally when not connected.
 /// </summary>
 public class TunnelContainerMenu : NetworkBehaviour
@@ -72,7 +74,10 @@ public class TunnelContainerMenu : NetworkBehaviour
     [SerializeField]
     float m_GapFromWall = 0.1f;
 
-    TunnelContainer.Shape m_Chosen = TunnelContainer.Shape.Box;
+    readonly NetworkVariable<TunnelContainer.Shape> m_SharedChosen = new(TunnelContainer.Shape.Box, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    TunnelContainer.Shape m_LocalChosen = TunnelContainer.Shape.Box;
+
+    TunnelContainer.Shape m_Chosen => IsSpawned ? m_SharedChosen.Value : m_LocalChosen;
 
     // The container and value the slider shows, so it follows a change made by another player but not its own.
     TunnelContainer m_ViscosityFor;
@@ -119,6 +124,21 @@ public class TunnelContainerMenu : NetworkBehaviour
         }
         ShowChecks();
     }
+
+    public override void OnNetworkSpawn()
+    {
+        base.OnNetworkSpawn();
+        m_SharedChosen.OnValueChanged += OnChosenChanged;
+        ShowChecks();
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        m_SharedChosen.OnValueChanged -= OnChosenChanged;
+        base.OnNetworkDespawn();
+    }
+
+    void OnChosenChanged(TunnelContainer.Shape previous, TunnelContainer.Shape current) => ShowChecks();
 
     public void ShowList(bool show)
     {
@@ -167,7 +187,7 @@ public class TunnelContainerMenu : NetworkBehaviour
     {
         var container = TunnelContainer.current;
         if (container == null || !container.isSetInWall)
-            SetStatus("Unsnap frees a mixed reality box set into a wall.");
+            ShareStatus("Unsnap frees a mixed reality box set into a wall.");
         else
             container.Unsnap();
     }
@@ -176,7 +196,7 @@ public class TunnelContainerMenu : NetworkBehaviour
     {
         var container = TunnelContainer.current;
         if (container == null || container.shape != TunnelContainer.Shape.Box)
-            SetStatus("Place a box first: only boxes can be mixed reality boxes.");
+            ShareStatus("Place a box first: only boxes can be mixed reality boxes.");
         else
             container.SetMixedReality(!container.isMixedReality);
     }
@@ -264,16 +284,24 @@ public class TunnelContainerMenu : NetworkBehaviour
     {
         var container = TunnelContainer.current;
         if (container == null)
-            SetStatus("Place a container first.");
+            ShareStatus("Place a container first.");
         else
             container.ToggleCollider();
     }
 
     void Check(TunnelContainer.Shape shape)
     {
-        m_Chosen = shape;
-        ShowChecks();
+        if (IsSpawned)
+            CheckRpc(shape);
+        else
+        {
+            m_LocalChosen = shape;
+            ShowChecks();
+        }
     }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void CheckRpc(TunnelContainer.Shape shape) => m_SharedChosen.Value = shape;
 
     // ■ for the checked shape, □ for the other.
     void ShowChecks()
@@ -286,7 +314,7 @@ public class TunnelContainerMenu : NetworkBehaviour
 
     void Place()
     {
-        SetStatus($"Placing a {m_Chosen.ToString().ToLowerInvariant()}...");
+        ShareStatus($"Placing a {m_Chosen.ToString().ToLowerInvariant()}...");
         if (IsSpawned)
             SpawnContainerRpc(m_Chosen);
         else
@@ -317,6 +345,18 @@ public class TunnelContainerMenu : NetworkBehaviour
         if (IsSpawned && container.TryGetComponent(out NetworkObject networkObject))
             networkObject.Spawn(true);
     }
+
+    /// <summary>A message on everyone's copy of the menu.</summary>
+    void ShareStatus(string text)
+    {
+        if (IsSpawned)
+            StatusRpc(text);
+        else
+            SetStatus(text);
+    }
+
+    [Rpc(SendTo.Everyone, InvokePermission = RpcInvokePermission.Everyone)]
+    void StatusRpc(string text) => SetStatus(text);
 
     void SetStatus(string text)
     {

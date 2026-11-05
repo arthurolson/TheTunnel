@@ -11,8 +11,8 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// a little out from the wall the menu is on. It stays there until someone grabs it.
 /// The Magnification slider (1 to 10) under the list sets how large new molecules are: every molecule keeps its true
 /// size relative to the others (one ångström-to-meter scale for all), times the magnification, so two molecules placed
-/// at the same magnification are in proportion. Each player's slider applies to the molecules they place.
-/// Works locally when not connected.
+/// at the same magnification are in proportion. In a session everyone shares the one slider and sees the same
+/// messages. Works locally when not connected.
 /// </summary>
 public class TunnelMoleculeMenu : NetworkBehaviour
 {
@@ -60,9 +60,13 @@ public class TunnelMoleculeMenu : NetworkBehaviour
 
     public bool isListOpen => m_ListPanel != null && m_ListPanel.activeSelf;
 
-    int magnification => m_MagnificationSlider != null
-        ? Mathf.Clamp(Mathf.RoundToInt(m_MagnificationSlider.value), k_MinMagnification, k_MaxMagnification)
-        : k_MinMagnification;
+    readonly NetworkVariable<byte> m_SharedMagnification = new(k_MinMagnification, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    int magnification => IsSpawned
+        ? Mathf.Clamp(m_SharedMagnification.Value, k_MinMagnification, k_MaxMagnification)
+        : m_MagnificationSlider != null
+            ? Mathf.Clamp(Mathf.RoundToInt(m_MagnificationSlider.value), k_MinMagnification, k_MaxMagnification)
+            : k_MinMagnification;
 
     void Awake()
     {
@@ -77,9 +81,40 @@ public class TunnelMoleculeMenu : NetworkBehaviour
             m_MagnificationSlider.maxValue = k_MaxMagnification;
             m_MagnificationSlider.wholeNumbers = true;
             m_MagnificationSlider.SetValueWithoutNotify(k_MinMagnification);
-            m_MagnificationSlider.onValueChanged.AddListener(_ => ShowMagnification());
+            m_MagnificationSlider.onValueChanged.AddListener(OnMagnificationMoved);
         }
 
+        ShowMagnification();
+    }
+
+    public override void OnNetworkSpawn()
+    {
+        base.OnNetworkSpawn();
+        m_SharedMagnification.OnValueChanged += OnMagnificationChanged;
+        OnMagnificationChanged(0, m_SharedMagnification.Value);
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        m_SharedMagnification.OnValueChanged -= OnMagnificationChanged;
+        base.OnNetworkDespawn();
+    }
+
+    void OnMagnificationMoved(float value)
+    {
+        if (IsSpawned)
+            SetMagnificationRpc((byte)Mathf.Clamp(Mathf.RoundToInt(value), k_MinMagnification, k_MaxMagnification));
+        ShowMagnification();
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void SetMagnificationRpc(byte value) => m_SharedMagnification.Value = (byte)Mathf.Clamp(value, k_MinMagnification, k_MaxMagnification);
+
+    // Another player moved the slider (or this one's move came back from the host).
+    void OnMagnificationChanged(byte previous, byte current)
+    {
+        if (m_MagnificationSlider != null && Mathf.RoundToInt(m_MagnificationSlider.value) != current)
+            m_MagnificationSlider.SetValueWithoutNotify(current);
         ShowMagnification();
     }
 
@@ -93,7 +128,7 @@ public class TunnelMoleculeMenu : NetworkBehaviour
     void ShowMagnification()
     {
         if (m_MagnificationText != null)
-            m_MagnificationText.text = $"Magnification: ×{magnification}";
+            m_MagnificationText.text = $"Magnification: ×{(m_MagnificationSlider != null ? Mathf.RoundToInt(m_MagnificationSlider.value) : magnification)}";
     }
 
     public void ShowList(bool show)
@@ -137,7 +172,7 @@ public class TunnelMoleculeMenu : NetworkBehaviour
             return;
 
         int mag = magnification;
-        SetStatus($"Placing {molecules[index].name} at ×{mag}...");
+        ShareStatus($"Placing {molecules[index].name} at ×{mag}...");
         Debug.Log($"[Molecules] chose {molecules[index].name} at ×{mag}: " +
             (IsSpawned ? (IsServer ? "placing it for everyone" : "asking the host to place it") : "not connected, placing it here only"));
         if (IsSpawned)
@@ -260,6 +295,18 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         var renderer = molecule.GetComponentInChildren<Renderer>(true);
         return renderer != null ? renderer.bounds.extents.magnitude : 0.05f;
     }
+
+    /// <summary>A message on everyone's copy of the menu.</summary>
+    void ShareStatus(string text)
+    {
+        if (IsSpawned)
+            StatusRpc(text);
+        else
+            SetStatus(text);
+    }
+
+    [Rpc(SendTo.Everyone, InvokePermission = RpcInvokePermission.Everyone)]
+    void StatusRpc(string text) => SetStatus(text);
 
     void SetStatus(string text)
     {

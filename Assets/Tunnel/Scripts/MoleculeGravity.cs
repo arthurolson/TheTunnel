@@ -16,6 +16,7 @@ using XRMultiplayer;
 /// someone first grabs it or something pushes it, connected or not (in a session the network interactable's spawn
 /// lock does the same for the headset that simulates it). While the TS Menu's Delete is on, grabbing it deletes it.
 /// Inside a Container's mixed reality box it passes through the tunnel's walls (the box is set into them).
+/// In a session only its owner simulates it and the others follow (see <see cref="FollowOwner"/>).
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
 public class MoleculeGravity : MonoBehaviour
@@ -81,6 +82,9 @@ public class MoleculeGravity : MonoBehaviour
     public bool simulatedHere => m_NetworkPhysics == null || !m_NetworkPhysics.IsSpawned || m_NetworkPhysics.IsOwner;
 
     public Rigidbody body => m_Rigidbody;
+
+    /// <summary>Whether someone is holding it here.</summary>
+    public bool isHeld => m_Grab != null && m_Grab.isSelected;
 
     static PhysicsMaterial s_Material;
 
@@ -216,8 +220,29 @@ public class MoleculeGravity : MonoBehaviour
         return Mathf.Sqrt(-2f * Mathf.Log(u)) * Mathf.Cos(2f * Mathf.PI * v);
     }
 
+    /// <summary>
+    /// In a session only the molecule's owner (the player who last held it, or the host) simulates it; everyone
+    /// else's copy is kinematic and just follows the network, so all players see the same motion instead of each
+    /// headset's physics bouncing its own copy around. While held, the interaction toolkit has the say.
+    /// </summary>
+    void FollowOwner()
+    {
+        if (m_Grab != null && m_Grab.isSelected)
+            return;
+        bool follower = m_NetworkPhysics != null && m_NetworkPhysics.IsSpawned && !m_NetworkPhysics.IsOwner;
+        if (m_Rigidbody.isKinematic == follower)
+            return;
+        if (follower)
+        {
+            m_Rigidbody.linearVelocity = Vector3.zero;
+            m_Rigidbody.angularVelocity = Vector3.zero;
+        }
+        m_Rigidbody.isKinematic = follower;
+    }
+
     void FixedUpdate()
     {
+        FollowOwner();
         if (transform.lossyScale != m_MassForScale)
             UpdateMass();
 

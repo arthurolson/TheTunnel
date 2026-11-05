@@ -237,9 +237,39 @@ public class TunnelContainer : NetworkBehaviour
     void OnGrabbed(UnityEngine.XR.Interaction.Toolkit.SelectEnterEventArgs args)
     {
         if (TunnelMenu.deleteMode)
+        {
             TunnelMenu.DeleteGrabbed(this, m_Grab);
-        else
-            current = this;
+            return;
+        }
+        current = this;
+        if (IsSpawned)
+            GrabbedRpc();
+    }
+
+    /// <summary>
+    /// Someone took hold of it: it's the container every player's Containers menu shows, and the molecules inside go
+    /// to whoever holds it, so their headset carries them along with it and everyone sees them move together.
+    /// </summary>
+    [Rpc(SendTo.Everyone, InvokePermission = RpcInvokePermission.Everyone)]
+    void GrabbedRpc(RpcParams rpcParams = default)
+    {
+        current = this;
+        if (!IsServer)
+            return;
+        ulong holder = rpcParams.Receive.SenderClientId;
+        int moved = 0;
+        foreach (var molecule in FindObjectsByType<MoleculeGravity>(FindObjectsSortMode.None))
+        {
+            if (molecule.isHeld || At(molecule.body.worldCenterOfMass) != this
+                || !molecule.TryGetComponent(out NetworkObject networkObject) || !networkObject.IsSpawned || networkObject.OwnerClientId == holder)
+                continue;
+            if (molecule.TryGetComponent(out XRMultiplayer.NetworkPhysicsInteractable interactable) && interactable.isInteracting)
+                continue; // someone else is holding it
+            networkObject.ChangeOwnership(holder);
+            moved++;
+        }
+        if (moved > 0)
+            Debug.Log($"[Containers] player {holder} took the {m_Shape}: {moved} molecule(s) inside now move with it");
     }
 
     public override void OnNetworkSpawn()
@@ -678,35 +708,36 @@ public class TunnelContainer : NetworkBehaviour
     {
         if (!isSetInWall || m_Pulling)
             return;
-        if (IsSpawned && !IsOwner)
-            UnsnapRpc();
-        else
-            StartCoroutine(PullOut());
-    }
-
-    // Run by whoever moves the box.
-    [Rpc(SendTo.Owner, InvokePermission = RpcInvokePermission.Everyone)]
-    void UnsnapRpc()
-    {
-        if (isSetInWall && !m_Pulling)
-            StartCoroutine(PullOut());
-    }
-
-    IEnumerator PullOut()
-    {
-        m_Pulling = true;
-        var normal = FaceNormal(frontFace);
-        var outOfWall = transform.TransformDirection(normal);
+        var outOfWall = transform.TransformDirection(FaceNormal(frontFace));
         float depth = Abs(transform.lossyScale)[frontFace / 2];
         var distance = outOfWall * (depth + m_SnapDistance + 0.05f);
+        if (IsSpawned)
+            UnsnapRpc(distance);
+        else
+            StartCoroutine(PullOut(distance));
+    }
+
+    // Every player moves what their headset moves (the box, if theirs, and the molecules inside that are theirs) by
+    // the same distance, so all of it comes out together for everyone.
+    [Rpc(SendTo.Everyone, InvokePermission = RpcInvokePermission.Everyone)]
+    void UnsnapRpc(Vector3 distance)
+    {
+        if (!m_Pulling)
+            StartCoroutine(PullOut(distance));
+    }
+
+    IEnumerator PullOut(Vector3 distance)
+    {
+        m_Pulling = true;
+        bool moveBox = !IsSpawned || IsOwner;
         var start = m_Body != null ? m_Body.position : transform.position;
 
-        // The molecules inside that this headset moves (the others' owners see them pushed by the box, if a collider).
+        // The molecules inside that this headset moves.
         var carried = new List<MoleculeGravity>();
         foreach (var molecule in FindObjectsByType<MoleculeGravity>(FindObjectsSortMode.None))
-            if (molecule.simulatedHere && At(molecule.body.worldCenterOfMass) == this)
+            if (molecule.simulatedHere && !molecule.isHeld && At(molecule.body.worldCenterOfMass) == this)
                 carried.Add(molecule);
-        Debug.Log($"[Containers] mixed reality box unsnapped from the wall, carrying {carried.Count} molecule(s)");
+        Debug.Log($"[Containers] mixed reality box unsnapped from the wall{(moveBox ? "" : " (moved by its owner)")}, carrying {carried.Count} molecule(s) moved here");
         PlayerHudNotification.Instance?.ShowText("Mixed reality box out of the wall", 2f);
 
         const float duration = 0.6f;
@@ -721,9 +752,9 @@ public class TunnelContainer : NetworkBehaviour
             var target = Vector3.Lerp(Vector3.zero, distance, Mathf.SmoothStep(0f, 1f, t));
             var step = target - moved;
             moved = target;
-            if (m_Body != null)
+            if (moveBox && m_Body != null)
                 m_Body.MovePosition(start + target);
-            else
+            else if (moveBox)
                 transform.position = start + target;
             foreach (var molecule in carried)
                 if (molecule != null)
