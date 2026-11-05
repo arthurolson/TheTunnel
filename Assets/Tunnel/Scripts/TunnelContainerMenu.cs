@@ -10,7 +10,8 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// and switches whether the container placed or held last is a collider (red) or not (green); the Viscosity slider
 /// (0 to 1 in steps of 0.1) shows and sets how thick the medium inside that container is
 /// (see <see cref="TunnelContainer.viscosity"/>); the Mixed reality box check box makes that container, if it is a
-/// box, a mixed reality box that sets itself into a tunnel wall (see <see cref="TunnelContainer.isMixedReality"/>);
+/// box, a mixed reality box that sets itself into a tunnel wall (see <see cref="TunnelContainer.isMixedReality"/>),
+/// and Unsnap from wall pulls it back out into the tunnel (see <see cref="TunnelContainer.Unsnap"/>);
 /// Random motion / Ballistic motion and the thermometer (0 to 10,
 /// continuous, 10 being room temperature) show and set the heat inside it (see <see cref="TunnelContainer.temperature"/>).
 /// Works locally when not connected.
@@ -40,6 +41,9 @@ public class TunnelContainerMenu : NetworkBehaviour
 
     [SerializeField]
     Button m_MixedRealityRow;
+
+    [SerializeField]
+    Button m_UnsnapRow;
 
     [SerializeField]
     TMP_Text m_StatusText;
@@ -90,6 +94,8 @@ public class TunnelContainerMenu : NetworkBehaviour
             m_ColliderRow.onClick.AddListener(ToggleCollider);
         if (m_MixedRealityRow != null)
             m_MixedRealityRow.onClick.AddListener(ToggleMixedReality);
+        if (m_UnsnapRow != null)
+            m_UnsnapRow.onClick.AddListener(Unsnap);
         if (m_ViscositySlider != null)
         {
             // Steps of 0.1: the slider counts tenths.
@@ -150,6 +156,20 @@ public class TunnelContainerMenu : NetworkBehaviour
             SetRow(m_MixedRealityRow, container.isMixedReality
                 ? "■  Mixed reality box  <color=#AAA>let go at a wall</color>"
                 : "□  Mixed reality box  <color=#AAA>free-standing</color>", true);
+
+        bool inWall = container != null && container.isSetInWall;
+        SetRow(m_UnsnapRow, inWall
+            ? "Unsnap from wall  <color=#AAA>pull it into the tunnel</color>"
+            : "Unsnap from wall  <color=#AAA>(not set into a wall)</color>", inWall);
+    }
+
+    void Unsnap()
+    {
+        var container = TunnelContainer.current;
+        if (container == null || !container.isSetInWall)
+            SetStatus("Unsnap frees a mixed reality box set into a wall.");
+        else
+            container.Unsnap();
     }
 
     void ToggleMixedReality()

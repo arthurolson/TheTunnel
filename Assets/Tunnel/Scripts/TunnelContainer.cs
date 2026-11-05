@@ -159,6 +159,7 @@ public class TunnelContainer : NetworkBehaviour
     Mesh m_WallMesh, m_WindowMesh;
     int m_BuiltFront = -1;
     readonly List<TunnelSegmentGeometry> m_OpenIn = new();
+    bool m_Pulling;
     static readonly List<TunnelSegmentGeometry> s_Opened = new();
     Rigidbody m_Body;
 
@@ -659,11 +660,77 @@ public class TunnelContainer : NetworkBehaviour
         m_BuiltFront = -1;
         ShowMixedReality();
         Debug.Log($"[Containers] mixed reality box set into the {(wallSide < 0 ? "-X" : "+X")} wall of {wall.name} at {position:F2}, front face {front}");
-        PlayerHudNotification.Instance?.ShowText("Mixed reality box set into the wall: grab its front edges to pull it out", 3f);
+        PlayerHudNotification.Instance?.ShowText("Mixed reality box set into the wall: Unsnap from wall in the Containers menu, or grab its front edges, to pull it out", 3f);
         return true;
     }
 
     static Vector3 Abs(Vector3 v) => new(Mathf.Abs(v.x), Mathf.Abs(v.y), Mathf.Abs(v.z));
+
+    /// <summary>Whether this mixed reality box is set into a tunnel wall (its front opens one).</summary>
+    public bool isSetInWall => m_OpenIn.Count > 0;
+
+    /// <summary>
+    /// Frees a mixed reality box set into a wall, for everyone: it glides straight out into the tunnel, far enough
+    /// that letting go of it there doesn't set it back, carrying the molecules inside with it. It stays a mixed
+    /// reality box.
+    /// </summary>
+    public void Unsnap()
+    {
+        if (!isSetInWall || m_Pulling)
+            return;
+        if (IsSpawned && !IsOwner)
+            UnsnapRpc();
+        else
+            StartCoroutine(PullOut());
+    }
+
+    // Run by whoever moves the box.
+    [Rpc(SendTo.Owner, InvokePermission = RpcInvokePermission.Everyone)]
+    void UnsnapRpc()
+    {
+        if (isSetInWall && !m_Pulling)
+            StartCoroutine(PullOut());
+    }
+
+    IEnumerator PullOut()
+    {
+        m_Pulling = true;
+        var normal = FaceNormal(frontFace);
+        var outOfWall = transform.TransformDirection(normal);
+        float depth = Abs(transform.lossyScale)[frontFace / 2];
+        var distance = outOfWall * (depth + m_SnapDistance + 0.05f);
+        var start = m_Body != null ? m_Body.position : transform.position;
+
+        // The molecules inside that this headset moves (the others' owners see them pushed by the box, if a collider).
+        var carried = new List<MoleculeGravity>();
+        foreach (var molecule in FindObjectsByType<MoleculeGravity>(FindObjectsSortMode.None))
+            if (molecule.simulatedHere && At(molecule.body.worldCenterOfMass) == this)
+                carried.Add(molecule);
+        Debug.Log($"[Containers] mixed reality box unsnapped from the wall, carrying {carried.Count} molecule(s)");
+        PlayerHudNotification.Instance?.ShowText("Mixed reality box out of the wall", 2f);
+
+        const float duration = 0.6f;
+        float t = 0f;
+        var moved = Vector3.zero;
+        while (t < 1f && this != null)
+        {
+            yield return new WaitForFixedUpdate();
+            if (m_Grab != null && m_Grab.isSelected)
+                break;
+            t = Mathf.Min(1f, t + Time.fixedDeltaTime / duration);
+            var target = Vector3.Lerp(Vector3.zero, distance, Mathf.SmoothStep(0f, 1f, t));
+            var step = target - moved;
+            moved = target;
+            if (m_Body != null)
+                m_Body.MovePosition(start + target);
+            else
+                transform.position = start + target;
+            foreach (var molecule in carried)
+                if (molecule != null)
+                    molecule.body.position += step; // a parked one stays parked, just further out
+        }
+        m_Pulling = false;
+    }
 
     /// <summary>
     /// Opens the walls the mixed reality box's front lies in: square to a flat wall, on its inside surface. Worked out

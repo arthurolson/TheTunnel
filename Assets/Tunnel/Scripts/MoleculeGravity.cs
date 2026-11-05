@@ -77,6 +77,11 @@ public class MoleculeGravity : MonoBehaviour
         set => m_Volume = value;
     }
 
+    /// <summary>Whether this headset moves it (it isn't networked, or this player owns it).</summary>
+    public bool simulatedHere => m_NetworkPhysics == null || !m_NetworkPhysics.IsSpawned || m_NetworkPhysics.IsOwner;
+
+    public Rigidbody body => m_Rigidbody;
+
     static PhysicsMaterial s_Material;
 
     Rigidbody m_Rigidbody;
@@ -238,7 +243,6 @@ public class MoleculeGravity : MonoBehaviour
         float drag = (gravityOn ? m_FallingDrag : m_FloatingDrag) * viscosity;
         float angularDrag = (gravityOn ? m_FallingAngularDrag : m_FloatingAngularDrag) * viscosity;
         // Only the player whose headset moves it (its owner) heats it; the others see it through the network.
-        bool simulatedHere = m_NetworkPhysics == null || !m_NetworkPhysics.IsSpawned || m_NetworkPhysics.IsOwner;
         bool heated = container != null && container.temperature > 0f && !m_Rigidbody.isKinematic && simulatedHere;
         if (heated)
         {

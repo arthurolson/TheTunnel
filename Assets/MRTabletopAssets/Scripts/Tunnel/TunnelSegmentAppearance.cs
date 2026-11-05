@@ -87,6 +87,8 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         bool m_LocalChooserOpen;
         float m_LastLocalEditTime = float.NegativeInfinity;
 
+        static readonly int k_WindowStencilComp = Shader.PropertyToID("_WindowStencilComp");
+
         Material m_OpaqueInstance;
         Material m_TransparentInstance;
         Material m_FloorInstance;
@@ -103,6 +105,11 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
                 m_TransparentInstance = new Material(m_TransparentMaterial);
             if (m_FloorMaterial != null)
                 m_FloorInstance = new Material(m_FloorMaterial);
+            // The shell leaves a hole where a mixed reality box's window marks the screen (stencil 16, see
+            // TunnelContainer), whatever the material assets were saved with.
+            foreach (var shell in new[] { m_OpaqueInstance, m_TransparentInstance })
+                if (shell != null)
+                    shell.SetFloat(k_WindowStencilComp, (float)UnityEngine.Rendering.CompareFunction.NotEqual);
 
             foreach (var slider in new[] { m_HueSlider, m_SaturationSlider, m_ValueSlider, m_OpacitySlider })
             {

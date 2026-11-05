@@ -198,15 +198,15 @@ static class ContainerBuilder
             Object.DestroyImmediate(list.transform.Find("Scroll View").gameObject);
             // Two columns: the rows on the left, the thermometer on the right.
             var panelRect = (RectTransform)list.transform;
-            panelRect.sizeDelta = new Vector2(680f, 870f);
-            panelRect.anchoredPosition = ((RectTransform)moleculeList).anchoredPosition + new Vector2(-70f, -135f);
+            panelRect.sizeDelta = new Vector2(680f, 930f);
+            panelRect.anchoredPosition = ((RectTransform)moleculeList).anchoredPosition + new Vector2(-70f, -165f);
             const float rowsX = -80f, rowsWidth = 460f, thermometerX = 225f;
 
             var title = (RectTransform)list.transform.Find("Title");
-            title.anchoredPosition = new Vector2(title.anchoredPosition.x - 70f, 395f);
+            title.anchoredPosition = new Vector2(title.anchoredPosition.x - 70f, 425f);
             title.GetComponent<TMPro.TMP_Text>().text = "Containers";
             var status = (RectTransform)list.transform.Find("Status");
-            status.anchoredPosition = new Vector2(0f, 320f);
+            status.anchoredPosition = new Vector2(0f, 350f);
             status.sizeDelta = new Vector2(620f, 100f);
 
             var template = list.transform.Find("Row Template");
@@ -226,23 +226,24 @@ static class ContainerBuilder
                 rowLabel.richText = true;
                 return b;
             }
-            var boxRow = Row("Box Row", 220f, "■  Box");
-            var sphereRow = Row("Sphere Row", 155f, "□  Sphere");
-            var place = Row("Place Button", 65f, "Place Container");
+            var boxRow = Row("Box Row", 250f, "■  Box");
+            var sphereRow = Row("Sphere Row", 185f, "□  Sphere");
+            var place = Row("Place Button", 95f, "Place Container");
             var placeLabel = place.GetComponentInChildren<TMPro.TMP_Text>(true);
             placeLabel.alignment = TMPro.TextAlignmentOptions.Center;
             placeLabel.fontStyle = TMPro.FontStyles.Bold;
-            var colliderRow = Row("Collider Row", -25f, "□  Collider");
-            var mixedRealityRow = Row("Mixed Reality Row", -90f, "□  Mixed reality box");
-            var randomRow = Row("Random Row", -180f, "■  Random motion");
-            var ballisticRow = Row("Ballistic Row", -245f, "□  Ballistic motion");
+            var colliderRow = Row("Collider Row", 5f, "□  Collider");
+            var mixedRealityRow = Row("Mixed Reality Row", -60f, "□  Mixed reality box");
+            var unsnapRow = Row("Unsnap Row", -125f, "Unsnap from wall");
+            var randomRow = Row("Random Row", -215f, "■  Random motion");
+            var ballisticRow = Row("Ballistic Row", -280f, "□  Ballistic motion");
 
             // Viscosity: the molecule list's Magnification slider, 0 to 1 in tenths.
             var viscosity = list.transform.Find("Magnification");
             // (its copy, made first, becomes the thermometer)
             var heat = Object.Instantiate(viscosity.gameObject, list.transform, false).transform;
             viscosity.name = "Viscosity";
-            ((RectTransform)viscosity).anchoredPosition = new Vector2(rowsX, -350f);
+            ((RectTransform)viscosity).anchoredPosition = new Vector2(rowsX, -375f);
             ((RectTransform)viscosity).sizeDelta = new Vector2(rowsWidth, 60f);
             var viscositySlider = viscosity.GetComponentInChildren<Slider>(true);
             viscositySlider.name = "Viscosity Slider";
@@ -267,7 +268,7 @@ static class ContainerBuilder
             }
 
             var thermometer = BuildThermometer(heat, thermometerX, out var temperatureSlider, out var temperatureText);
-            ((RectTransform)thermometer).anchoredPosition = new Vector2(0f, 35f); // its top where it was, the panel being taller
+            ((RectTransform)thermometer).anchoredPosition = new Vector2(0f, 65f); // its top where it was, the panel being taller
             Object.DestroyImmediate(template.gameObject);
             list.SetActive(false);
 
@@ -283,6 +284,7 @@ static class ContainerBuilder
             so.FindProperty("m_PlaceButton").objectReferenceValue = place;
             so.FindProperty("m_ColliderRow").objectReferenceValue = colliderRow;
             so.FindProperty("m_MixedRealityRow").objectReferenceValue = mixedRealityRow;
+            so.FindProperty("m_UnsnapRow").objectReferenceValue = unsnapRow;
             so.FindProperty("m_StatusText").objectReferenceValue = status.GetComponent<TMPro.TMP_Text>();
             so.FindProperty("m_ViscositySlider").objectReferenceValue = viscositySlider;
             so.FindProperty("m_ViscosityText").objectReferenceValue = viscosityText;
