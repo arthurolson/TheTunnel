@@ -139,8 +139,8 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
                 foreach (Transform box in segment.m_ColliderRoot)
                 {
                     var wall = box.GetComponent<Collider>();
-                    if (wall == null)
-                        continue;
+                    if (wall == null || !box.gameObject.activeSelf)
+                        continue; // a spare (switched back on later, it's rebuilt and ignored again)
                     foreach (var collider in colliders)
                         if (collider != null)
                             Physics.IgnoreCollision(collider, wall, ignore);
@@ -291,11 +291,16 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
             int needed = 1 + m_ArchColliderSegments + walls.Count;
             while (m_ColliderRoot.childCount < needed)
                 new GameObject("Box", typeof(BoxCollider)).transform.SetParent(m_ColliderRoot, false);
-            for (int i = m_ColliderRoot.childCount - 1; i >= needed; i--)
+            // Boxes no longer needed are switched off, never destroyed: the hands' and lasers' queries may still be
+            // holding on to one this frame, and a destroyed collider there stops them grabbing anything at all.
+            for (int i = 0; i < m_ColliderRoot.childCount; i++)
             {
-                var extra = m_ColliderRoot.GetChild(i);
-                extra.SetParent(null, false); // out of the count at once
-                Destroy(extra.gameObject);
+                var box = m_ColliderRoot.GetChild(i);
+                bool used = i < needed;
+                if (box.gameObject.activeSelf != used)
+                    box.gameObject.SetActive(used);
+                if (!used)
+                    box.name = "Unused";
             }
             collidersVersion++;
 

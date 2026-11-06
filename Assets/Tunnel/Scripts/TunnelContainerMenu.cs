@@ -5,17 +5,16 @@ using UnityEngine.UI;
 using UnityEngine.XR.Templates.MRTTabletopAssets;
 
 /// <summary>
-/// The TS Menu's "Containers" list: check a shape (Box or Sphere), then Place Container puts one for everyone inside
-/// the tunnel, beside the list like a new molecule (see <see cref="TunnelContainer"/>). The Collider check box shows
-/// and switches whether the container placed or held last is a collider (red) or not (green); the Viscosity slider
-/// (0 to 1 in steps of 0.1) shows and sets how thick the medium inside that container is
-/// (see <see cref="TunnelContainer.viscosity"/>); the Mixed reality box check box makes that container, if it is a
-/// box, a mixed reality box that sets itself into a tunnel wall (see <see cref="TunnelContainer.isMixedReality"/>),
+/// The TS Menu's "Containers" list: Place Container puts a box for everyone inside the tunnel, beside the list like a
+/// new molecule (see <see cref="TunnelContainer"/>). For the container placed or held last: the Viscosity slider
+/// (0 to 1 in steps of 0.1) shows and sets how thick the medium inside it is
+/// (see <see cref="TunnelContainer.viscosity"/>); the Mixed reality box check box makes it a mixed reality box that
+/// sets itself into a tunnel wall (see <see cref="TunnelContainer.isMixedReality"/>),
 /// and Unsnap from wall pulls it back out into the tunnel (see <see cref="TunnelContainer.Unsnap"/>);
 /// Random motion / Ballistic motion and the thermometer (0 to 10,
 /// continuous, 10 being room temperature) show and set the heat inside it (see <see cref="TunnelContainer.temperature"/>).
-/// In a session everyone sees the same menu: the shape checked, the container it shows (the one placed or held last
-/// by anyone) and its messages.
+/// In a session everyone sees the same menu: the container it shows (the one placed or held last by anyone) and its
+/// messages.
 /// Works locally when not connected.
 /// </summary>
 public class TunnelContainerMenu : NetworkBehaviour
@@ -30,16 +29,7 @@ public class TunnelContainerMenu : NetworkBehaviour
     GameObject m_ListPanel;
 
     [SerializeField]
-    Button m_BoxRow;
-
-    [SerializeField]
-    Button m_SphereRow;
-
-    [SerializeField]
     Button m_PlaceButton;
-
-    [SerializeField]
-    Button m_ColliderRow;
 
     [SerializeField]
     Button m_MixedRealityRow;
@@ -74,11 +64,6 @@ public class TunnelContainerMenu : NetworkBehaviour
     [SerializeField]
     float m_GapFromWall = 0.1f;
 
-    readonly NetworkVariable<TunnelContainer.Shape> m_SharedChosen = new(TunnelContainer.Shape.Box, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    TunnelContainer.Shape m_LocalChosen = TunnelContainer.Shape.Box;
-
-    TunnelContainer.Shape m_Chosen => IsSpawned ? m_SharedChosen.Value : m_LocalChosen;
-
     // The container and value the slider shows, so it follows a change made by another player but not its own.
     TunnelContainer m_ViscosityFor;
     float m_ViscosityShown = -1f;
@@ -89,14 +74,8 @@ public class TunnelContainerMenu : NetworkBehaviour
     {
         if (m_ListPanel != null)
             m_ListPanel.SetActive(false);
-        if (m_BoxRow != null)
-            m_BoxRow.onClick.AddListener(() => Check(TunnelContainer.Shape.Box));
-        if (m_SphereRow != null)
-            m_SphereRow.onClick.AddListener(() => Check(TunnelContainer.Shape.Sphere));
         if (m_PlaceButton != null)
             m_PlaceButton.onClick.AddListener(Place);
-        if (m_ColliderRow != null)
-            m_ColliderRow.onClick.AddListener(ToggleCollider);
         if (m_MixedRealityRow != null)
             m_MixedRealityRow.onClick.AddListener(ToggleMixedReality);
         if (m_UnsnapRow != null)
@@ -122,23 +101,7 @@ public class TunnelContainerMenu : NetworkBehaviour
             m_TemperatureSlider.SetValueWithoutNotify(0f);
             m_TemperatureSlider.onValueChanged.AddListener(OnTemperatureMoved);
         }
-        ShowChecks();
     }
-
-    public override void OnNetworkSpawn()
-    {
-        base.OnNetworkSpawn();
-        m_SharedChosen.OnValueChanged += OnChosenChanged;
-        ShowChecks();
-    }
-
-    public override void OnNetworkDespawn()
-    {
-        m_SharedChosen.OnValueChanged -= OnChosenChanged;
-        base.OnNetworkDespawn();
-    }
-
-    void OnChosenChanged(TunnelContainer.Shape previous, TunnelContainer.Shape current) => ShowChecks();
 
     public void ShowList(bool show)
     {
@@ -146,21 +109,14 @@ public class TunnelContainerMenu : NetworkBehaviour
             return;
         m_ListPanel.SetActive(show);
         if (show)
-            SetStatus("Check a shape, then Place Container.\nCollider switches the container placed or held last: red holds things in, green lets them through.");
+            SetStatus("Place Container puts a box beside this list. Put molecules in by hand: its walls hold them in.\nThe settings below are for the box placed or held last.");
     }
 
     void Update()
     {
-        if (m_ColliderRow == null || m_ListPanel == null || !m_ListPanel.activeInHierarchy)
+        if (m_ListPanel == null || !m_ListPanel.activeInHierarchy)
             return;
         var container = TunnelContainer.current;
-        string text = container == null
-            ? "□  Collider  <color=#AAA>(place a container first)</color>"
-            : (container.isCollider ? "■  Collider  <color=#F66>(red)</color>" : "□  Collider  <color=#6F6>(green)</color>")
-                + $"  <color=#AAA>{container.shape.ToString().ToLowerInvariant()} held or placed last</color>";
-        var label = m_ColliderRow.GetComponentInChildren<TMP_Text>(true);
-        if (label.text != text)
-            label.text = text;
         ShowMixedReality(container);
         ShowViscosity(container);
         ShowHeat(container);
@@ -170,8 +126,6 @@ public class TunnelContainerMenu : NetworkBehaviour
     {
         if (container == null)
             SetRow(m_MixedRealityRow, "□  Mixed reality box  <color=#AAA>(place a box first)</color>", false);
-        else if (container.shape != TunnelContainer.Shape.Box)
-            SetRow(m_MixedRealityRow, "□  Mixed reality box  <color=#AAA>(boxes only)</color>", false);
         else
             SetRow(m_MixedRealityRow, container.isMixedReality
                 ? "■  Mixed reality box  <color=#AAA>let go at a wall</color>"
@@ -195,8 +149,8 @@ public class TunnelContainerMenu : NetworkBehaviour
     void ToggleMixedReality()
     {
         var container = TunnelContainer.current;
-        if (container == null || container.shape != TunnelContainer.Shape.Box)
-            ShareStatus("Place a box first: only boxes can be mixed reality boxes.");
+        if (container == null)
+            ShareStatus("Place a box first.");
         else
             container.SetMixedReality(!container.isMixedReality);
     }
@@ -263,8 +217,8 @@ public class TunnelContainerMenu : NetworkBehaviour
         if (m_ViscosityText == null)
             return;
         string text = container == null
-            ? "Viscosity  <color=#AAA>(place a container first)</color>"
-            : $"Viscosity: {m_ViscositySlider.value / 10f:0.0}  <color=#AAA>{container.shape.ToString().ToLowerInvariant()} held or placed last</color>";
+            ? "Viscosity  <color=#AAA>(place a box first)</color>"
+            : $"Viscosity: {m_ViscositySlider.value / 10f:0.0}  <color=#AAA>box held or placed last</color>";
         if (m_ViscosityText.text != text)
             m_ViscosityText.text = text;
     }
@@ -280,53 +234,21 @@ public class TunnelContainerMenu : NetworkBehaviour
         container.SetViscosity(value);
     }
 
-    void ToggleCollider()
-    {
-        var container = TunnelContainer.current;
-        if (container == null)
-            ShareStatus("Place a container first.");
-        else
-            container.ToggleCollider();
-    }
-
-    void Check(TunnelContainer.Shape shape)
-    {
-        if (IsSpawned)
-            CheckRpc(shape);
-        else
-        {
-            m_LocalChosen = shape;
-            ShowChecks();
-        }
-    }
-
-    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    void CheckRpc(TunnelContainer.Shape shape) => m_SharedChosen.Value = shape;
-
-    // ■ for the checked shape, □ for the other.
-    void ShowChecks()
-    {
-        if (m_BoxRow != null)
-            m_BoxRow.GetComponentInChildren<TMP_Text>(true).text = (m_Chosen == TunnelContainer.Shape.Box ? "■" : "□") + "  Box";
-        if (m_SphereRow != null)
-            m_SphereRow.GetComponentInChildren<TMP_Text>(true).text = (m_Chosen == TunnelContainer.Shape.Sphere ? "■" : "□") + "  Sphere";
-    }
-
     void Place()
     {
-        ShareStatus($"Placing a {m_Chosen.ToString().ToLowerInvariant()}...");
+        ShareStatus("Placing a box...");
         if (IsSpawned)
-            SpawnContainerRpc(m_Chosen);
+            SpawnContainerRpc();
         else
-            SpawnContainer(m_Chosen);
+            SpawnContainer();
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    void SpawnContainerRpc(TunnelContainer.Shape shape) => SpawnContainer(shape);
+    void SpawnContainerRpc() => SpawnContainer();
 
-    void SpawnContainer(TunnelContainer.Shape shape)
+    void SpawnContainer()
     {
-        var prefab = m_Prefabs == null ? null : shape == TunnelContainer.Shape.Box ? m_Prefabs.containerBox : m_Prefabs.containerSphere;
+        var prefab = m_Prefabs == null ? null : m_Prefabs.containerBox;
         if (prefab == null || m_Geometry == null)
             return;
 
@@ -336,11 +258,11 @@ public class TunnelContainerMenu : NetworkBehaviour
         var container = Instantiate(prefab, holder.transform);
         container.transform.rotation = m_Geometry.transform.rotation;
         var size = prefab.transform.localScale;
-        float radius = shape == TunnelContainer.Shape.Box ? size.magnitude * 0.5f : Mathf.Max(size.x, Mathf.Max(size.y, size.z)) * 0.5f;
+        float radius = size.magnitude * 0.5f;
         container.transform.position = TunnelMoleculeMenu.PlaceBesideList(m_Geometry, (RectTransform)m_ListPanel.transform, container, radius, m_GapFromList, m_GapFromWall);
         container.transform.SetParent(null, true);
         Destroy(holder);
-        Debug.Log($"[Containers] placed a {shape} at {container.transform.position:F2}");
+        Debug.Log($"[Containers] placed a box at {container.transform.position:F2}");
 
         if (IsSpawned && container.TryGetComponent(out NetworkObject networkObject))
             networkObject.Spawn(true);

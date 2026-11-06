@@ -357,17 +357,13 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::TunnelContainer
   ShowTopMostFoldoutHeaderGroup: 1
-  m_Shape: 0
-  m_LineMaterial: {fileID: 2100000, guid: ed08286eee963405887202b3d28dfeee, type: 2}
-  m_LineWidth: 0.004
+  m_EdgeMaterial: {fileID: 2100000, guid: 5514c5843c6124b6d9194b561d1f9792, type: 2}
+  m_EdgeDiameter: 0.00635
   m_GrabThickness: 0.03
   m_WallThickness: 0.04
-  m_ColliderColor: {r: 1, g: 0.15, b: 0.15, a: 1}
-  m_OpenColor: {r: 0.15, g: 1, b: 0.3, a: 1}
-  m_DoubleClickTime: 0.5
-  m_PointingUp: 0.7
   m_WallMaterial: {fileID: 2100000, guid: b2f5dceb01f764f2485116173abf1096, type: 2}
   m_WindowMaterial: {fileID: 2100000, guid: 4a4a0a386f05b42a08541eb6cdb093a8, type: 2}
+  m_GlassMaterial: {fileID: 2100000, guid: 4eead1f99a99043dabbd992d4de1a79f, type: 2}
   m_SnapDistance: 0.25
   m_OcclusionMargin: 0.05
 --- !u!114 &4843898452584592835
