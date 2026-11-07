@@ -155,6 +155,12 @@ public class TunnelContainer : NetworkBehaviour
     {
         m_Grab = GetComponent<XRGrabInteractable>();
         m_Body = GetComponent<Rigidbody>();
+        // No spawn lock: the network interactable would freeze a new box on the host (who owns every new one), and a
+        // frozen kinematic body turns and scales in the hand but doesn't move. A box is moved only by hand anyway.
+        if (TryGetComponent(out NetworkPhysicsInteractable networkPhysics))
+            networkPhysics.spawnLocked = false;
+        if (m_Body != null)
+            m_Body.constraints = RigidbodyConstraints.None;
         BuildEdges();
         BuildGrabZones();
         BuildWalls();
@@ -199,8 +205,20 @@ public class TunnelContainer : NetworkBehaviour
             return;
         }
         current = this;
+        // The network interactable freezes a new object on the player who owns it when it appears (its spawn lock,
+        // for the molecules); a container is moved only by hand anyway, so it's free as soon as anyone takes it.
+        // Left frozen, the host (who owns every new container) could turn it but not move it.
+        Unfreeze();
         if (IsSpawned)
             GrabbedRpc();
+    }
+
+    void Unfreeze()
+    {
+        if (m_Body != null && m_Body.constraints != RigidbodyConstraints.None)
+            m_Body.constraints = RigidbodyConstraints.None;
+        if (TryGetComponent(out NetworkPhysicsInteractable physics))
+            physics.ReleaseSpawnLock();
     }
 
     /// <summary>
@@ -425,7 +443,7 @@ public class TunnelContainer : NetworkBehaviour
         Debug.Log($"[Containers] held by {m_Grab.interactorsSelecting.Count} hand(s) ({how}): moved {Vector3.Distance(m_HoldLogFrom, transform.position):F3} m in 1 s; " +
             $"spawned {IsSpawned}, server {IsServer}, owner {OwnerClientId} (this player {(NetworkManager != null ? NetworkManager.LocalClientId : 0)}, owns it {IsOwner}), " +
             $"interacting {(physics != null && physics.isInteracting)}, network transform {(networkTransform != null && networkTransform.enabled)} can commit {(networkTransform != null && networkTransform.CanCommitToTransform)}, " +
-            $"kinematic {(m_Body != null && m_Body.isKinematic)}, pulling {m_Pulling}");
+            $"kinematic {(m_Body != null && m_Body.isKinematic)}, constraints {(m_Body != null ? m_Body.constraints : RigidbodyConstraints.None)}, pulling {m_Pulling}");
         m_NextHoldLog = Time.time + 1f;
         m_HoldLogFrom = transform.position;
     }

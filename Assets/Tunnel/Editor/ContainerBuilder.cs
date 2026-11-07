@@ -139,6 +139,9 @@ static class ContainerBuilder
         body.interpolation = RigidbodyInterpolation.Interpolate;
         var grab = container.GetComponent<XRGrabInteractable>();
         grab.throwOnDetach = false;
+        // Not frozen when it appears (a frozen kinematic box turns in the hand but doesn't move).
+        if (container.TryGetComponent(out XRMultiplayer.NetworkPhysicsInteractable networkPhysics))
+            networkPhysics.spawnLocked = false;
         var grabSo = new SerializedObject(grab);
         grabSo.FindProperty("m_Colliders").ClearArray(); // collected when it wakes, after it builds them
         grabSo.ApplyModifiedPropertiesWithoutUndo();
