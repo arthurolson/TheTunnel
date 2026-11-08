@@ -148,6 +148,128 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
             }
         }
 
+        #region Paint canvas
+
+        /// <summary>Fires after the shell is rebuilt (its size may have changed).</summary>
+        public event System.Action rebuilt;
+
+        /// <summary>
+        /// Distance around the inside of the walls and arch, in meters, measured along the true arch (a little more
+        /// than <see cref="perimeter"/>, which follows the shell's straight arch pieces). The paint canvas's v spans it.
+        /// </summary>
+        public float paintPerimeter
+        {
+            get
+            {
+                Arch(out float radius, out _, out float startAngle, out float endAngle);
+                return 2f * wallHeight + radius * (startAngle - endAngle);
+            }
+        }
+
+        // The arch: a circle through both wall tops and the apex, in the cross-section (x across, y up).
+        void Arch(out float radius, out float centerY, out float startAngle, out float endAngle)
+        {
+            float halfWidth = width * 0.5f;
+            float sagitta = apexHeight - wallHeight;
+            radius = (halfWidth * halfWidth + sagitta * sagitta) / (2f * sagitta);
+            centerY = apexHeight - radius;
+            startAngle = Mathf.Atan2(wallHeight - centerY, -halfWidth);
+            endAngle = Mathf.Atan2(wallHeight - centerY, halfWidth);
+        }
+
+        /// <summary>
+        /// Where a point (a marker's tip) is over the inside of the walls and arch, on the paint canvas: u runs 0..1
+        /// along the tunnel (the -Z end to the +Z end), v 0..1 around (up the -X wall from the floor, over the arch,
+        /// down the +X wall) by distance along the surface. <paramref name="depth"/> is how far in front of the surface
+        /// the point is (meters; negative behind it). False below the floor. u isn't limited to 0..1.
+        /// </summary>
+        public bool ToPaintCanvas(Vector3 world, out Vector2 uv, out float depth, out Vector3 onSurface)
+        {
+            var p = transform.InverseTransformPoint(world);
+            uv = default;
+            depth = 0f;
+            onSurface = world;
+            if (p.y < 0f)
+                return false;
+            Arch(out float radius, out float centerY, out float startAngle, out float endAngle);
+            float halfWidth = width * 0.5f, height = wallHeight;
+            float total = 2f * height + radius * (startAngle - endAngle);
+            float u = (p.z + length * 0.5f) / length;
+            Vector3 surface;
+            float along;
+            if (p.y <= height)
+            {
+                float side = p.x < 0f ? -1f : 1f;
+                depth = halfWidth - side * p.x;
+                along = side < 0f ? p.y : total - p.y;
+                surface = new Vector3(side * halfWidth, p.y, p.z);
+            }
+            else
+            {
+                var fromCenter = new Vector2(p.x, p.y - centerY);
+                float angle = Mathf.Clamp(Mathf.Atan2(fromCenter.y, fromCenter.x), endAngle, startAngle);
+                depth = radius - fromCenter.magnitude;
+                along = height + radius * (startAngle - angle);
+                surface = new Vector3(Mathf.Cos(angle) * radius, centerY + Mathf.Sin(angle) * radius, p.z);
+            }
+            uv = new Vector2(u, along / total);
+            onSurface = transform.TransformPoint(surface);
+            return true;
+        }
+
+        /// <summary>
+        /// The inside of the walls and arch, set in by <paramref name="inset"/> meters, with the paint canvas's
+        /// coordinates (see <see cref="ToPaintCanvas"/>) as its texture coordinates: the surface paint is drawn on.
+        /// </summary>
+        public Mesh BuildPaintMesh(float inset, int archSegments = 64)
+        {
+            Arch(out float radius, out float centerY, out float startAngle, out float endAngle);
+            float halfWidth = width * 0.5f, halfLength = length * 0.5f, height = wallHeight;
+            float total = 2f * height + radius * (startAngle - endAngle);
+            var points = new List<(Vector2 p, Vector2 inward, float along)>
+            {
+                (new Vector2(-halfWidth + inset, 0f), Vector2.right, 0f),
+                (new Vector2(-halfWidth + inset, height), Vector2.right, height),
+            };
+            for (int i = 0; i <= archSegments; i++)
+            {
+                float angle = Mathf.Lerp(startAngle, endAngle, i / (float)archSegments);
+                var onArch = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+                points.Add((new Vector2(0f, centerY) + onArch * (radius - inset), -onArch, height + radius * (startAngle - angle)));
+            }
+            points.Add((new Vector2(halfWidth - inset, height), Vector2.left, total - height));
+            points.Add((new Vector2(halfWidth - inset, 0f), Vector2.left, total));
+
+            var vertices = new List<Vector3>();
+            var normals = new List<Vector3>();
+            var uvs = new List<Vector2>();
+            var triangles = new List<int>();
+            for (int i = 0; i < points.Count; i++)
+            {
+                var (p, inward, along) = points[i];
+                foreach (float z in new[] { -halfLength, halfLength })
+                {
+                    vertices.Add(new Vector3(p.x, p.y, z));
+                    normals.Add(new Vector3(inward.x, inward.y, 0f));
+                    uvs.Add(new Vector2((z + halfLength) / length, along / total));
+                }
+                if (i == 0)
+                    continue;
+                int a = (i - 1) * 2, b = i * 2;
+                // Facing the tunnel's inside (as the shell's inner faces).
+                triangles.AddRange(new[] { a, b, b + 1, a, b + 1, a + 1 });
+            }
+            var mesh = new Mesh { name = "TG Paint Surface" };
+            mesh.SetVertices(vertices);
+            mesh.SetNormals(normals);
+            mesh.SetUVs(0, uvs);
+            mesh.SetTriangles(triangles, 0);
+            mesh.RecalculateBounds();
+            return mesh;
+        }
+
+        #endregion
+
         void Start()
         {
             // Colliders are runtime-only objects, so they're never saved into the prefab or scene.
@@ -265,6 +387,7 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
                 BuildColliders();
 
             PlaceAttachments(halfWidth, halfLength);
+            rebuilt?.Invoke();
         }
 
         /// <summary>

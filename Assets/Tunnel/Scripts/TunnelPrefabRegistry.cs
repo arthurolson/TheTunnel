@@ -26,6 +26,10 @@ public class TunnelPrefabRegistry : ScriptableObject
     public GameObject containerBox;
     public GameObject containerSphere;
 
+    [Tooltip("The TS Menu's Paint: a palette and its marker (made by Tunnel > Paint > Build Paint).")]
+    public GameObject palette;
+    public GameObject marker;
+
     [Tooltip("Filled in by Tunnel > Molecules > Update Molecule Library from the folders in Assets/Molecules.")]
     public List<Molecule> molecules = new();
 }

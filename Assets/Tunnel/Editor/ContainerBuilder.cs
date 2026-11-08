@@ -210,13 +210,7 @@ static class ContainerBuilder
             deleteLabel.text = "Delete";
             deleteLabel.richText = true;
 
-            string[] order = { "Colors Button", "Textures Button", "Molecules Button", "Containers Button", "Delete Button",
-                "New Browser Button", "New Viewer Button", "Add Segment Button", "Remove Segment Button", "Align Button" };
-            for (int i = 0; i < order.Length; i++)
-            {
-                var rect = (RectTransform)menuPanel.Find(order[i]);
-                rect.anchoredPosition = new Vector2(rect.anchoredPosition.x, 252f - 56f * i);
-            }
+            TunnelMenuLayout.Arrange(menuPanel);
 
             // The Containers list: the molecule list's panel, title and status, with two shape rows and a Place button.
             var old = control.Find("Container List");
