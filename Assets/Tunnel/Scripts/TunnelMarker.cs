@@ -15,12 +15,14 @@ using XRMultiplayer;
 /// that colour (with its opacity), and the marker's body takes the colour too. What it does on the wall is chosen on
 /// the palette:
 ///  - Paint: while its tip touches the wall, solid paint follows it;
-///  - Airbrush: soft grainy spray where it touches, building up while it stays;
+///  - Airbrush: soft grainy spray where it points, building up while it stays; the farther the tip from the wall
+///    (up to a spray range), the wider and fainter the splat, as with a real airbrush;
 ///  - Eraser: takes marks off where it rubs;
 ///  - Pencil: each touch adds a point; straight lines join the points, or with Curve the points are the control points
 ///    of one Bezier curve. The line shows as it is drawn and is put on the wall by End line on the palette, by
 ///    touching the last point again, or by choosing another kind of mark.
-/// Only the player holding it paints with it; the marks are shared through each segment's
+/// Its dark grip at the back lights up green, for the player holding it, while it is marking (touching the wall, or for
+/// the airbrush, aimed at it within range). Only the player holding it paints with it; the marks are shared through each segment's
 /// <see cref="TunnelSegmentPaint"/>. Shared over the network like the molecules.
 /// </summary>
 [DefaultExecutionOrder(-1000)] // builds its collider before the grab interactable collects it
@@ -40,6 +42,18 @@ public class TunnelMarker : NetworkBehaviour
     [SerializeField]
     [Tooltip("Its tip paints within this distance of the wall beyond its own radius (meters).")]
     float m_ContactSlack = 0.004f;
+
+    [SerializeField]
+    [Tooltip("Airbrush: it sprays the wall it points at from up to this far (meters).")]
+    float m_SprayRange = 0.3f;
+
+    [SerializeField]
+    [Tooltip("Airbrush: the spray's half angle (degrees): the splat grows by tan(angle) per meter from the wall.")]
+    float m_SprayHalfAngle = 15f;
+
+    [SerializeField]
+    [Tooltip("The grip's colour while the marker is marking.")]
+    Color m_GripLitColor = new(0.2f, 1f, 0.35f, 1f);
 
     [SerializeField]
     [Tooltip("Let go this close to its palette's holder (meters) and it goes back into it.")]
@@ -65,6 +79,9 @@ public class TunnelMarker : NetworkBehaviour
     Rigidbody m_Body;
     CapsuleCollider m_Collider;
     Material m_BodyInstance;
+    Material m_CapInstance;
+    Color m_CapColor;
+    bool m_GripLit;
     Color32 m_ShownColor;
     bool m_ColorShown;
     float m_SizedFor;
@@ -137,6 +154,8 @@ public class TunnelMarker : NetworkBehaviour
             m_Subscribed.endLineRequested -= OnEndLineRequested;
         if (m_BodyInstance != null)
             Destroy(m_BodyInstance);
+        if (m_CapInstance != null)
+            Destroy(m_CapInstance);
         base.OnDestroy();
     }
 
@@ -222,10 +241,16 @@ public class TunnelMarker : NetworkBehaviour
 
         var cap = new GameObject("Cap");
         cap.transform.SetParent(transform, false);
-        cap.transform.localPosition = new Vector3(0f, 0f, -0.44f);
-        cap.transform.localScale = new Vector3(1.06f, 1.06f, 0.13f);
+        // The grip: the back third of the marker (about 5 cm), a little wider than the body.
+        cap.transform.localPosition = new Vector3(0f, 0f, -0.33f);
+        cap.transform.localScale = new Vector3(1.08f, 1.08f, 0.36f);
         cap.AddComponent<MeshFilter>().sharedMesh = Cylinder();
-        cap.AddComponent<MeshRenderer>().sharedMaterial = m_CapMaterial;
+        if (m_CapMaterial != null)
+        {
+            m_CapInstance = new Material(m_CapMaterial) { name = "Marker Grip" };
+            m_CapColor = m_CapInstance.GetColor("_BaseColor");
+        }
+        cap.AddComponent<MeshRenderer>().sharedMaterial = m_CapInstance;
 
         m_Collider = gameObject.AddComponent<CapsuleCollider>();
         m_Collider.direction = 2;
@@ -359,6 +384,7 @@ public class TunnelMarker : NetworkBehaviour
         {
             if (m_Touching)
                 EndStroke();
+            LightGrip(false);
             return;
         }
 
@@ -379,11 +405,30 @@ public class TunnelMarker : NetworkBehaviour
             {
                 if (m_Touching)
                     EndStroke();
+                LightGrip(false);
                 return;
             }
         }
 
+        if (mode == PaintMode.Airbrush)
+        {
+            bool aimed = SprayTarget(tipPoint, out var hit, out float distance);
+            if (aimed)
+            {
+                // Wider and fainter the farther it is: the same paint spread over a bigger splat.
+                float splat = radius + distance * Mathf.Tan(m_SprayHalfAngle * Mathf.Deg2Rad);
+                Stroke(mode, hit, splat, Mathf.Clamp(radius / splat, 0.2f, 1f));
+            }
+            else if (m_Touching)
+            {
+                EndStroke();
+            }
+            LightGrip(aimed);
+            return;
+        }
+
         bool touching = TouchesWall(tipPoint, radius);
+        LightGrip(touching);
         switch (mode)
         {
             case PaintMode.Pencil:
@@ -400,7 +445,62 @@ public class TunnelMarker : NetworkBehaviour
         }
     }
 
-    PaintStyle Style(PaintMode mode) => new(mode, color, diameter);
+    PaintStyle Style(PaintMode mode, float size, float strength)
+    {
+        var c = color;
+        c.a = (byte)Mathf.Clamp(Mathf.RoundToInt(c.a * strength), 1, 255);
+        return new PaintStyle(mode, c, size);
+    }
+
+    void LightGrip(bool on)
+    {
+        if (on == m_GripLit || m_CapInstance == null)
+            return;
+        m_GripLit = on;
+        m_CapInstance.SetColor("_BaseColor", on ? m_GripLitColor : m_CapColor);
+    }
+
+    /// <summary>
+    /// Airbrush: where the spray from its tip, along the marker, meets the walls or arch within the spray range, and
+    /// how far that is (0 when the tip touches). Steps along the marker's axis toward the nearest surface.
+    /// </summary>
+    bool SprayTarget(Vector3 tipPoint, out Vector3 hit, out float distance)
+    {
+        hit = default;
+        distance = float.MaxValue;
+        var axis = transform.forward;
+        foreach (var paint in TunnelSegmentPaint.all)
+        {
+            if (paint == null || paint.geometry == null || !paint.geometry.isActiveAndEnabled)
+                continue;
+            var point = tipPoint;
+            float travelled = 0f;
+            for (int i = 0; i < 6; i++)
+            {
+                if (!paint.geometry.ToPaintCanvas(point, out var uv, out float depth, out var onSurface))
+                    break;
+                if (depth <= 0.002f)
+                {
+                    float margin = 0.05f / paint.canvasMeters.x;
+                    if (depth > -0.15f && uv.x >= -margin && uv.x <= 1f + margin && travelled < distance)
+                    {
+                        distance = travelled;
+                        hit = point;
+                    }
+                    break;
+                }
+                float aim = Vector3.Dot(axis, (onSurface - point) / depth);
+                if (aim < 0.25f)
+                    break; // pointing along the wall or away from it
+                float step = depth / aim;
+                travelled += step;
+                if (travelled > m_SprayRange)
+                    break;
+                point += axis * step;
+            }
+        }
+        return distance <= m_SprayRange;
+    }
 
     bool TouchesWall(Vector3 point, float radius)
     {
@@ -424,7 +524,7 @@ public class TunnelMarker : NetworkBehaviour
     }
 
     // Freehand: stamps along the way the tip went since last frame, a fraction of its size apart.
-    void Stroke(PaintMode mode, Vector3 point, float radius)
+    void Stroke(PaintMode mode, Vector3 point, float radius, float strength = 1f)
     {
         float spacing = Mathf.Max(radius * (mode == PaintMode.Airbrush ? 0.3f : 0.35f), 0.0008f);
         var from = m_Touching ? m_LastTip : point;
@@ -446,7 +546,7 @@ public class TunnelMarker : NetworkBehaviour
 
         m_Touching = true;
         m_LastTip = point;
-        Flush(Style(mode));
+        Flush(Style(mode, radius * 2f, strength));
     }
 
     void AddStamp(Vector3 point, float radius)
@@ -597,7 +697,7 @@ public class TunnelMarker : NetworkBehaviour
         var polygon = curve && m_PencilPoints.Count >= 3 ? OnCanvases(PolygonPath(), 0.002f) : new Dictionary<TunnelSegmentPaint, List<Vector2>>();
         var points = OnCanvases(m_PencilPoints, Mathf.Max(radius * 1.6f, 0.007f));
 
-        var lineStyle = Style(PaintMode.Pencil);
+        var lineStyle = Style(PaintMode.Pencil, diameter, 1f);
         var polygonStyle = new PaintStyle(PaintMode.Pencil, new Color32(255, 255, 255, 110), 0.003f);
         var pointStyle = new PaintStyle(PaintMode.Pencil, new Color32(255, 255, 255, 230), Mathf.Max(diameter * 1.6f, 0.014f));
         var shown = new HashSet<TunnelSegmentPaint>();
@@ -643,7 +743,7 @@ public class TunnelMarker : NetworkBehaviour
         {
             var holder = palette;
             bool curve = holder != null && holder.curve;
-            var style = Style(PaintMode.Pencil);
+            var style = Style(PaintMode.Pencil, diameter, 1f);
             foreach (var (paint, uvs) in OnCanvases(PencilPath(curve), diameter * 0.5f))
             {
                 paint.Draw(style, uvs);

@@ -69,6 +69,14 @@ public class MoleculeGravity : MonoBehaviour
     float m_MinJostleRate = 0.5f;
 
     [SerializeField]
+    [Tooltip("Random motion: its spin from heat, as a fraction of the physical (equipartition) spin, which looks frantic at these sizes.")]
+    float m_SpinScale = 0.25f;
+
+    [SerializeField]
+    [Tooltip("Random motion: no molecule spins faster than this from heat alone (radians per second, per axis).")]
+    float m_MaxThermalSpin = 6f;
+
+    [SerializeField]
     [Tooltip("Ballistic motion: how quickly (per second) its speed returns to the thermal speed after a collision.")]
     float m_SpeedRecovery = 1.5f;
 
@@ -189,8 +197,12 @@ public class MoleculeGravity : MonoBehaviour
     /// random kicks keep its average speed at the thermal speed, so its direction keeps wandering; with more viscosity
     /// it turns more often and wanders less far. Ballistic motion is a gas: it flies straight on, its speed drawn back
     /// to the thermal speed, and only a collision (another molecule, the container's walls) changes its direction.
+    /// In random motion the jostling turns it too: its spin about each of its principal axes is the same kind of
+    /// process, with the thermal spin of equipartition (the same energy per axis as its motion, so its spin about an
+    /// axis goes as the square root of mass over moment of inertia: small or long thin molecules spin faster about
+    /// their thin axis), scaled down so it doesn't look frantic.
     /// </summary>
-    void ApplyHeat(TunnelContainer container, float drag)
+    void ApplyHeat(TunnelContainer container, float drag, float angularDrag)
     {
         float speed = ThermalSpeed(container.temperature);
         float dt = Time.fixedDeltaTime;
@@ -201,6 +213,7 @@ public class MoleculeGravity : MonoBehaviour
             float keep = Mathf.Exp(-rate * dt);
             float kick = speed / Mathf.Sqrt(3f) * Mathf.Sqrt(1f - keep * keep); // per axis
             velocity = velocity * keep + new Vector3(Gaussian(), Gaussian(), Gaussian()) * kick;
+            ApplySpin(speed / Mathf.Sqrt(3f), Mathf.Max(angularDrag, m_MinJostleRate), dt);
         }
         else
         {
@@ -211,6 +224,23 @@ public class MoleculeGravity : MonoBehaviour
         }
 
         m_Rigidbody.linearVelocity = velocity;
+    }
+
+    // Brownian spin, per principal axis: thermal spin = per-axis thermal speed * sqrt(mass / moment of inertia).
+    void ApplySpin(float axisSpeed, float rate, float dt)
+    {
+        var inertia = m_Rigidbody.inertiaTensor;
+        if (inertia.x <= 0f || inertia.y <= 0f || inertia.z <= 0f)
+            return;
+        float mass = Mathf.Max(m_Rigidbody.mass, 1e-6f);
+        var axes = m_Rigidbody.rotation * m_Rigidbody.inertiaTensorRotation;
+        var spin = Quaternion.Inverse(axes) * m_Rigidbody.angularVelocity;
+        float keep = Mathf.Exp(-rate * dt);
+        float kick = Mathf.Sqrt(1f - keep * keep);
+        spin.x = spin.x * keep + Gaussian() * kick * Mathf.Min(m_SpinScale * axisSpeed * Mathf.Sqrt(mass / inertia.x), m_MaxThermalSpin);
+        spin.y = spin.y * keep + Gaussian() * kick * Mathf.Min(m_SpinScale * axisSpeed * Mathf.Sqrt(mass / inertia.y), m_MaxThermalSpin);
+        spin.z = spin.z * keep + Gaussian() * kick * Mathf.Min(m_SpinScale * axisSpeed * Mathf.Sqrt(mass / inertia.z), m_MaxThermalSpin);
+        m_Rigidbody.angularVelocity = axes * spin;
     }
 
     static float Gaussian()
@@ -278,8 +308,10 @@ public class MoleculeGravity : MonoBehaviour
                 if (m_NetworkPhysics != null)
                     m_NetworkPhysics.ReleaseSpawnLock();
             }
-            ApplyHeat(container, drag);
+            ApplyHeat(container, drag, angularDrag);
             drag = 0f; // the heat sets its speed, the drag included
+            if (container.motion == TunnelContainer.Motion.Random)
+                angularDrag = 0f; // and its spin
         }
 
         if (m_Rigidbody.linearDamping != drag)
