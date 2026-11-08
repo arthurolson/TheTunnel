@@ -7,7 +7,8 @@ using UnityEngine.XR.Interaction.Toolkit.Transformers;
 /// Stretches a box Container along its own axes with two hands. With both hands on its corners it scales as a whole,
 /// like a molecule (the general grab transformer does that); otherwise (a hand on an edge) each of the box's axes
 /// along which the hands are apart stretches by how much further apart, along that axis, they get. The general grab
-/// transformer still moves and turns it.
+/// transformer still moves and turns it. On a mixed reality box's front corner balls the hands stretch its front only
+/// (width and height), never its depth.
 /// </summary>
 [RequireComponent(typeof(XRGeneralGrabTransformer))]
 public class ContainerStretchTransformer : XRBaseGrabTransformer
@@ -26,12 +27,17 @@ public class ContainerStretchTransformer : XRBaseGrabTransformer
     protected override RegistrationMode registrationMode => RegistrationMode.Multiple;
 
     XRGeneralGrabTransformer m_General;
+    TunnelContainer m_Container;
     bool m_Stretching;
     Vector3 m_StartScale;
     Vector3 m_StartApart; // the hands' separation along the box's axes when the stretch began
     readonly bool[] m_Axes = new bool[3];
 
-    void Awake() => m_General = GetComponent<XRGeneralGrabTransformer>();
+    void Awake()
+    {
+        m_General = GetComponent<XRGeneralGrabTransformer>();
+        m_Container = GetComponent<TunnelContainer>();
+    }
 
     protected override void Start()
     {
@@ -56,7 +62,10 @@ public class ContainerStretchTransformer : XRBaseGrabTransformer
 
         var a = HandPosition(grabInteractable, 0);
         var b = HandPosition(grabInteractable, 1);
-        if (OnCorner(a) && OnCorner(b))
+        // On two corners it scales as a whole, except on a mixed reality box's front corner balls: there the hands
+        // are apart only across the front, so the stretch below changes its width and height and not its depth.
+        bool onFront = m_Container != null && m_Container.OnFrontCorner(a) && m_Container.OnFrontCorner(b);
+        if (OnCorner(a) && OnCorner(b) && !onFront)
         {
             m_General.allowTwoHandedScaling = true;
             return;
@@ -71,6 +80,9 @@ public class ContainerStretchTransformer : XRBaseGrabTransformer
             any |= m_Axes[i];
         }
 
+        if (onFront)
+            m_Axes[m_Container.frontFace / 2] = false; // the depth stays as it is
+        any = m_Axes[0] || m_Axes[1] || m_Axes[2];
         m_Stretching = any;
         m_StartScale = localScale;
         m_General.allowTwoHandedScaling = !any;

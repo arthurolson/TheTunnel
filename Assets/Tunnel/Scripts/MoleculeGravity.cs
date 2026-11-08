@@ -179,7 +179,7 @@ public class MoleculeGravity : MonoBehaviour
     float ThermalSpeed(float temperature)
     {
         float mass = Mathf.Max(m_Rigidbody.mass, 1e-6f);
-        float speed = m_RoomSpeed * Mathf.Sqrt(temperature / TunnelContainer.k_MaxTemperature * m_ReferenceMass / mass);
+        float speed = m_RoomSpeed * Mathf.Sqrt(temperature / TunnelContainer.k_RoomTemperature * m_ReferenceMass / mass);
         return Mathf.Min(speed, m_MaxThermalSpeed);
     }
 

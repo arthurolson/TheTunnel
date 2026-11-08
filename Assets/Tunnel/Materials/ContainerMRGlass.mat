@@ -25,14 +25,12 @@ Material:
     m_TexEnvs: []
     m_Ints: []
     m_Floats:
-    - _BaseAlpha: 0.06
-    - _EdgeAlpha: 0.55
-    - _FresnelPower: 4
+    - _FresnelPower: 5
     - _Highlight: 1.5
-    - _Reflection: 0.45
+    - _Reflectance: 0.1
+    - _Reflection: 2.5
+    - _Room: 1
     - _Smoothness: 0.95
-    - _Streaks: 0.12
-    m_Colors:
-    - _Tint: {r: 0.82, g: 0.92, b: 1, a: 1}
+    m_Colors: []
   m_BuildTextureStacks: []
   m_AllowLocking: 1

@@ -17,7 +17,6 @@ static class ContainerBuilder
     const string k_Folder = "Assets/Tunnel/Containers";
     const string k_EdgeMaterialPath = "Assets/Tunnel/Materials/ContainerEdge.mat";
     const string k_GlassMaterialPath = "Assets/Tunnel/Materials/ContainerMRGlass.mat";
-    const string k_SpherePath = "Assets/Tunnel/Containers/Container_Sphere_Networked.prefab";
     const string k_WallMaterialPath = "Assets/Tunnel/Materials/ContainerMRWall.mat";
     const string k_WindowMaterialPath = "Assets/Tunnel/Materials/ContainerMRWindow.mat";
     // The tunnel shell's materials, which open where a mixed reality box's window is.
@@ -44,26 +43,25 @@ static class ContainerBuilder
             shell.SetFloat("_WindowStencilComp", (float)UnityEngine.Rendering.CompareFunction.NotEqual);
             EditorUtility.SetDirty(shell);
         }
-        var box = MakePrefab(material, wall, window, glass);
+        var box = MakePrefab(TunnelContainer.Shape.Box, material, wall, window, glass);
+        var sphere = MakePrefab(TunnelContainer.Shape.Sphere, material, wall, window, glass);
 
         var registry = AssetDatabase.LoadAssetAtPath<TunnelPrefabRegistry>(k_RegistryPath);
         registry.containerBox = box;
+        registry.containerSphere = sphere;
         EditorUtility.SetDirty(registry);
 
-        // Boxes only: the sphere container is gone from the session's prefabs and the project.
         var list = AssetDatabase.LoadAssetAtPath<NetworkPrefabsList>(k_NetworkListPath);
-        var sphere = AssetDatabase.LoadAssetAtPath<GameObject>(k_SpherePath);
-        foreach (var entry in list.PrefabList.Where(p => p.Prefab == null || (sphere != null && p.Prefab == sphere)).ToList())
+        foreach (var entry in list.PrefabList.Where(p => p.Prefab == null).ToList())
             list.Remove(entry);
-        if (!list.PrefabList.Any(p => p.Prefab == box))
-            list.Add(new NetworkPrefab { Prefab = box });
+        foreach (var prefab in new[] { box, sphere })
+            if (!list.PrefabList.Any(p => p.Prefab == prefab))
+                list.Add(new NetworkPrefab { Prefab = prefab });
         EditorUtility.SetDirty(list);
-        if (sphere != null)
-            AssetDatabase.DeleteAsset(k_SpherePath);
 
         string menu = BuildMenu(registry);
         AssetDatabase.SaveAssets();
-        string log = $"[Containers] built {AssetDatabase.GetAssetPath(box)}{(sphere != null ? ", deleted the sphere" : "")}; {menu}";
+        string log = $"[Containers] built {AssetDatabase.GetAssetPath(box)} and {AssetDatabase.GetAssetPath(sphere)}; {menu}";
         Debug.Log(log);
         return log;
     }
@@ -86,11 +84,18 @@ static class ContainerBuilder
 
     static Material GlassMaterial()
     {
+        var shader = Shader.Find("Tunnel/Container Glass");
         var material = AssetDatabase.LoadAssetAtPath<Material>(k_GlassMaterialPath);
-        if (material != null)
-            return material;
-        material = new Material(Shader.Find("Tunnel/Container Glass")) { name = "ContainerMRGlass" };
-        AssetDatabase.CreateAsset(material, k_GlassMaterialPath);
+        if (material == null)
+        {
+            material = new Material(shader) { name = "ContainerMRGlass" };
+            AssetDatabase.CreateAsset(material, k_GlassMaterialPath);
+        }
+        // Clear glass with reflections only: the shader's own settings, nothing left over from older ones.
+        var fresh = new Material(shader);
+        material.CopyPropertiesFromMaterial(fresh);
+        Object.DestroyImmediate(fresh);
+        EditorUtility.SetDirty(material);
         return material;
     }
 
@@ -120,11 +125,11 @@ static class ContainerBuilder
         return material;
     }
 
-    static GameObject MakePrefab(Material material, Material wall, Material window, Material glass)
+    static GameObject MakePrefab(TunnelContainer.Shape shape, Material material, Material wall, Material window, Material glass)
     {
         var template = AssetDatabase.LoadAssetAtPath<GameObject>(k_TemplatePath);
         var container = Object.Instantiate(template);
-        container.name = "Container_Box_Networked";
+        container.name = $"Container_{shape}_Networked";
 
         // Only the toy's workings: no molecule, its colour feedback or its collider.
         for (int i = container.transform.childCount - 1; i >= 0; i--)
@@ -154,12 +159,14 @@ static class ContainerBuilder
 
         var component = container.AddComponent<TunnelContainer>();
         var so = new SerializedObject(component);
+        so.FindProperty("m_Shape").enumValueIndex = (int)shape;
         so.FindProperty("m_EdgeMaterial").objectReferenceValue = material;
         so.FindProperty("m_WallMaterial").objectReferenceValue = wall;
         so.FindProperty("m_WindowMaterial").objectReferenceValue = window;
         so.FindProperty("m_GlassMaterial").objectReferenceValue = glass;
         so.ApplyModifiedPropertiesWithoutUndo();
-        container.AddComponent<ContainerStretchTransformer>();
+        if (shape == TunnelContainer.Shape.Box)
+            container.AddComponent<ContainerStretchTransformer>(); // the sphere scales evenly
 
         string path = $"{k_Folder}/{container.name}.prefab";
         var prefab = PrefabUtility.SaveAsPrefabAsset(container, path);
@@ -211,7 +218,7 @@ static class ContainerBuilder
                 rect.anchoredPosition = new Vector2(rect.anchoredPosition.x, 252f - 56f * i);
             }
 
-            // The Containers list: the molecule list's panel, title and status, with a Place button.
+            // The Containers list: the molecule list's panel, title and status, with two shape rows and a Place button.
             var old = control.Find("Container List");
             if (old != null)
                 Object.DestroyImmediate(old.gameObject);
@@ -221,15 +228,15 @@ static class ContainerBuilder
             Object.DestroyImmediate(list.transform.Find("Scroll View").gameObject);
             // Two columns: the rows on the left, the thermometer on the right.
             var panelRect = (RectTransform)list.transform;
-            panelRect.sizeDelta = new Vector2(680f, 800f);
-            panelRect.anchoredPosition = ((RectTransform)moleculeList).anchoredPosition + new Vector2(-70f, -100f);
+            panelRect.sizeDelta = new Vector2(680f, 930f);
+            panelRect.anchoredPosition = ((RectTransform)moleculeList).anchoredPosition + new Vector2(-70f, -165f);
             const float rowsX = -80f, rowsWidth = 460f, thermometerX = 225f;
 
             var title = (RectTransform)list.transform.Find("Title");
-            title.anchoredPosition = new Vector2(title.anchoredPosition.x - 70f, 360f);
+            title.anchoredPosition = new Vector2(title.anchoredPosition.x - 70f, 425f);
             title.GetComponent<TMPro.TMP_Text>().text = "Containers";
             var status = (RectTransform)list.transform.Find("Status");
-            status.anchoredPosition = new Vector2(0f, 285f);
+            status.anchoredPosition = new Vector2(0f, 350f);
             status.sizeDelta = new Vector2(620f, 100f);
 
             var template = list.transform.Find("Row Template");
@@ -249,21 +256,23 @@ static class ContainerBuilder
                 rowLabel.richText = true;
                 return b;
             }
-            var place = Row("Place Button", 185f, "Place Container");
+            var boxRow = Row("Box Row", 250f, "■  Box");
+            var sphereRow = Row("Sphere Row", 185f, "□  Sphere");
+            var place = Row("Place Button", 120f, "Place Container");
             var placeLabel = place.GetComponentInChildren<TMPro.TMP_Text>(true);
             placeLabel.alignment = TMPro.TextAlignmentOptions.Center;
             placeLabel.fontStyle = TMPro.FontStyles.Bold;
-            var mixedRealityRow = Row("Mixed Reality Row", 95f, "□  Mixed reality box");
-            var unsnapRow = Row("Unsnap Row", 30f, "Unsnap from wall");
-            var randomRow = Row("Random Row", -60f, "■  Random motion");
-            var ballisticRow = Row("Ballistic Row", -125f, "□  Ballistic motion");
+            var mixedRealityRow = Row("Mixed Reality Row", 30f, "□  Mixed reality box");
+            var unsnapRow = Row("Unsnap Row", -35f, "Unsnap from wall");
+            var randomRow = Row("Random Row", -125f, "■  Random motion");
+            var ballisticRow = Row("Ballistic Row", -190f, "□  Ballistic motion");
 
             // Viscosity: the molecule list's Magnification slider, 0 to 1 in tenths.
             var viscosity = list.transform.Find("Magnification");
             // (its copy, made first, becomes the thermometer)
             var heat = Object.Instantiate(viscosity.gameObject, list.transform, false).transform;
             viscosity.name = "Viscosity";
-            ((RectTransform)viscosity).anchoredPosition = new Vector2(rowsX, -220f);
+            ((RectTransform)viscosity).anchoredPosition = new Vector2(rowsX, -290f);
             ((RectTransform)viscosity).sizeDelta = new Vector2(rowsWidth, 60f);
             var viscositySlider = viscosity.GetComponentInChildren<Slider>(true);
             viscositySlider.name = "Viscosity Slider";
@@ -288,7 +297,7 @@ static class ContainerBuilder
             }
 
             var thermometer = BuildThermometer(heat, thermometerX, out var temperatureSlider, out var temperatureText);
-            ((RectTransform)thermometer).anchoredPosition = new Vector2(0f, 5f); // its title just under the status
+            ((RectTransform)thermometer).anchoredPosition = new Vector2(0f, 70f); // its title just under the status
             Object.DestroyImmediate(template.gameObject);
             list.SetActive(false);
 
@@ -299,6 +308,8 @@ static class ContainerBuilder
             so.FindProperty("m_Prefabs").objectReferenceValue = registry;
             so.FindProperty("m_Geometry").objectReferenceValue = new SerializedObject(moleculeMenu).FindProperty("m_Geometry").objectReferenceValue;
             so.FindProperty("m_ListPanel").objectReferenceValue = list;
+            so.FindProperty("m_BoxRow").objectReferenceValue = boxRow;
+            so.FindProperty("m_SphereRow").objectReferenceValue = sphereRow;
             so.FindProperty("m_PlaceButton").objectReferenceValue = place;
             so.FindProperty("m_MixedRealityRow").objectReferenceValue = mixedRealityRow;
             so.FindProperty("m_UnsnapRow").objectReferenceValue = unsnapRow;
@@ -398,22 +409,24 @@ static class ContainerBuilder
         bulb.raycastTarget = false;
         Place(bulbObject.transform, new Vector2(x, tubeBottom - 18f), new Vector2(72f, 72f));
 
-        // The scale, 0 to 10, beside the tube.
+        // The scale in °C, absolute zero to 100 °C, beside the tube (the tube is linear in kelvin).
         var ticks = group.Find("Ticks");
         Place(ticks, Vector2.zero, Vector2.zero);
         var tickTemplate = ticks.GetChild(0).gameObject;
         for (int i = ticks.childCount - 1; i >= 1; i--)
             Object.DestroyImmediate(ticks.GetChild(i).gameObject);
-        for (int i = 0; i <= 10; i++)
+        var celsius = new[] { -273.15f, -200f, -150f, -100f, -50f, 0f, 50f, 100f };
+        for (int i = 0; i < celsius.Length; i++)
         {
             var tick = i == 0 ? tickTemplate : Object.Instantiate(tickTemplate, ticks, false);
-            tick.name = $"Tick {i}";
+            tick.name = $"Tick {celsius[i]:0} C";
             var text = tick.GetComponent<TMPro.TMP_Text>();
-            text.text = i == 10 ? "10 <size=70%>20 °C</size>" : i.ToString();
+            text.text = i == 0 ? "-273 <size=70%>0 K</size>" : i == celsius.Length - 1 ? "100 °C" : $"{celsius[i]:0}";
+            float up = (celsius[i] + 273.15f) / TunnelContainer.k_MaxKelvin;
             text.richText = true;
             text.alignment = TMPro.TextAlignmentOptions.Left;
             text.textWrappingMode = TMPro.TextWrappingModes.NoWrap;
-            var rect = Place(tick.transform, new Vector2(x + 30f + 50f, tubeBottom + i / 10f * (tubeTop - tubeBottom)), new Vector2(100f, 30f));
+            var rect = Place(tick.transform, new Vector2(x + 30f + 50f, tubeBottom + up * (tubeTop - tubeBottom)), new Vector2(100f, 30f));
             rect.pivot = new Vector2(0.5f, 0.5f);
         }
 
@@ -422,7 +435,7 @@ static class ContainerBuilder
         readingObject.name = "Temperature Reading";
         reading = readingObject.GetComponent<TMPro.TMP_Text>();
         reading.richText = true;
-        reading.text = "<b>0.0</b>\n<size=75%>0 K\n-273 °C</size>";
+        reading.text = "<b>-273 °C</b>\n<size=75%>0 K</size>";
         reading.alignment = TMPro.TextAlignmentOptions.Top;
         reading.enableAutoSizing = false;
         Place(readingObject.transform, new Vector2(x + 20f, -350f), new Vector2(190f, 100f));

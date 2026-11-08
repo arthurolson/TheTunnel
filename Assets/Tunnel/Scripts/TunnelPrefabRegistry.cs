@@ -22,8 +22,9 @@ public class TunnelPrefabRegistry : ScriptableObject
     public GameObject browserPanel;
     public GameObject viewerPanel;
 
-    [Tooltip("The TS Menu's Container, a box (made by Tunnel > Containers > Build Containers).")]
+    [Tooltip("The TS Menu's Containers (made by Tunnel > Containers > Build Containers).")]
     public GameObject containerBox;
+    public GameObject containerSphere;
 
     [Tooltip("Filled in by Tunnel > Molecules > Update Molecule Library from the folders in Assets/Molecules.")]
     public List<Molecule> molecules = new();

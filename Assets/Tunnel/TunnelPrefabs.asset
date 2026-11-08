@@ -16,6 +16,7 @@ MonoBehaviour:
   browserPanel: {fileID: 6974413720160308155, guid: 7bbe0712c3f0846bc9f28abd6f03dff7, type: 3}
   viewerPanel: {fileID: 7377705050852043259, guid: fb5cff672e7c64c1cb922aff39a79924, type: 3}
   containerBox: {fileID: 2873252042790380236, guid: c4257ecff5c7e482593db28b3bd16597, type: 3}
+  containerSphere: {fileID: 4142911118070260877, guid: eba5dfb6d05444d9091f72443c6b2ee5, type: 3}
   molecules:
   - name: 2PLV
     prefab: {fileID: 592917901370543573, guid: 9ebea7aea0a414c6dbbdec5f8b358726, type: 3}

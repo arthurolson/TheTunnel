@@ -9,16 +9,19 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 using XRMultiplayer;
 
 /// <summary>
-/// A Container from the TS Menu: a box that encloses a volume, for keeping molecules (or any toy) inside. Its faces
-/// are transparent and its edges are thin solid rods (a quarter inch across); its walls always hold whatever is inside
-/// in, also while it is moved, and a molecule held in a hand passes through them, so it is put in by hand.
-/// It is grabbed by its edges, like the molecules, and two hands scale it. It also stretches along its own axes:
-/// with both hands on its edges, pulling them apart along an axis stretches it along that axis (see
-/// <see cref="ContainerStretchTransformer"/>); with both hands on its corners it scales as a whole.
+/// A Container from the TS Menu: a box or a sphere that encloses a volume, for keeping molecules (or any toy) inside.
+/// Its surface is transparent: the box shows its edges as thin solid rods (a quarter inch across), the sphere lines of
+/// latitude and longitude every 60° as tubes as thin. Its walls always hold whatever is inside in, also while it is
+/// moved, and a molecule held in a hand passes through them, so it is put in by hand.
+/// It is grabbed by its edges or lines, like the molecules, and two hands scale it. The box also stretches along its
+/// own axes: with both hands on its edges, pulling them apart along an axis stretches it along that axis (see
+/// <see cref="ContainerStretchTransformer"/>); with both hands on its corners it scales as a whole, except on a mixed
+/// reality box's front corners, which carry small balls (half an inch): two hands on them stretch the front, its
+/// width and height, and leave its depth alone.
 /// The walls are on the Ignore Raycast layer, which the hands and lasers don't see, so they never get in the way of
 /// reaching or pointing at what's inside; the grab zones touch nothing physically, so only the walls ever push.
-/// It can also be a mixed reality box (the TS Menu's Containers list switches it): its walls are opaque inside and
-/// out except its front, which is glass, so what is inside is seen (and reached) only through the front. Let go of it
+/// A box can also be a mixed reality box (the TS Menu's Containers list switches it): its walls are opaque inside and
+/// out except its front, which is clear glass, so what is inside is seen (and reached) only through the front. Let go of it
 /// against one of the tunnel's flat walls and it sets itself into the wall: its front on the wall's inside, facing
 /// into the tunnel, the rest of the box beyond the wall. There the tunnel wall opens to show it (the front marks the
 /// screen, see Tunnel/Container Window, and the shell leaves that part out), the wall's collider gets a hole there so
@@ -30,12 +33,29 @@ using XRMultiplayer;
 [DefaultExecutionOrder(-1000)] // builds its colliders before the grab interactable collects them
 public class TunnelContainer : NetworkBehaviour
 {
+    public enum Shape : byte
+    {
+        Box,
+        Sphere,
+    }
+
+    [SerializeField]
+    Shape m_Shape;
+
     [SerializeField]
     Material m_EdgeMaterial;
 
     [SerializeField]
-    [Tooltip("Diameter of the rods along its edges (meters): a quarter inch.")]
+    [Tooltip("Diameter of the rods along its edges, or the sphere's lines (meters): a quarter inch.")]
     float m_EdgeDiameter = 0.00635f;
+
+    [SerializeField]
+    [Tooltip("Diameter of the balls on a mixed reality box's front corners (meters): half an inch.")]
+    float m_CornerDiameter = 0.0127f;
+
+    [SerializeField]
+    [Tooltip("Radius of the grab zone around each front corner ball (meters).")]
+    float m_CornerGrabRadius = 0.025f;
 
     [SerializeField]
     [Tooltip("Thickness of the grab zone around each line (meters).")]
@@ -89,20 +109,23 @@ public class TunnelContainer : NetworkBehaviour
     }
 
     /// <summary>
-    /// How much kinetic energy the molecules inside have, 0 to 10 (continuous): the energy is proportional to it, as
-    /// to an absolute temperature, with 10 room temperature (20 °C, 293 K) and 0 absolute zero (no thermal motion,
-    /// the default). Each molecule's thermal speed goes as the square root of temperature over its mass, so heavier
-    /// (or more magnified) molecules move more slowly. Set from the TS Menu's Containers list.
+    /// How much kinetic energy the molecules inside have, 0 to <see cref="k_MaxTemperature"/> (continuous): the energy
+    /// is proportional to it, as to an absolute temperature, with 10 room temperature (20 °C, 293 K), 0 absolute zero
+    /// (no thermal motion, the default) and the top 100 °C (373 K). Each molecule's thermal speed goes as the square
+    /// root of temperature over its mass, so heavier (or more magnified) molecules move more slowly. Set from the TS
+    /// Menu's Containers list, whose thermometer reads it in °C.
     /// </summary>
     public float temperature => IsSpawned ? m_Temperature.Value : m_LocalTemperature;
 
     public Motion motion => IsSpawned ? (Motion)m_Motion.Value : m_LocalMotion;
 
-    public const float k_MaxTemperature = 10f;
+    public const float k_RoomTemperature = 10f;
     public const float k_RoomKelvin = 293.15f;
+    public const float k_MaxKelvin = 373.15f; // 100 °C
+    public const float k_MaxTemperature = k_RoomTemperature * k_MaxKelvin / k_RoomKelvin;
 
     /// <summary>The temperature setting in kelvin (10 is 293 K, 20 °C).</summary>
-    public static float Kelvin(float setting) => setting / k_MaxTemperature * k_RoomKelvin;
+    public static float Kelvin(float setting) => setting / k_RoomTemperature * k_RoomKelvin;
 
     readonly NetworkVariable<float> m_Temperature = new(0f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<byte> m_Motion = new((byte)Motion.Random, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
@@ -115,7 +138,9 @@ public class TunnelContainer : NetworkBehaviour
     /// Whether this is a mixed reality box: opaque walls, an open front, and it sets itself into a tunnel wall when
     /// let go against one.
     /// </summary>
-    public bool isMixedReality => IsSpawned ? m_MixedReality.Value : m_LocalMixedReality;
+    public bool isMixedReality => m_Shape == Shape.Box && (IsSpawned ? m_MixedReality.Value : m_LocalMixedReality);
+
+    public Shape shape => m_Shape;
 
     /// <summary>Which face is the mixed reality box's open front: axis * 2, + 1 on the axis's positive side.</summary>
     public int frontFace => IsSpawned ? m_Front.Value : m_LocalFront;
@@ -143,10 +168,18 @@ public class TunnelContainer : NetworkBehaviour
     static readonly int s_MixedRealityBoxCount = Shader.PropertyToID("_MixedRealityBoxCount");
 
     const int k_IgnoreRaycastLayer = 2;
+    const int k_CircleSegments = 64;                // per sphere line
+    const int k_TubeSides = 8;                      // around a sphere line
+    const int k_GrabSegments = 16;                  // grab zones per sphere line
+    const int k_WallBands = 8, k_WallSegments = 16; // sphere wall tiles
 
     readonly List<Transform> m_Edges = new();
     readonly List<BoxCollider> m_Rods = new();        // box: on m_GrabRoot; sphere: one per child
+    readonly List<(BoxCollider collider, float width, float height)> m_Tiles = new(); // sphere walls: angular sizes
     readonly List<BoxCollider> m_Faces = new();       // box walls
+    readonly List<(Transform zone, SphereCollider collider, Renderer ball)> m_Corners = new(); // mixed reality front
+    Mesh m_SphereLines;                               // sphere: its lines as tubes
+    float m_SphereLinesFor;
     Transform m_GrabRoot, m_WallRoot;
     Vector3 m_SizedFor;
     XRGrabInteractable m_Grab;
@@ -163,6 +196,7 @@ public class TunnelContainer : NetworkBehaviour
             m_Body.constraints = RigidbodyConstraints.None;
         BuildEdges();
         BuildGrabZones();
+        BuildCorners();
         BuildWalls();
         BuildMixedReality();
         FitToScale();
@@ -188,6 +222,8 @@ public class TunnelContainer : NetworkBehaviour
             Destroy(m_WallMesh);
         if (m_WindowMesh != null)
             Destroy(m_WindowMesh);
+        if (m_SphereLines != null)
+            Destroy(m_SphereLines);
         base.OnDestroy();
     }
 
@@ -244,7 +280,7 @@ public class TunnelContainer : NetworkBehaviour
             moved++;
         }
         if (moved > 0)
-            Debug.Log($"[Containers] player {holder} took the box: {moved} molecule(s) inside now move with it");
+            Debug.Log($"[Containers] player {holder} took the {m_Shape}: {moved} molecule(s) inside now move with it");
     }
 
     public override void OnNetworkSpawn()
@@ -272,7 +308,7 @@ public class TunnelContainer : NetworkBehaviour
         value = Mathf.Clamp01(Mathf.Round(value * 10f) / 10f);
         if (Mathf.Approximately(value, viscosity))
             return;
-        Debug.Log($"[Containers] box viscosity {value:0.0}");
+        Debug.Log($"[Containers] {m_Shape} viscosity {value:0.0}");
         if (IsSpawned)
             SetViscosityRpc(value);
         else
@@ -282,7 +318,7 @@ public class TunnelContainer : NetworkBehaviour
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     void SetViscosityRpc(float value) => m_Viscosity.Value = Mathf.Clamp01(value);
 
-    /// <summary>Sets the temperature inside (0 to 10, to the nearest 0.05) for everyone.</summary>
+    /// <summary>Sets the temperature inside (0 to <see cref="k_MaxTemperature"/>, to the nearest 0.05) for everyone.</summary>
     public void SetTemperature(float value)
     {
         value = Mathf.Clamp(Mathf.Round(value * 20f) / 20f, 0f, k_MaxTemperature);
@@ -302,7 +338,7 @@ public class TunnelContainer : NetworkBehaviour
     {
         if (value == motion)
             return;
-        Debug.Log($"[Containers] box motion {value}");
+        Debug.Log($"[Containers] {m_Shape} motion {value}");
         if (IsSpawned)
             SetMotionRpc((byte)value);
         else
@@ -318,7 +354,7 @@ public class TunnelContainer : NetworkBehaviour
     /// </summary>
     public void SetMixedReality(bool on)
     {
-        if (on == isMixedReality)
+        if (m_Shape != Shape.Box || on == isMixedReality)
             return;
         int front = frontFace;
         var head = Camera.main;
@@ -374,9 +410,11 @@ public class TunnelContainer : NetworkBehaviour
     /// <summary>Whether a point is inside the container's volume.</summary>
     public bool Contains(Vector3 world)
     {
-        // In its own coordinates the box spans ±0.5.
+        // In its own coordinates the box spans ±0.5 and the sphere has radius 0.5.
         var p = transform.InverseTransformPoint(world);
-        return Mathf.Abs(p.x) <= 0.5f && Mathf.Abs(p.y) <= 0.5f && Mathf.Abs(p.z) <= 0.5f;
+        return m_Shape == Shape.Box
+            ? Mathf.Abs(p.x) <= 0.5f && Mathf.Abs(p.y) <= 0.5f && Mathf.Abs(p.z) <= 0.5f
+            : p.sqrMagnitude <= 0.25f;
     }
 
     /// <summary>
@@ -515,6 +553,7 @@ public class TunnelContainer : NetworkBehaviour
         m_MixedRealityRoot.gameObject.SetActive(on);
         if (on && m_BuiltFront != frontFace)
             BuildMixedRealityMeshes(frontFace);
+        PlaceCorners();
     }
 
     /// <summary>
@@ -805,9 +844,9 @@ public class TunnelContainer : NetworkBehaviour
 
     #endregion
 
-    #region Edges
+    #region Edges and lines
 
-    // The twelve edges, four along each axis: (axis, the corner offsets on the other two axes).
+    // The box's twelve edges, four along each axis: (axis, the corner offsets on the other two axes).
     static readonly (int axis, int a, int b)[] s_EdgeLayout = BuildEdgeLayout();
 
     static (int, int, int)[] BuildEdgeLayout()
@@ -820,7 +859,7 @@ public class TunnelContainer : NetworkBehaviour
         return edges;
     }
 
-    static Mesh s_CylinderMesh;
+    static Mesh s_CylinderMesh, s_BallMesh;
 
     /// <summary>A cylinder along Z, 1 long and 1 across, centred on its origin, with flat ends.</summary>
     static Mesh CylinderMesh()
@@ -869,11 +908,54 @@ public class TunnelContainer : NetworkBehaviour
         return s_CylinderMesh;
     }
 
-    // Thin solid cylinders along the edges (sized in FitToScale).
+    /// <summary>A ball 1 across, centred on its origin.</summary>
+    static Mesh BallMesh()
+    {
+        if (s_BallMesh != null)
+            return s_BallMesh;
+        const int bands = 8, segments = 12;
+        var vertices = new List<Vector3>();
+        var triangles = new List<int>();
+        for (int b = 0; b <= bands; b++)
+        {
+            float latitude = Mathf.PI * (b / (float)bands - 0.5f);
+            for (int s = 0; s <= segments; s++)
+            {
+                float longitude = 2f * Mathf.PI * s / segments;
+                vertices.Add(0.5f * new Vector3(Mathf.Cos(latitude) * Mathf.Cos(longitude), Mathf.Sin(latitude), Mathf.Cos(latitude) * Mathf.Sin(longitude)));
+            }
+        }
+        for (int b = 0; b < bands; b++)
+        {
+            for (int s = 0; s < segments; s++)
+            {
+                int a = b * (segments + 1) + s, up = a + segments + 1;
+                triangles.AddRange(new[] { a, up, a + 1, a + 1, up, up + 1 });
+            }
+        }
+        s_BallMesh = new Mesh { name = "Container Corner" };
+        s_BallMesh.SetVertices(vertices);
+        s_BallMesh.SetNormals(vertices.ConvertAll(v => v.normalized));
+        s_BallMesh.SetTriangles(triangles, 0);
+        s_BallMesh.RecalculateBounds();
+        return s_BallMesh;
+    }
+
+    // The box: thin solid cylinders along the edges (sized in FitToScale). The sphere: its lines of latitude and
+    // longitude as tubes of the same thickness, one mesh (made in FitToScale, the tubes' thickness depending on size).
     void BuildEdges()
     {
-        var root = new GameObject("Edges").transform;
+        var root = new GameObject(m_Shape == Shape.Box ? "Edges" : "Lines").transform;
         root.SetParent(transform, false);
+        if (m_Shape == Shape.Sphere)
+        {
+            m_SphereLines = new Mesh { name = "Container Sphere Lines" };
+            root.gameObject.AddComponent<MeshFilter>().sharedMesh = m_SphereLines;
+            var lines = root.gameObject.AddComponent<MeshRenderer>();
+            lines.sharedMaterial = m_EdgeMaterial;
+            lines.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            return;
+        }
         foreach (var (axis, _, _) in s_EdgeLayout)
         {
             var go = new GameObject("Edge");
@@ -895,43 +977,251 @@ public class TunnelContainer : NetworkBehaviour
         return v;
     }
 
+    // A point on the unit-diameter sphere: latitude and longitude in degrees.
+    static Vector3 OnSphere(float latitude, float longitude)
+    {
+        float lat = latitude * Mathf.Deg2Rad, lon = longitude * Mathf.Deg2Rad;
+        return 0.5f * new Vector3(Mathf.Cos(lat) * Mathf.Cos(lon), Mathf.Sin(lat), Mathf.Cos(lat) * Mathf.Sin(lon));
+    }
+
+    static Vector3 Latitude(float latitude, float t) => OnSphere(latitude, t * 360f);
+
+    // Around the great circle through the poles at this longitude (and the opposite one).
+    static Vector3 Meridian(float longitude, float t)
+    {
+        float angle = t * 2f * Mathf.PI, lon = longitude * Mathf.Deg2Rad;
+        return 0.5f * (Mathf.Cos(angle) * new Vector3(Mathf.Cos(lon), 0f, Mathf.Sin(lon)) + Mathf.Sin(angle) * Vector3.up);
+    }
+
+    // The sphere's lines: latitudes -60°, 0°, 60°; longitudes every 60° (three great circles through the poles).
+    static IEnumerable<System.Func<float, Vector3>> SphereLines()
+    {
+        foreach (float latitude in new[] { -60f, 0f, 60f })
+            yield return t => Latitude(latitude, t);
+        foreach (float longitude in new[] { 0f, 60f, 120f })
+            yield return t => Meridian(longitude, t);
+    }
+
+    /// <summary>The sphere's lines as closed tubes of this radius (in its own coordinates).</summary>
+    void BuildSphereLines(float radius)
+    {
+        m_SphereLinesFor = radius;
+        var vertices = new List<Vector3>();
+        var normals = new List<Vector3>();
+        var triangles = new List<int>();
+        foreach (var at in SphereLines())
+        {
+            int start = vertices.Count;
+            for (int i = 0; i < k_CircleSegments; i++)
+            {
+                float t = i / (float)k_CircleSegments;
+                var p = at(t);
+                var tangent = (at(t + 0.5f / k_CircleSegments) - at(t - 0.5f / k_CircleSegments)).normalized;
+                var outward = Vector3.ProjectOnPlane(p, tangent).normalized;
+                var side = Vector3.Cross(tangent, outward);
+                for (int k = 0; k < k_TubeSides; k++)
+                {
+                    float angle = k * 2f * Mathf.PI / k_TubeSides;
+                    var normal = Mathf.Cos(angle) * outward + Mathf.Sin(angle) * side;
+                    vertices.Add(p + normal * radius);
+                    normals.Add(normal);
+                }
+            }
+            for (int i = 0; i < k_CircleSegments; i++)
+            {
+                int ring = start + i * k_TubeSides, next = start + (i + 1) % k_CircleSegments * k_TubeSides;
+                for (int k = 0; k < k_TubeSides; k++)
+                {
+                    int k1 = (k + 1) % k_TubeSides;
+                    triangles.AddRange(new[] { ring + k, ring + k1, next + k, ring + k1, next + k1, next + k }); // facing out
+                }
+            }
+        }
+        m_SphereLines.Clear();
+        m_SphereLines.SetVertices(vertices);
+        m_SphereLines.SetNormals(normals);
+        m_SphereLines.SetTriangles(triangles, 0);
+        m_SphereLines.RecalculateBounds();
+    }
+
+    #endregion
+
+    #region Front corners
+
+    // A mixed reality box's front corners: a small ball on each, with a grab zone around it larger than the ball, so
+    // two hands on two of them stretch the front (see ContainerStretchTransformer). Each zone is kept at the box's
+    // size in meters whatever its scale (its transform undoes the box's), shown only on a mixed reality box.
+    void BuildCorners()
+    {
+        if (m_Shape != Shape.Box)
+            return;
+        var root = new GameObject("Front Corners").transform;
+        root.SetParent(transform, false);
+        for (int i = 0; i < 4; i++)
+        {
+            var zone = new GameObject("Corner").transform;
+            zone.SetParent(root, false);
+            var collider = (SphereCollider)Touchless(zone.gameObject.AddComponent<SphereCollider>());
+            var ball = new GameObject("Ball");
+            ball.transform.SetParent(zone, false);
+            ball.AddComponent<MeshFilter>().sharedMesh = BallMesh();
+            var renderer = ball.AddComponent<MeshRenderer>();
+            renderer.sharedMaterial = m_EdgeMaterial;
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            m_Corners.Add((zone, collider, renderer));
+        }
+    }
+
+    /// <summary>The front face's four corners, in its own coordinates.</summary>
+    Vector3 FrontCorner(int index)
+    {
+        int front = frontFace, axis = front / 2, u = (axis + 1) % 3, v = (axis + 2) % 3;
+        var corner = FaceNormal(front) * 0.5f;
+        corner[u] = (index == 1 || index == 2 ? 1 : -1) * 0.5f;
+        corner[v] = (index >= 2 ? 1 : -1) * 0.5f;
+        return corner;
+    }
+
+    // On the front's corners and shown on a mixed reality box; off otherwise (left active, so the grab interactable
+    // has their colliders from the start).
+    void PlaceCorners()
+    {
+        if (m_Corners.Count == 0)
+            return;
+        bool on = isMixedReality;
+        var s = SafeScale();
+        var undo = new Vector3(1f / s.x, 1f / s.y, 1f / s.z);
+        for (int i = 0; i < m_Corners.Count; i++)
+        {
+            var (zone, collider, ball) = m_Corners[i];
+            collider.enabled = on;
+            ball.enabled = on;
+            zone.localPosition = FrontCorner(i);
+            zone.localScale = undo;
+            collider.radius = m_CornerGrabRadius;
+            ball.transform.localScale = Vector3.one * m_CornerDiameter;
+        }
+    }
+
+    /// <summary>
+    /// Whether a point (a hand holding it) is on one of a mixed reality box's front corner balls: two hands on them
+    /// stretch its front, its depth unchanged.
+    /// </summary>
+    public bool OnFrontCorner(Vector3 world)
+    {
+        if (!isMixedReality)
+            return false;
+        foreach (var (zone, _, _) in m_Corners)
+            if (Vector3.Distance(zone.position, world) <= m_CornerGrabRadius * 1.5f)
+                return true;
+        return false;
+    }
+
     #endregion
 
     #region Grab zones and walls
 
-    // Grab zones: thin boxes along the edges, on the Default layer so the hands and lasers find them, touching nothing.
+    // Grab zones: thin boxes along the edges or lines, on the Default layer so the hands and lasers find them,
+    // touching nothing.
     void BuildGrabZones()
     {
         m_GrabRoot = new GameObject("Grab").transform;
         m_GrabRoot.SetParent(transform, false);
-        for (int i = 0; i < 12; i++)
-            m_Rods.Add(Touchless(m_GrabRoot.gameObject.AddComponent<BoxCollider>()));
+        if (m_Shape == Shape.Box)
+        {
+            for (int i = 0; i < 12; i++)
+                m_Rods.Add((BoxCollider)Touchless(m_GrabRoot.gameObject.AddComponent<BoxCollider>()));
+            return;
+        }
+        foreach (var at in SphereLines())
+        {
+            for (int i = 0; i < k_GrabSegments; i++)
+            {
+                var a = at(i / (float)k_GrabSegments);
+                var b = at((i + 1) / (float)k_GrabSegments);
+                var go = new GameObject("Grab Segment");
+                go.transform.SetParent(m_GrabRoot, false);
+                go.transform.localPosition = (a + b) * 0.5f;
+                go.transform.localRotation = Quaternion.LookRotation(b - a, (a + b).normalized);
+                var rod = (BoxCollider)Touchless(go.AddComponent<BoxCollider>());
+                rod.size = new Vector3(0f, 0f, (b - a).magnitude * 1.05f);
+                m_Rods.Add(rod);
+            }
+        }
     }
 
-    static BoxCollider Touchless(BoxCollider collider)
+    static Collider Touchless(Collider collider)
     {
         collider.excludeLayers = ~0; // found by the hands' and lasers' queries, but pushes nothing
         return collider;
     }
 
-    // Walls: on Ignore Raycast, just outside its faces; they always hold what is inside in.
+    // Walls: on Ignore Raycast, just outside its surface; they always hold what is inside in.
     void BuildWalls()
     {
         m_WallRoot = new GameObject("Walls").transform;
         m_WallRoot.SetParent(transform, false);
         m_WallRoot.gameObject.layer = k_IgnoreRaycastLayer;
-        for (int i = 0; i < 6; i++)
-            m_Faces.Add(m_WallRoot.gameObject.AddComponent<BoxCollider>());
+        if (m_Shape == Shape.Box)
+        {
+            for (int i = 0; i < 6; i++)
+                m_Faces.Add(m_WallRoot.gameObject.AddComponent<BoxCollider>());
+            return;
+        }
+
+        // Tiles over the sphere, a little wider than their share so they overlap.
+        for (int b = 0; b < k_WallBands; b++)
+        {
+            float latitude = -90f + (b + 0.5f) * 180f / k_WallBands;
+            // Angular size (radians); near the poles no narrower than half a band, so they close over the poles.
+            float height = Mathf.PI / k_WallBands * 1.15f;
+            float width = Mathf.Max(2f * Mathf.PI / k_WallSegments * Mathf.Cos(latitude * Mathf.Deg2Rad), Mathf.PI / k_WallBands * 0.5f) * 1.15f;
+            for (int s = 0; s < k_WallSegments; s++)
+            {
+                float longitude = (s + 0.5f) * 360f / k_WallSegments;
+                var normal = OnSphere(latitude, longitude).normalized;
+                var go = new GameObject("Wall Tile") { layer = k_IgnoreRaycastLayer };
+                go.transform.SetParent(m_WallRoot, false);
+                var east = Vector3.Cross(Vector3.up, normal).sqrMagnitude > 1e-6f ? Vector3.Cross(Vector3.up, normal).normalized : Vector3.right;
+                go.transform.localRotation = Quaternion.LookRotation(normal, Vector3.Cross(normal, east));
+                m_Tiles.Add((go.AddComponent<BoxCollider>(), width, height));
+            }
+        }
+    }
+
+    Vector3 SafeScale()
+    {
+        var s = transform.lossyScale;
+        return new Vector3(Mathf.Max(Mathf.Abs(s.x), 1e-4f), Mathf.Max(Mathf.Abs(s.y), 1e-4f), Mathf.Max(Mathf.Abs(s.z), 1e-4f));
     }
 
     /// <summary>
-    /// Keeps the edges, their grab zones and the walls their thickness in meters whatever the box's size (it can be
-    /// scaled differently along each axis).
+    /// Keeps the edges or lines, their grab zones, the corner balls and the walls their thickness in meters whatever
+    /// the container's size (the box can be scaled differently along each axis; the sphere scales evenly).
     /// </summary>
     void FitToScale()
     {
         m_SizedFor = transform.lossyScale;
-        var s = new Vector3(Mathf.Max(Mathf.Abs(m_SizedFor.x), 1e-4f), Mathf.Max(Mathf.Abs(m_SizedFor.y), 1e-4f), Mathf.Max(Mathf.Abs(m_SizedFor.z), 1e-4f));
+        var s = SafeScale();
+        PlaceCorners();
+
+        if (m_Shape == Shape.Sphere)
+        {
+            float scale = Mathf.Max(s.x, Mathf.Max(s.y, s.z));
+            float grab = m_GrabThickness / scale, wall = m_WallThickness / scale;
+            float tube = m_EdgeDiameter * 0.5f / scale;
+            if (m_SphereLines != null && !Mathf.Approximately(tube, m_SphereLinesFor))
+                BuildSphereLines(tube);
+            foreach (var rod in m_Rods)
+                rod.size = new Vector3(grab, grab, rod.size.z);
+            foreach (var (tile, width, height) in m_Tiles)
+            {
+                float radius = 0.5f + 0.5f * wall;
+                tile.center = new Vector3(0f, 0f, radius);
+                tile.size = new Vector3(width * radius, height * radius, wall);
+            }
+            return;
+        }
 
         for (int e = 0; e < s_EdgeLayout.Length; e++)
         {

@@ -357,8 +357,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::TunnelContainer
   ShowTopMostFoldoutHeaderGroup: 1
+  m_Shape: 0
   m_EdgeMaterial: {fileID: 2100000, guid: 5514c5843c6124b6d9194b561d1f9792, type: 2}
   m_EdgeDiameter: 0.00635
+  m_CornerDiameter: 0.0127
+  m_CornerGrabRadius: 0.025
   m_GrabThickness: 0.03
   m_WallThickness: 0.04
   m_WallMaterial: {fileID: 2100000, guid: b2f5dceb01f764f2485116173abf1096, type: 2}
