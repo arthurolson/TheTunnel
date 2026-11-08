@@ -361,6 +361,9 @@ MonoBehaviour:
   m_DiameterRange: {x: 0.002, y: 0.1}
   m_MinGrabRadius: 0.015
   m_ContactSlack: 0.004
+  m_SprayRange: 0.3
+  m_SprayHalfAngle: 15
+  m_GripLitColor: {r: 0.2, g: 1, b: 0.35, a: 1}
   m_DockDistance: 0.12
   m_BodyMaterial: {fileID: 2100000, guid: d01bf4b1342434e6dbfad7de3df6398b, type: 2}
   m_CapMaterial: {fileID: 2100000, guid: de625f803cf174b20b3773960dc5841a, type: 2}

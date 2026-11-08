@@ -5,13 +5,16 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.XR.Interaction.Toolkit;
 using UnityEngine.XR.Interaction.Toolkit.Interactables;
+using UnityEngine.XR.Interaction.Toolkit.Interactors;
+using UnityEngine.XR.Interaction.Toolkit.Interactors.Visuals;
 using UnityEngine.XR.Templates.MRTTabletopAssets;
 using XRMultiplayer;
 
 /// <summary>
 /// A painter's palette, placed by the TS Menu's Paint button with its marker (<see cref="TunnelMarker"/>) resting in
 /// the holder along its right side. Held and moved by its rim; let go near one of the tunnel's flat walls, it sets
-/// itself flat on the wall, and taking it in hand again takes it off.
+/// itself flat on the wall, and taking it in hand again takes it off. Grabbing the holder twice quickly (hand or laser)
+/// calls its marker back into the holder from wherever it is, even from another player's hand.
 /// On it: a colour chooser (hue, saturation, value and opacity) and five colour disks. Selecting a disk (point or
 /// poke) lets the chooser change that disk's colour; touching a disk with the marker's tip loads its colour into the
 /// marker. Check boxes choose what the marker does: solid Paint, Pencil lines (straight from touch to touch, or with
@@ -46,6 +49,14 @@ public class TunnelPalette : NetworkBehaviour
     [SerializeField]
     [Tooltip("Where the marker rests on the palette.")]
     Transform m_Dock;
+
+    [SerializeField]
+    [Tooltip("The grab zone round the holder: grabbed twice quickly there, the marker comes back.")]
+    Collider m_HolderGrab;
+
+    [SerializeField]
+    [Tooltip("The most time between the two grabs on the holder (seconds).")]
+    float m_DoubleClickTime = 0.6f;
 
     [SerializeField]
     [Tooltip("Let go this close to a flat tunnel wall (meters) and it sets itself on the wall.")]
@@ -379,8 +390,51 @@ public class TunnelPalette : NetworkBehaviour
             TunnelMenu.DeleteGrabbed(this, m_Grab);
             return;
         }
+        if (OnHolder(args.interactorObject))
+        {
+            if (Time.unscaledTime - m_LastHolderClick <= m_DoubleClickTime)
+            {
+                m_LastHolderClick = -10f;
+                RecallMarkers();
+            }
+            else
+            {
+                m_LastHolderClick = Time.unscaledTime;
+            }
+        }
         if (IsSpawned)
             GrabbedRpc();
+    }
+
+    float m_LastHolderClick = -10f;
+
+    // Whether a grab took the palette by its holder: where the laser hit it, or where the hand is.
+    bool OnHolder(IXRSelectInteractor interactor)
+    {
+        if (m_HolderGrab == null || interactor == null)
+            return false;
+        Vector3 point;
+        if (interactor is NearFarInteractor nearFar && nearFar.selectionRegion.Value == NearFarInteractor.Region.Far &&
+            nearFar.TryGetCurveEndPoint(out var end) != EndPointType.None)
+            point = end;
+        else
+            point = interactor.GetAttachTransform(m_Grab).position;
+        return (m_HolderGrab.ClosestPoint(point) - point).sqrMagnitude <= 0.02f * 0.02f;
+    }
+
+    void RecallMarkers()
+    {
+        int recalled = 0;
+        foreach (var marker in TunnelMarker.all)
+        {
+            if (marker == null || marker.palette != this)
+                continue;
+            marker.Recall();
+            recalled++;
+        }
+        Debug.Log($"[Paint] holder double-clicked: {recalled} marker(s) called back");
+        if (recalled > 0)
+            PlayerHudNotification.Instance?.ShowText("Marker back in its holder", 1.5f);
     }
 
     // The marker resting on it goes to whoever holds it, so it moves with the palette on their headset.

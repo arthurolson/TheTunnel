@@ -183,6 +183,9 @@ static class PaintBuilder
         dock.SetParent(palette.transform, false);
         dock.localPosition = new Vector3(0.275f, -0.01f, -0.012f);
         dock.localRotation = Quaternion.LookRotation(Vector3.up, Vector3.back); // its tip up
+        // A grab zone round the holder: grabbed twice quickly there, the palette calls its marker back.
+        Rim(palette.transform, "Holder Grab", new Vector3(0.275f, -0.01f, -0.004f), new Vector3(0.045f, 0.22f, 0.04f));
+        var holderGrab = palette.transform.Find("Holder Grab").GetComponent<BoxCollider>();
 
         // The controls.
         var canvasObject = new GameObject("Palette Canvas", typeof(RectTransform));
@@ -307,6 +310,7 @@ static class PaintBuilder
         so.FindProperty("m_ClearRow").objectReferenceValue = clear;
         so.FindProperty("m_Status").objectReferenceValue = status;
         so.FindProperty("m_Dock").objectReferenceValue = dock;
+        so.FindProperty("m_HolderGrab").objectReferenceValue = holderGrab;
         so.ApplyModifiedPropertiesWithoutUndo();
         return Save(palette);
     }

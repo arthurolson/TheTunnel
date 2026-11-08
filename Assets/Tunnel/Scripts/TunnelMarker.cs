@@ -310,6 +310,42 @@ public class TunnelMarker : NetworkBehaviour
             SetDocked(true);
     }
 
+    /// <summary>
+    /// Back into its palette's holder from wherever it is, out of whoever's hand (on the headset that moves it).
+    /// </summary>
+    public void Recall()
+    {
+        if (IsSpawned)
+            RecallRpc();
+        else
+            DoRecall();
+    }
+
+    [Rpc(SendTo.Owner, InvokePermission = RpcInvokePermission.Everyone)]
+    void RecallRpc() => DoRecall();
+
+    void DoRecall()
+    {
+        if (m_Grab != null && m_Grab.isSelected && m_Grab.interactionManager != null)
+            m_Grab.interactionManager.CancelInteractableSelection((IXRSelectInteractable)m_Grab);
+        EndStroke();
+        SetDocked(true);
+        var holder = palette;
+        if (holder == null || holder.dock == null)
+            return;
+        transform.SetPositionAndRotation(holder.dock.position, holder.dock.rotation);
+        if (m_Body != null)
+        {
+            m_Body.position = holder.dock.position;
+            m_Body.rotation = holder.dock.rotation;
+            if (!m_Body.isKinematic)
+            {
+                m_Body.linearVelocity = Vector3.zero;
+                m_Body.angularVelocity = Vector3.zero;
+            }
+        }
+    }
+
     void SetDocked(bool on)
     {
         if (on == docked)
