@@ -112,6 +112,8 @@ static class PaintBuilder
         for (int i = toy.transform.childCount - 1; i >= 0; i--)
             Object.DestroyImmediate(toy.transform.GetChild(i).gameObject);
         Object.DestroyImmediate(toy.GetComponent<MoleculeGravity>());
+        if (toy.TryGetComponent(out CapsidSites sites)) // 2PLV's binding sites (Tunnel > Movie)
+            Object.DestroyImmediate(sites);
         toy.transform.localScale = Vector3.one;
 
         // It stays where it's left and pushes nothing.

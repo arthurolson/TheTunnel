@@ -17,6 +17,9 @@ using XRMultiplayer;
 /// lock does the same for the headset that simulates it). While the TS Menu's Delete is on, grabbing it deletes it.
 /// Inside a Container's mixed reality box it passes through the tunnel's walls (the box is set into them).
 /// In a session only its owner simulates it and the others follow (see <see cref="FollowOwner"/>).
+/// While the 3D movie of the container it is in is paused (see <see cref="TunnelMovie"/>), it stands still where it is
+/// and goes on as it was when the movie plays again; it can still be moved by hand. Antibodies bound to a capsid add
+/// their volume, and so their mass, to it (see <see cref="extraVolume"/>).
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
 public class MoleculeGravity : MonoBehaviour
@@ -86,6 +89,26 @@ public class MoleculeGravity : MonoBehaviour
         set => m_Volume = value;
     }
 
+    /// <summary>
+    /// Volume carried along besides its own (toy units at its own size): antibodies bound to a capsid, which weigh
+    /// as much as they did on their own.
+    /// </summary>
+    public float extraVolume
+    {
+        get => m_ExtraVolume;
+        set
+        {
+            m_ExtraVolume = Mathf.Max(0f, value);
+            UpdateMass();
+        }
+    }
+
+    /// <summary>Every molecule in the scene.</summary>
+    public static readonly System.Collections.Generic.List<MoleculeGravity> all = new();
+
+    /// <summary>Whether it is parked where it was placed, frozen until first grabbed or pushed.</summary>
+    public bool isParked => m_Rigidbody != null && m_Rigidbody.constraints != RigidbodyConstraints.None;
+
     /// <summary>Whether this headset moves it (it isn't networked, or this player owns it).</summary>
     public bool simulatedHere => m_NetworkPhysics == null || !m_NetworkPhysics.IsSpawned || m_NetworkPhysics.IsOwner;
 
@@ -104,6 +127,9 @@ public class MoleculeGravity : MonoBehaviour
     Collider[] m_Colliders;
     bool m_PassingWalls;
     int m_WallsVersion = -1;
+    float m_ExtraVolume;
+    bool m_Paused;
+    Vector3 m_PausedVelocity, m_PausedSpin;
 
     void Awake()
     {
@@ -129,6 +155,25 @@ public class MoleculeGravity : MonoBehaviour
 
         if (TryGetComponent(out m_Grab))
             m_Grab.selectEntered.AddListener(OnGrabbed);
+    }
+
+    void OnEnable() => all.Add(this);
+
+    void OnDisable() => all.Remove(this);
+
+    /// <summary>
+    /// Call when colliders are added to it (antibodies bound to a capsid): they get the molecules' bounce and pass
+    /// through the tunnel's walls with the rest of it.
+    /// </summary>
+    public void CollidersChanged()
+    {
+        m_Colliders = GetComponentsInChildren<Collider>(true);
+        foreach (var collider in m_Colliders)
+            if (!collider.isTrigger)
+                collider.sharedMaterial = s_Material;
+        m_WallsVersion = -1;
+        if (m_PassingWalls)
+            TunnelSegmentGeometry.IgnoreWalls(m_Colliders, true);
     }
 
     void Start()
@@ -177,7 +222,7 @@ public class MoleculeGravity : MonoBehaviour
         if (m_Volume <= 0f)
             return;
         float scale = Mathf.Abs(m_MassForScale.x * m_MassForScale.y * m_MassForScale.z);
-        m_Rigidbody.mass = Mathf.Max(m_Density * m_Volume * scale, 1e-5f);
+        m_Rigidbody.mass = Mathf.Max(m_Density * (m_Volume + m_ExtraVolume) * scale, 1e-5f);
     }
 
     /// <summary>
@@ -254,25 +299,56 @@ public class MoleculeGravity : MonoBehaviour
     /// In a session only the molecule's owner (the player who last held it, or the host) simulates it; everyone
     /// else's copy is kinematic and just follows the network, so all players see the same motion instead of each
     /// headset's physics bouncing its own copy around. While held, the interaction toolkit has the say.
+    /// While its container's movie is paused, its owner holds it still too, and lets it go on as it was afterwards.
     /// </summary>
-    void FollowOwner()
+    void FollowOwner(bool paused)
     {
         if (m_Grab != null && m_Grab.isSelected)
+        {
+            // What the hand does with it is what it does next.
+            m_Paused = false;
+            m_PausedVelocity = m_PausedSpin = Vector3.zero;
             return;
+        }
         bool follower = m_NetworkPhysics != null && m_NetworkPhysics.IsSpawned && !m_NetworkPhysics.IsOwner;
-        if (m_Rigidbody.isKinematic == follower)
+        bool pause = paused && !follower;
+        if (pause != m_Paused)
+        {
+            if (pause && !m_Rigidbody.isKinematic)
+            {
+                m_PausedVelocity = m_Rigidbody.linearVelocity;
+                m_PausedSpin = m_Rigidbody.angularVelocity;
+            }
+            else if (!pause)
+            {
+                // Going on: moving again, as it was when paused.
+                m_Rigidbody.isKinematic = follower;
+                if (!follower)
+                {
+                    m_Rigidbody.linearVelocity = m_PausedVelocity;
+                    m_Rigidbody.angularVelocity = m_PausedSpin;
+                }
+                m_PausedVelocity = m_PausedSpin = Vector3.zero;
+            }
+            m_Paused = pause;
+        }
+
+        bool kinematic = follower || m_Paused;
+        if (m_Rigidbody.isKinematic == kinematic)
             return;
-        if (follower)
+        if (kinematic)
         {
             m_Rigidbody.linearVelocity = Vector3.zero;
             m_Rigidbody.angularVelocity = Vector3.zero;
         }
-        m_Rigidbody.isKinematic = follower;
+        m_Rigidbody.isKinematic = kinematic;
     }
 
     void FixedUpdate()
     {
-        FollowOwner();
+        // Inside a container its viscosity scales the drag (1 outside them all), and its heat may move it.
+        var container = TunnelContainer.At(m_Rigidbody.worldCenterOfMass);
+        FollowOwner(container != null && container.movie != null && container.movie.isPaused);
         if (transform.lossyScale != m_MassForScale)
             UpdateMass();
 
@@ -284,8 +360,6 @@ public class MoleculeGravity : MonoBehaviour
                 m_Rigidbody.WakeUp();
         }
 
-        // Inside a container its viscosity scales the drag (1 outside them all), and its heat may move it.
-        var container = TunnelContainer.At(m_Rigidbody.worldCenterOfMass);
         float viscosity = container != null ? container.viscosity : 1f;
         // In a mixed reality box (set into a tunnel wall, or on its way) the tunnel's walls don't touch it.
         bool passWalls = container != null && container.isMixedReality;

@@ -119,6 +119,8 @@ static class MoleculeLibraryBuilder
 
         // The toy: a copy of 2PLV's with this molecule's meshes, collider and colour feedback.
         var toy = Object.Instantiate(template);
+        if (toy.TryGetComponent(out CapsidSites sites)) // 2PLV's own binding sites (Tunnel > Movie)
+            Object.DestroyImmediate(sites);
         toy.name = $"Toy_{name}_Networked";
         var templateVisual = template.transform.GetChild(0);
         var templateRenderers = templateVisual.GetComponentsInChildren<MeshRenderer>(true);

@@ -994,6 +994,7 @@ GameObject:
   - component: {fileID: 1710496985545317751}
   - component: {fileID: 7505516534716853078}
   - component: {fileID: 5471179343766225167}
+  - component: {fileID: 4938413448554938728}
   m_Layer: 0
   m_Name: Toy_IGG_Networked
   m_TagString: Untagged
@@ -1344,6 +1345,36 @@ MonoBehaviour:
   m_Volume: 0.00034912984
   m_Density: 1000
   m_Bounciness: 0.6
+  m_RoomSpeed: 0.25
+  m_ReferenceMass: 0.0766
+  m_MaxThermalSpeed: 1
+  m_MinJostleRate: 0.5
+  m_SpinScale: 0.25
+  m_MaxThermalSpin: 6
+  m_SpeedRecovery: 1.5
+--- !u!114 &4938413448554938728
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5793732862484036846}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4d2a367a8dce147f3b4b7787063f7cab, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::AntibodyBinder
+  m_Tips:
+  - {x: 0.051856887, y: 0.08689695, z: -0.0075372024}
+  - {x: -0.011740988, y: -0.080494985, z: 0.06939023}
+  m_Arms:
+  - {x: 0.49579373, y: 0.86808884, z: -0.024705108}
+  - {x: -0.05284868, y: -0.7265023, z: 0.6851288}
+  m_Pull: 4
+  m_MaxApproachSpeed: 0.2
+  m_Response: 8
+  m_SpinDamping: 3
+  m_GiveUpAfter: 12
 --- !u!1 &6054011477436634982
 GameObject:
   m_ObjectHideFlags: 0

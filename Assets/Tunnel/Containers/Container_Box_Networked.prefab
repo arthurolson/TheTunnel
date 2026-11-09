@@ -17,6 +17,7 @@ GameObject:
   - component: {fileID: 6272375593416579455}
   - component: {fileID: 1203998025758367699}
   - component: {fileID: 4843898452584592835}
+  - component: {fileID: 673636216158446994}
   m_Layer: 0
   m_Name: Container_Box_Networked
   m_TagString: Untagged
@@ -384,3 +385,18 @@ MonoBehaviour:
   m_CornerZone: 0.35
   m_AxisShare: 0.35
   m_SizeRange: {x: 0.05, y: 5}
+--- !u!114 &673636216158446994
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2873252042790380236}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4fe8d5bae29b44fafba084d31079b504, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::TunnelMovie
+  ShowTopMostFoldoutHeaderGroup: 1
+  m_PanelPrefab: {fileID: 2535420819302649588, guid: 3fa608898f4d14ef8aa8fb20bcc8e68b, type: 3}
+  m_PanelGap: 0.03

@@ -528,6 +528,7 @@ GameObject:
   - component: {fileID: 16335490760759685}
   - component: {fileID: 8052730427048551762}
   - component: {fileID: 5771184832499384177}
+  - component: {fileID: 6089494870424456780}
   m_Layer: 0
   m_Name: Toy_Zika_Networked
   m_TagString: Untagged
@@ -878,6 +879,81 @@ MonoBehaviour:
   m_Volume: 0.024591003
   m_Density: 1000
   m_Bounciness: 0.6
+  m_RoomSpeed: 0.25
+  m_ReferenceMass: 0.0766
+  m_MaxThermalSpeed: 1
+  m_MinJostleRate: 0.5
+  m_SpinScale: 0.25
+  m_MaxThermalSpin: 6
+  m_SpeedRecovery: 1.5
+--- !u!114 &6089494870424456780
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1938404238223173257}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 217fa5f6ae6b24c919846e1847a90153, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CapsidSites
+  ShowTopMostFoldoutHeaderGroup: 1
+  m_Symmetry: 3-fold
+  m_Axes:
+  - {x: 0.6066738, y: -0.0014135836, z: 0.7949497}
+  - {x: 0.98215216, y: -0.0025922111, z: 0.18807024}
+  - {x: 0.18565126, y: -0.57763255, z: 0.7949051}
+  - {x: 0.3009236, y: -0.934934, z: 0.18799819}
+  - {x: 0.7931882, y: -0.57953954, z: -0.18704638}
+  - {x: -0.6066738, y: 0.0014135836, z: -0.7949497}
+  - {x: -0.98215216, y: 0.0025922111, z: -0.18807024}
+  - {x: -0.18565126, y: 0.57763255, z: -0.7949051}
+  - {x: -0.3009236, y: 0.934934, z: -0.18799819}
+  - {x: -0.7931882, y: 0.57953954, z: 0.18704638}
+  - {x: 0.18876013, y: 0.5770638, z: 0.7945861}
+  - {x: 0.30595386, y: 0.9334039, z: 0.18748197}
+  - {x: 0.796297, y: 0.57515675, z: -0.18736544}
+  - {x: -0.18876013, y: -0.5770638, z: -0.7945861}
+  - {x: -0.30595386, y: -0.9334039, z: -0.18748197}
+  - {x: -0.796297, y: -0.57515675, z: 0.18736544}
+  - {x: -0.49246836, y: -0.35527793, z: 0.79451394}
+  - {x: -0.49054697, y: 0.35836357, z: 0.7943168}
+  - {x: 0.49246836, y: 0.35527793, z: -0.79451394}
+  - {x: 0.49054697, y: -0.35836357, z: -0.7943168}
+  m_BaseRadius:
+  - 0.27232778
+  - 0.27234963
+  - 0.27233472
+  - 0.27235252
+  - 0.27234766
+  - 0.27233082
+  - 0.2723308
+  - 0.27234134
+  - 0.2723338
+  - 0.27235672
+  - 0.27231514
+  - 0.27235222
+  - 0.27234432
+  - 0.2723227
+  - 0.27233937
+  - 0.27235702
+  - 0.27232632
+  - 0.27231812
+  - 0.27233967
+  - 0.27232814
+  m_Radius: 0.27876905
+  m_LengthFraction: 0.25
+  m_DiameterFraction: 0.1
+  m_MaxAntibodies: 3
+  m_Shades:
+  - 0.7
+  - 0.5
+  - 0.33
+  m_AntibodyPrefab: {fileID: 5793732862484036846, guid: 0aa5eb9b02b754392ae7e2ccca4efe27, type: 3}
+  m_SiteMaterial: {fileID: 2100000, guid: 06c3c81f7e75748a692cf9e0786e227c, type: 2}
+  m_SettleTime: 0.3
+  m_VanishDelay: 0.6
 --- !u!1 &2581913187124959188
 GameObject:
   m_ObjectHideFlags: 0

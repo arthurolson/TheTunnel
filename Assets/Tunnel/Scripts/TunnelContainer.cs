@@ -142,6 +142,9 @@ public class TunnelContainer : NetworkBehaviour
 
     public Shape shape => m_Shape;
 
+    /// <summary>Its 3D movie: the controls that direct what happens inside it (see <see cref="TunnelMovie"/>).</summary>
+    public TunnelMovie movie { get; private set; }
+
     /// <summary>Which face is the mixed reality box's open front: axis * 2, + 1 on the axis's positive side.</summary>
     public int frontFace => IsSpawned ? m_Front.Value : m_LocalFront;
 
@@ -188,6 +191,7 @@ public class TunnelContainer : NetworkBehaviour
     {
         m_Grab = GetComponent<XRGrabInteractable>();
         m_Body = GetComponent<Rigidbody>();
+        movie = GetComponent<TunnelMovie>();
         // No spawn lock: the network interactable would freeze a new box on the host (who owns every new one), and a
         // frozen kinematic body turns and scales in the hand but doesn't move. A box is moved only by hand anyway.
         if (TryGetComponent(out NetworkPhysicsInteractable networkPhysics))

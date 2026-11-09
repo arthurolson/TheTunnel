@@ -24,6 +24,7 @@ static class ContainerBuilder
     const string k_RegistryPath = "Assets/Tunnel/TunnelPrefabs.asset";
     const string k_SegmentPath = "Assets/Tunnel/TG_TunnelSegment.prefab";
     const string k_NetworkListPath = "Assets/MRTabletopAssets/Prefabs/GameModes/Sandbox/NetworkedPrefabs/_SandboxPrefabList.asset";
+    const string k_MoviePanelPath = "Assets/Tunnel/Movie/Movie_Panel.prefab";
 
     // A new container is 30 cm across.
     const float k_Size = 0.3f;
@@ -135,6 +136,8 @@ static class ContainerBuilder
         for (int i = container.transform.childCount - 1; i >= 0; i--)
             Object.DestroyImmediate(container.transform.GetChild(i).gameObject);
         Object.DestroyImmediate(container.GetComponent<MoleculeGravity>());
+        if (container.TryGetComponent(out CapsidSites sites)) // 2PLV's binding sites (Tunnel > Movie)
+            Object.DestroyImmediate(sites);
         container.transform.localScale = Vector3.one * k_Size;
 
         // It stays where it's left and pushes what's inside when moved, but isn't pushed itself.
@@ -167,6 +170,12 @@ static class ContainerBuilder
         so.ApplyModifiedPropertiesWithoutUndo();
         if (shape == TunnelContainer.Shape.Box)
             container.AddComponent<ContainerStretchTransformer>(); // the sphere scales evenly
+
+        // Its 3D movie, and the controls shown on it (made by Tunnel > Movie > Build 3D Movie).
+        var movie = container.AddComponent<TunnelMovie>();
+        var movieSo = new SerializedObject(movie);
+        movieSo.FindProperty("m_PanelPrefab").objectReferenceValue = AssetDatabase.LoadAssetAtPath<TunnelMoviePanel>(k_MoviePanelPath);
+        movieSo.ApplyModifiedPropertiesWithoutUndo();
 
         string path = $"{k_Folder}/{container.name}.prefab";
         var prefab = PrefabUtility.SaveAsPrefabAsset(container, path);
@@ -260,6 +269,7 @@ static class ContainerBuilder
             var unsnapRow = Row("Unsnap Row", -35f, "Unsnap from wall");
             var randomRow = Row("Random Row", -125f, "■  Random motion");
             var ballisticRow = Row("Ballistic Row", -190f, "□  Ballistic motion");
+            var movieRow = Row("Movie Row", -385f, "□  3D movie controls");
 
             // Viscosity: the molecule list's Magnification slider, 0 to 1 in tenths.
             var viscosity = list.transform.Find("Magnification");
@@ -314,6 +324,7 @@ static class ContainerBuilder
             so.FindProperty("m_BallisticRow").objectReferenceValue = ballisticRow;
             so.FindProperty("m_TemperatureSlider").objectReferenceValue = temperatureSlider;
             so.FindProperty("m_TemperatureText").objectReferenceValue = temperatureText;
+            so.FindProperty("m_MovieRow").objectReferenceValue = movieRow;
             so.ApplyModifiedPropertiesWithoutUndo();
 
             var tunnelMenu = control.GetComponent<TunnelMenu>();

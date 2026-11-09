@@ -13,7 +13,8 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// sets itself into a tunnel wall (see <see cref="TunnelContainer.isMixedReality"/>),
 /// and Unsnap from wall pulls it back out into the tunnel (see <see cref="TunnelContainer.Unsnap"/>);
 /// Random motion / Ballistic motion and the thermometer (absolute zero to 100 °C, continuous, read in °C) show and set
-/// the heat inside it (see <see cref="TunnelContainer.temperature"/>).
+/// the heat inside it (see <see cref="TunnelContainer.temperature"/>); 3D movie controls shows or hides its movie's
+/// controls on the container (see <see cref="TunnelMovie"/>).
 /// In a session everyone sees the same menu: the shape checked, the container it shows (the one placed or held last by
 /// anyone) and its messages.
 /// Works locally when not connected.
@@ -66,6 +67,9 @@ public class TunnelContainerMenu : NetworkBehaviour
     TMP_Text m_TemperatureText;
 
     [SerializeField]
+    Button m_MovieRow;
+
+    [SerializeField]
     float m_GapFromList = 0.05f;
 
     [SerializeField]
@@ -96,6 +100,8 @@ public class TunnelContainerMenu : NetworkBehaviour
             m_MixedRealityRow.onClick.AddListener(ToggleMixedReality);
         if (m_UnsnapRow != null)
             m_UnsnapRow.onClick.AddListener(Unsnap);
+        if (m_MovieRow != null)
+            m_MovieRow.onClick.AddListener(ToggleMovie);
         if (m_ViscositySlider != null)
         {
             // Steps of 0.1: the slider counts tenths.
@@ -152,6 +158,23 @@ public class TunnelContainerMenu : NetworkBehaviour
         ShowMixedReality(container);
         ShowViscosity(container);
         ShowHeat(container);
+        ShowMovie(container);
+    }
+
+    void ShowMovie(TunnelContainer container)
+    {
+        var movie = container != null ? container.movie : null;
+        if (movie == null)
+            SetRow(m_MovieRow, "□  3D movie controls  <color=#AAA>(place a container first)</color>", false);
+        else
+            SetRow(m_MovieRow, (movie.controlsShown ? "■" : "□") + "  3D movie controls  <color=#AAA>on the container</color>", true);
+    }
+
+    void ToggleMovie()
+    {
+        var movie = TunnelContainer.current != null ? TunnelContainer.current.movie : null;
+        if (movie != null)
+            movie.SetControls(!movie.controlsShown);
     }
 
     void ShowMixedReality(TunnelContainer container)
