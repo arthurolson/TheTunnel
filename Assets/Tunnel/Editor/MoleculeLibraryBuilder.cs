@@ -14,6 +14,9 @@ using UnityEngine.XR.Interaction.Toolkit.AffordanceSystem.Rendering;
 /// damped, grabbable and scalable with the same gestures, shared over the network, at the same ångström-to-meter scale
 /// as 2PLV and coloured by subunit type with 2PLV's chain colours. Its collider is the smallest that encloses the
 /// whole surface: an oriented box or an ellipsoid, whichever has less volume (see <see cref="MoleculeColliderFit"/>).
+/// A model too detailed for the headset (more than <see cref="k_MaxVertices"/> vertices in all, such as a whole virion)
+/// is simplified first: its vertices are merged on a grid just coarse enough to bring it under that (see
+/// <see cref="Simplify"/>), which keeps a molecular surface's shape down to a few ångströms.
 /// The new toys are added to the network prefab list and to the molecule list in TunnelPrefabs.asset.
 /// Runs from Tunnel > Molecules > Update Molecule Library, and by itself when a model is added under Assets/Molecules.
 /// </summary>
@@ -28,6 +31,9 @@ static class MoleculeLibraryBuilder
     const float k_UnitsPerAngstrom = 0.2f / 167f;
 
     static readonly string[] k_ModelExtensions = { ".glb", ".gltf", ".obj", ".fbx" };
+
+    // The most vertices a molecule's toy has in all (the capsids have 40,000 to 60,000).
+    const int k_MaxVertices = 200000;
 
     [MenuItem("Tunnel/Molecules/Update Molecule Library")]
     public static void UpdateLibrary()
@@ -105,10 +111,35 @@ static class MoleculeLibraryBuilder
             var mesh = new Mesh { name = $"{name}_Type{g + 1}", indexFormat = vertexCount > 65535 ? IndexFormat.UInt32 : IndexFormat.UInt16 };
             mesh.CombineMeshes(combine, true, true);
             mesh.RecalculateBounds();
-            foreach (var v in mesh.vertices)
-                radius = Mathf.Max(radius, v.magnitude);
             meshes.Add(mesh);
         }
+
+        string simplified = "";
+        int totalVertices = meshes.Sum(m => m.vertexCount);
+        if (totalVertices > k_MaxVertices)
+        {
+            // The finest grid that brings it under the budget, all its parts alike (a surface's vertices go as one over the
+            // cell's area, so start a little finer than that suggests).
+            float cell = 0.7f * Mathf.Sqrt(totalVertices / (float)k_MaxVertices) * k_UnitsPerAngstrom;
+            List<Mesh> reduced;
+            while (true)
+            {
+                reduced = meshes.Select(m => Simplify(m, cell)).ToList();
+                if (reduced.Sum(m => m.vertexCount) <= k_MaxVertices)
+                    break;
+                foreach (var m in reduced)
+                    Object.DestroyImmediate(m);
+                cell *= 1.2f;
+            }
+            foreach (var m in meshes)
+                Object.DestroyImmediate(m);
+            meshes = reduced;
+            simplified = $"simplified from {totalVertices:N0} to {meshes.Sum(m => m.vertexCount):N0} vertices ({meshes.Sum(m => m.triangles.Length / 3):N0} triangles) " +
+                $"on a {cell / k_UnitsPerAngstrom:0.0} Å grid; ";
+        }
+        foreach (var mesh in meshes)
+            foreach (var v in mesh.vertices)
+                radius = Mathf.Max(radius, v.magnitude);
 
         string meshPath = $"{folder}/{name}_Meshes.asset";
         AssetDatabase.DeleteAsset(meshPath);
@@ -186,10 +217,82 @@ static class MoleculeLibraryBuilder
         string prefabPath = $"{folder}/{toy.name}.prefab";
         var prefab = PrefabUtility.SaveAsPrefabAsset(toy, prefabPath);
         Object.DestroyImmediate(toy);
-        Debug.Log($"[Molecules] made {prefabPath} from {Path.GetFileName(modelPath)}: {meshes.Count} subunit type(s), " +
+        Debug.Log($"[Molecules] made {prefabPath} from {Path.GetFileName(modelPath)}: {simplified}{meshes.Count} subunit type(s), " +
             $"{filters.Count} subunits, outer radius {radius / k_UnitsPerAngstrom:0} Å; collider {fit.kind} " +
             $"(box {box.volume / sphereVolume:P0}, ellipsoid {ellipsoid.volume / sphereVolume:P0} of the outer sphere's volume)");
         return prefab;
+    }
+
+    /// <summary>
+    /// A coarser copy of a mesh: every vertex in the same grid cell becomes one, at their average position (and normal),
+    /// and the triangles that shrink to a line or a point go. On a smooth molecular surface this keeps its shape at the
+    /// grid's scale.
+    /// </summary>
+    static Mesh Simplify(Mesh source, float cell)
+    {
+        var vertices = source.vertices;
+        var normals = source.normals;
+        bool hasNormals = normals != null && normals.Length == vertices.Length;
+        var cellOf = new Dictionary<long, int>();
+        var remap = new int[vertices.Length];
+        var sums = new List<Vector3>();
+        var normalSums = new List<Vector3>();
+        var counts = new List<int>();
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            var v = vertices[i];
+            long key = ((long)(Mathf.FloorToInt(v.x / cell) + 1000000) << 42) | ((long)(Mathf.FloorToInt(v.y / cell) + 1000000) << 21) | (long)(Mathf.FloorToInt(v.z / cell) + 1000000);
+            if (!cellOf.TryGetValue(key, out int index))
+            {
+                index = sums.Count;
+                cellOf[key] = index;
+                sums.Add(Vector3.zero);
+                normalSums.Add(Vector3.zero);
+                counts.Add(0);
+            }
+            remap[i] = index;
+            sums[index] += v;
+            if (hasNormals)
+                normalSums[index] += normals[i];
+            counts[index]++;
+        }
+
+        var positions = new Vector3[sums.Count];
+        for (int i = 0; i < positions.Length; i++)
+            positions[i] = sums[i] / counts[i];
+        var triangles = new List<int>();
+        var seen = new HashSet<(int, int, int)>();
+        var sourceTriangles = source.triangles;
+        for (int t = 0; t < sourceTriangles.Length; t += 3)
+        {
+            int a = remap[sourceTriangles[t]], b = remap[sourceTriangles[t + 1]], c = remap[sourceTriangles[t + 2]];
+            if (a == b || b == c || a == c)
+                continue;
+            // The same triangle once (in whichever order its corners came first).
+            var key = a < b && a < c ? (a, b, c) : b < c ? (b, c, a) : (c, a, b);
+            if (!seen.Add(key))
+                continue;
+            triangles.Add(a);
+            triangles.Add(b);
+            triangles.Add(c);
+        }
+
+        var mesh = new Mesh { name = source.name, indexFormat = positions.Length > 65535 ? IndexFormat.UInt32 : IndexFormat.UInt16 };
+        mesh.SetVertices(positions);
+        mesh.SetTriangles(triangles, 0);
+        if (hasNormals)
+        {
+            var averaged = new Vector3[positions.Length];
+            for (int i = 0; i < averaged.Length; i++)
+                averaged[i] = normalSums[i].normalized;
+            mesh.SetNormals(averaged);
+        }
+        else
+        {
+            mesh.RecalculateNormals();
+        }
+        mesh.RecalculateBounds();
+        return mesh;
     }
 
     /// <summary>

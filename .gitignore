@@ -61,3 +61,6 @@ crashlytics-build.properties
 !/Assets/StreamingAssets/Viewer/*/.gitkeep
 /Assets/StreamingAssets/Viewer/index.json
 /Assets/StreamingAssets/Viewer/index.json.meta
+
+# ---- Molecule models too large for the repo: the toy keeps its own (simplified) meshes ----
+/Assets/Molecules/SARS/*.glb
