@@ -4,8 +4,9 @@ using UnityEngine.UI;
 using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 
 /// <summary>
-/// A container's 3D movie controls (see <see cref="TunnelMovie"/>), shown over the container: Start movie, Pause,
-/// Play, Show binding sites and Save starting state (which asks for a name on its keyboard, then saves). Its status
+/// A container's 3D movie controls (see <see cref="TunnelMovie"/>), shown beside the container: Start movie, Pause,
+/// Play, Show binding sites, the binding sites' diameter (2% to 30% of each capsid's, shared by everyone) and Save
+/// starting state (which asks for a name on its keyboard, then saves). Its status
 /// shows what the movie is doing, how many capsids and antibodies are in it, and its latest message.
 /// Made by Tunnel > Movie > Build 3D Movie.
 /// </summary>
@@ -27,6 +28,12 @@ public class TunnelMoviePanel : MonoBehaviour
     Button m_SaveRow;
 
     [SerializeField]
+    Slider m_DiameterSlider;
+
+    [SerializeField]
+    TMP_Text m_DiameterText;
+
+    [SerializeField]
     TMP_Text m_Title;
 
     [SerializeField]
@@ -39,13 +46,20 @@ public class TunnelMoviePanel : MonoBehaviour
     [Tooltip("The panel's height (meters).")]
     float m_Height = 0.2f;
 
+    [SerializeField]
+    [Tooltip("The panel's width (meters).")]
+    float m_Width = 0.25f;
+
     TunnelMovie m_Movie;
     MovieSnapshot m_Saving;
     bool m_SavingAtStart;
     string m_Note = "";
     float m_NextRefresh;
+    float m_DiameterShown = -1f;
 
     public float height => m_Height;
+
+    public float width => m_Width;
 
     /// <summary>Whether its keyboard is out for a name (the panel then stays put).</summary>
     public bool typing => m_Saving != null && m_Keyboard != null && m_Keyboard.isOpen;
@@ -63,6 +77,15 @@ public class TunnelMoviePanel : MonoBehaviour
         m_PlayRow?.onClick.AddListener(() => m_Movie?.Play());
         m_SitesRow?.onClick.AddListener(() => m_Movie?.SetShowSites(!m_Movie.showSites));
         m_SaveRow?.onClick.AddListener(StartSaving);
+        if (m_DiameterSlider != null)
+        {
+            // Whole percent of the capsid's diameter.
+            m_DiameterSlider.minValue = TunnelMovie.k_MinSiteDiameter * 100f;
+            m_DiameterSlider.maxValue = TunnelMovie.k_MaxSiteDiameter * 100f;
+            m_DiameterSlider.wholeNumbers = true;
+            m_DiameterSlider.SetValueWithoutNotify(TunnelMovie.k_DefaultSiteDiameter * 100f);
+            m_DiameterSlider.onValueChanged.AddListener(OnDiameterMoved);
+        }
         if (m_Keyboard != null)
         {
             m_Keyboard.onTextSubmitted.AddListener(OnNameSubmitted);
@@ -99,8 +122,33 @@ public class TunnelMoviePanel : MonoBehaviour
         m_Saving = null;
     }
 
+    void OnDiameterMoved(float percent)
+    {
+        if (m_Movie == null)
+            return;
+        m_DiameterShown = percent / 100f;
+        m_Movie.SetSiteDiameter(percent / 100f);
+        ShowDiameter();
+    }
+
+    void ShowDiameter()
+    {
+        if (m_DiameterText == null || m_DiameterSlider == null)
+            return;
+        string text = $"Binding site diameter: {m_DiameterSlider.value:0}%  <color=#AAA>of each capsid's</color>";
+        if (m_DiameterText.text != text)
+            m_DiameterText.text = text;
+    }
+
     void Update()
     {
+        // The slider follows a change made by another player, not its own.
+        if (m_Movie != null && m_DiameterSlider != null && !Mathf.Approximately(m_Movie.siteDiameter, m_DiameterShown))
+        {
+            m_DiameterShown = m_Movie.siteDiameter;
+            m_DiameterSlider.SetValueWithoutNotify(Mathf.Round(m_DiameterShown * 100f));
+            ShowDiameter();
+        }
         if (m_Movie == null || Time.unscaledTime < m_NextRefresh)
             return;
         m_NextRefresh = Time.unscaledTime + 0.2f;
@@ -126,8 +174,9 @@ public class TunnelMoviePanel : MonoBehaviour
         }
         if (m_Status != null)
         {
-            int capsids = m_Movie.CountCapsids(), antibodies = m_Movie.CountAntibodies(), bound = m_Movie.CountBound();
-            string text = $"<color=#AAA>In the container:</color> {capsids} capsid{(capsids == 1 ? "" : "s")}, {antibodies} free antibod{(antibodies == 1 ? "y" : "ies")}, {bound} bound\n"
+            int capsids = m_Movie.CountCapsids(), neutralized = m_Movie.CountNeutralized(), antibodies = m_Movie.CountAntibodies(), bound = m_Movie.CountBound();
+            string text = $"<color=#AAA>In the container:</color> {capsids} capsid{(capsids == 1 ? "" : "s")}{(neutralized > 0 ? $" (+{neutralized} neutralized)" : "")}, "
+                + $"{antibodies} free antibod{(antibodies == 1 ? "y" : "ies")}, {bound} bound\n"
                 + (m_Note.Length > 0 ? m_Note : m_Movie.message);
             if (m_Status.text != text)
                 m_Status.text = text;
@@ -245,8 +294,12 @@ public class TunnelMoviePanel : MonoBehaviour
 
 #if UNITY_EDITOR
     /// <summary>Set by Tunnel > Movie > Build 3D Movie.</summary>
-    public void Configure(Button start, Button pause, Button play, Button sites, Button save, TMP_Text title, TMP_Text status, XRKeyboard keyboard, float height)
+    public void Configure(Button start, Button pause, Button play, Button sites, Button save, Slider diameter, TMP_Text diameterText,
+        TMP_Text title, TMP_Text status, XRKeyboard keyboard, float width, float height)
     {
+        m_DiameterSlider = diameter;
+        m_DiameterText = diameterText;
+        m_Width = width;
         m_StartRow = start;
         m_PauseRow = pause;
         m_PlayRow = play;

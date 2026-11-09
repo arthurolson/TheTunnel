@@ -704,6 +704,9 @@ public class TunnelContainer : NetworkBehaviour
 
     static Vector3 Abs(Vector3 v) => new(Mathf.Abs(v.x), Mathf.Abs(v.y), Mathf.Abs(v.z));
 
+    /// <summary>The direction its front faces (world): out of the wall it's set into, into the tunnel.</summary>
+    public Vector3 frontNormal => transform.TransformDirection(FaceNormal(frontFace)).normalized;
+
     /// <summary>Whether this mixed reality box is set into a tunnel wall (its front opens one).</summary>
     public bool isSetInWall => m_OpenIn.Count > 0;
 

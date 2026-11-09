@@ -7,13 +7,14 @@ using UnityEngine.XR.Interaction.Toolkit.Interactables;
 
 /// <summary>
 /// A viral capsid's antibody binding sites, for a container's 3D movie (see <see cref="TunnelMovie"/>). Each site
-/// is an invisible cylinder standing on the capsid's surface along one of its symmetry axes (the 2-folds of TBSV and
-/// poliovirus, the 3-folds of Zika, found from its surface by Tunnel > Movie > Build 3D Movie): a quarter of the
-/// capsid's radius long, a tenth of its diameter across. The sites are live only while the movie of the container the
-/// capsid is in plays; an antibody that touches a live one is drawn to its base (see <see cref="AntibodyBinder"/>),
-/// and when it reaches the capsid it binds there for good: it becomes part of the capsid, which carries its weight and
-/// turns a shade darker, and that site goes. A capsid takes three antibodies; when a fourth binds, the whole complex
-/// disappears. The movie's Show binding sites makes the sites visible, to check them.
+/// is an invisible cylinder standing on the capsid's surface along one of its symmetry axes (the 2-folds of TBSV, the
+/// 5-folds of poliovirus, the 3-folds of Zika, found from its surface by Tunnel > Movie > Build 3D Movie): a quarter of
+/// the capsid's radius long, and across a fraction of its diameter set by the movie's slider (a tenth at first). The
+/// sites are live only while the movie of the container the capsid is in plays; an antibody that touches a live one is
+/// drawn to its base (see <see cref="AntibodyBinder"/>), and when it reaches the capsid it binds there for good: it
+/// becomes part of the capsid, which carries its weight and turns a shade darker, and that site goes. A capsid takes
+/// three antibodies; when a fourth binds it is neutralized: the whole complex turns see-through and its sites go, but
+/// it goes on moving and bumping into the rest as before. The movie's Show binding sites makes the sites visible.
 /// In a session the host decides each binding (the antibody's player asks), and everyone, late joiners too, sees the
 /// bound antibodies from the shared list of bindings.
 /// </summary>
@@ -69,7 +70,7 @@ public class CapsidSites : NetworkBehaviour
     float m_DiameterFraction = 0.1f;
 
     [SerializeField]
-    [Tooltip("Antibodies it takes; one more and the complex disappears.")]
+    [Tooltip("Antibodies it takes; one more and it is neutralized.")]
     int m_MaxAntibodies = 3;
 
     [SerializeField]
@@ -89,8 +90,13 @@ public class CapsidSites : NetworkBehaviour
     float m_SettleTime = 0.3f;
 
     [SerializeField]
-    [Tooltip("Seconds the complex stays after the antibody too many binds, before it disappears.")]
-    float m_VanishDelay = 0.6f;
+    [Tooltip("A see-through version of the molecules' material, which a neutralized complex is drawn with.")]
+    Material m_SeeThroughMaterial;
+
+    [SerializeField]
+    [Range(0f, 1f)]
+    [Tooltip("How opaque a neutralized complex is.")]
+    float m_SeeThroughAlpha = 0.3f;
 
     /// <summary>Every capsid with binding sites in the scene.</summary>
     public static readonly List<CapsidSites> all = new();
@@ -107,7 +113,9 @@ public class CapsidSites : NetworkBehaviour
     MoleculeGravity m_Physics;
     XRGrabInteractable m_Grab;
     readonly List<(Material material, Color color)> m_Colours = new();
-    bool m_Vanishing;
+    readonly List<Material> m_SeeThrough = new();
+    bool m_ShownSeeThrough;
+    float m_DiameterShown;
     static Mesh s_Cylinder;
 
     public Rigidbody body => m_Body;
@@ -115,10 +123,11 @@ public class CapsidSites : NetworkBehaviour
     /// <summary>The movie of the container the capsid is in, if any.</summary>
     public TunnelMovie movie { get; private set; }
 
-    /// <summary>Whether its sites are live: the movie of the container it's in is playing.</summary>
-    public bool sitesActive => !m_Vanishing && movie != null && movie.isPlaying;
+    /// <summary>Whether its sites are live: the movie of the container it's in is playing, and it isn't neutralized.</summary>
+    public bool sitesActive => !neutralized && movie != null && movie.isPlaying;
 
-    public bool vanishing => m_Vanishing;
+    /// <summary>Whether it has taken more antibodies than it can (it's see-through, its sites gone).</summary>
+    public bool neutralized => bindingCount > m_MaxAntibodies;
 
     public int siteCount => m_Axes.Length;
 
@@ -144,13 +153,16 @@ public class CapsidSites : NetworkBehaviour
         foreach (var (material, _) in m_Colours)
             if (material != null)
                 Destroy(material);
+        foreach (var material in m_SeeThrough)
+            if (material != null)
+                Destroy(material);
         base.OnDestroy();
     }
 
     /// <summary>Whether site i can still take an antibody.</summary>
     public bool SiteOpen(int i)
     {
-        if (m_Vanishing || i < 0 || i >= m_Axes.Length)
+        if (neutralized || i < 0 || i >= m_Axes.Length)
             return false;
         for (int b = 0; b < bindingCount; b++)
             if (BindingAt(b).site == i)
@@ -172,11 +184,19 @@ public class CapsidSites : NetworkBehaviour
         var container = m_Body != null ? TunnelContainer.At(m_Body.worldCenterOfMass) : null;
         movie = container != null ? container.movie : null;
         bool active = sitesActive;
-        bool visible = !m_Vanishing && movie != null && movie.showSites;
+        bool visible = !neutralized && movie != null && movie.showSites;
         if ((active || visible) && m_Sites == null)
             BuildSites();
         if (m_Sites != null)
         {
+            float diameter = movie != null ? movie.siteDiameter : m_DiameterFraction;
+            if (diameter != m_DiameterShown)
+            {
+                m_DiameterShown = diameter;
+                float across = 2f * m_Radius * diameter;
+                foreach (var site in m_Sites)
+                    site.localScale = new Vector3(across, across, site.localScale.z);
+            }
             for (int i = 0; i < m_Sites.Length; i++)
             {
                 bool open = SiteOpen(i);
@@ -229,7 +249,7 @@ public class CapsidSites : NetworkBehaviour
             m_SiteColliders[i] = collider;
             m_SiteRenderers[i] = renderer;
         }
-        Debug.Log($"[Movie] {name}: {count} binding sites on its {m_Symmetry} axes, {length * transform.lossyScale.x * 100f:0.0} cm long, {diameter * transform.lossyScale.x * 100f:0.0} cm across");
+        Debug.Log($"[Movie] {name}: {count} binding sites on its {m_Symmetry} axes, {length * transform.lossyScale.x * 100f:0.0} cm long");
     }
 
     // A cylinder of diameter 1 along +z from 0 to 1, closed at both ends.
@@ -302,24 +322,9 @@ public class CapsidSites : NetworkBehaviour
         int count = bindingCount;
         Debug.Log($"[Movie] {antibody.name} bound to {name} at {m_Symmetry} site {binding.site + 1}: {count} antibod{(count == 1 ? "y" : "ies")}");
         Remove(antibody);
-        if (count > m_MaxAntibodies)
-            StartCoroutine(VanishSoon());
+        if (count > m_MaxAntibodies && movie != null)
+            movie.Announce($"A {MoleculeName(gameObject)} capsid took {count} antibodies: neutralized.");
     }
-
-    IEnumerator VanishSoon()
-    {
-        m_Vanishing = true;
-        if (IsSpawned)
-            VanishingRpc();
-        Debug.Log($"[Movie] {name} took {bindingCount} antibodies and disappears");
-        if (movie != null)
-            movie.Announce($"A {MoleculeName(gameObject)} capsid took {bindingCount} antibodies and is gone.");
-        yield return new WaitForSeconds(m_VanishDelay);
-        Remove(gameObject);
-    }
-
-    [Rpc(SendTo.NotServer)]
-    void VanishingRpc() => m_Vanishing = true;
 
     /// <summary>
     /// Takes a molecule out of the scene for everyone. Whoever holds it lets go first, and it is gone at once
@@ -398,6 +403,8 @@ public class CapsidSites : NetworkBehaviour
             for (int i = 0; i < count; i++)
                 volume += BindingAt(i).volume;
             Shade(count);
+            if (neutralized)
+                SeeThrough();
             if (m_Physics != null)
             {
                 m_Physics.extraVolume = volume;
@@ -518,8 +525,37 @@ public class CapsidSites : NetworkBehaviour
             }
         }
         float shade = count <= 0 || m_Shades.Length == 0 ? 1f : m_Shades[Mathf.Min(count, m_Shades.Length) - 1];
+        if (m_ShownSeeThrough)
+            return;
         foreach (var (material, colour) in m_Colours)
             material.SetColor("_BaseColor", new Color(colour.r * shade, colour.g * shade, colour.b * shade, colour.a));
+    }
+
+    // Neutralized: the capsid (in its darkest shade) and its antibodies, see-through.
+    void SeeThrough()
+    {
+        if (m_ShownSeeThrough || m_SeeThroughMaterial == null)
+            return;
+        m_ShownSeeThrough = true;
+        Debug.Log($"[Movie] {name} is neutralized: see-through, its sites gone");
+        foreach (var renderer in GetComponentsInChildren<MeshRenderer>(true))
+        {
+            if (renderer.GetComponentInParent<CapsidSite>() != null)
+                continue;
+            var materials = renderer.sharedMaterials;
+            for (int i = 0; i < materials.Length; i++)
+            {
+                if (materials[i] == null || !materials[i].HasProperty("_BaseColor"))
+                    continue;
+                var colour = materials[i].GetColor("_BaseColor");
+                var seeThrough = new Material(m_SeeThroughMaterial) { name = $"{materials[i].name} (see-through)" };
+                seeThrough.SetColor("_BaseColor", new Color(colour.r, colour.g, colour.b, m_SeeThroughAlpha));
+                m_SeeThrough.Add(seeThrough);
+                materials[i] = seeThrough;
+            }
+            renderer.sharedMaterials = materials;
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        }
     }
 
     #endregion
@@ -530,8 +566,9 @@ public class CapsidSites : NetworkBehaviour
 
 #if UNITY_EDITOR
     /// <summary>Set by Tunnel > Movie > Build 3D Movie.</summary>
-    public void Configure(string symmetry, Vector3[] axes, float[] baseRadius, float radius, GameObject antibody, Material siteMaterial)
+    public void Configure(string symmetry, Vector3[] axes, float[] baseRadius, float radius, GameObject antibody, Material siteMaterial, Material seeThrough)
     {
+        m_SeeThroughMaterial = seeThrough;
         m_Symmetry = symmetry;
         m_Axes = axes;
         m_BaseRadius = baseRadius;

@@ -9,10 +9,11 @@ using UnityEngine;
 /// on moving as the container's medium and heat move them. For now the story is antibodies neutralising viruses: the
 /// capsids (TBSV, poliovirus, Zika) carry invisible binding sites (see <see cref="CapsidSites"/>), and an antibody
 /// (IGG) that touches one is drawn in and binds (see <see cref="AntibodyBinder"/>); a capsid that takes more than
-/// three disappears, and when no capsid is left in the container the movie ends.
-/// Its controls are a small panel on the container (shown by the TS Menu's Containers list, see
+/// three is neutralized (see-through, its sites gone), and when every capsid in the container is, the movie ends.
+/// Its controls are a small panel beside the container (shown by the TS Menu's Containers list, see
 /// <see cref="TunnelMoviePanel"/>): Start movie makes the binding sites live; Pause holds everything in the container
-/// still, and Play lets it go on as it was; Show binding sites shows them (to check them); Save starting state
+/// still, and Play lets it go on as it was; Show binding sites shows them (to check them), and the slider sets how
+/// wide they are (see <see cref="siteDiameter"/>); Save starting state
 /// saves the container and every molecule in it as they were just before the movie started (or as they are, before it
 /// has), under a name typed on the panel's keyboard, as a file in the 3D Movies folder (see <see cref="folder"/>).
 /// In a session everyone shares the movie's state, the sites' visibility and the panel's messages; each player saves
@@ -35,8 +36,11 @@ public class TunnelMovie : NetworkBehaviour
     TunnelMoviePanel m_PanelPrefab;
 
     [SerializeField]
-    [Tooltip("Gap between the container's top and the panel (meters).")]
-    float m_PanelGap = 0.03f;
+    [Tooltip("Gap between the container's side and the panel (meters).")]
+    float m_PanelGap = 0.04f;
+
+    /// <summary>The binding sites' diameters, as a fraction of each capsid's diameter: the slider's range.</summary>
+    public const float k_MinSiteDiameter = 0.02f, k_MaxSiteDiameter = 0.3f, k_DefaultSiteDiameter = 0.1f;
 
     /// <summary>Where saved starting states go: the 3D Movies folder in the app's own storage.</summary>
     public static string folder => Path.Combine(Application.persistentDataPath, "3D Movies");
@@ -44,6 +48,8 @@ public class TunnelMovie : NetworkBehaviour
     readonly NetworkVariable<byte> m_State = new((byte)State.Ready, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<bool> m_ShowSites = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<bool> m_Controls = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<float> m_SiteDiameter = new(k_DefaultSiteDiameter, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    float m_LocalSiteDiameter = k_DefaultSiteDiameter;
     State m_LocalState;
     bool m_LocalShowSites;
     bool m_LocalControls;
@@ -53,12 +59,19 @@ public class TunnelMovie : NetworkBehaviour
     MovieSnapshot m_StartingState;
     float m_NextCheck;
     string m_Message = "";
+    Vector3 m_Facing;
 
     public State state => IsSpawned ? (State)m_State.Value : m_LocalState;
     public bool isPlaying => state == State.Playing;
     public bool isPaused => state == State.Paused;
     public bool showSites => IsSpawned ? m_ShowSites.Value : m_LocalShowSites;
     public bool controlsShown => IsSpawned ? m_Controls.Value : m_LocalControls;
+
+    /// <summary>
+    /// How wide the binding sites are, as a fraction of each capsid's diameter (<see cref="k_MinSiteDiameter"/> to
+    /// <see cref="k_MaxSiteDiameter"/>; a tenth at first). Set from the panel's slider, for everyone.
+    /// </summary>
+    public float siteDiameter => IsSpawned ? m_SiteDiameter.Value : m_LocalSiteDiameter;
     public TunnelContainer container => m_Container;
 
     /// <summary>The latest message, shown on everyone's panel.</summary>
@@ -119,6 +132,18 @@ public class TunnelMovie : NetworkBehaviour
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     void SetShowSitesRpc(bool on) => m_ShowSites.Value = on;
 
+    public void SetSiteDiameter(float fraction)
+    {
+        fraction = Mathf.Clamp(fraction, k_MinSiteDiameter, k_MaxSiteDiameter);
+        if (IsSpawned)
+            SetSiteDiameterRpc(fraction);
+        else
+            m_LocalSiteDiameter = fraction;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void SetSiteDiameterRpc(float fraction) => m_SiteDiameter.Value = Mathf.Clamp(fraction, k_MinSiteDiameter, k_MaxSiteDiameter);
+
     /// <summary>Makes the binding sites live, if there is anything in the container for them to do.</summary>
     public void StartMovie()
     {
@@ -127,7 +152,9 @@ public class TunnelMovie : NetworkBehaviour
         int capsids = CountCapsids();
         if (capsids == 0)
         {
-            Announce("Put a capsid (TBSV, 2PLV or Zika) and some IGG antibodies in the container first.");
+            Announce(CountNeutralized() > 0
+                ? "Every capsid in the container is neutralized: put in a fresh one (TBSV, 2PLV or Zika)."
+                : "Put a capsid (TBSV, 2PLV or Zika) and some IGG antibodies in the container first.");
             return;
         }
         SetState(State.Playing);
@@ -190,12 +217,22 @@ public class TunnelMovie : NetworkBehaviour
 
     bool Inside(Rigidbody body) => body != null && m_Container != null && m_Container.Contains(body.worldCenterOfMass);
 
-    /// <summary>The capsids still in the movie: in the container and not on their way out.</summary>
+    /// <summary>The capsids still in the movie: in the container and not neutralized.</summary>
     public int CountCapsids()
     {
         int count = 0;
         foreach (var capsid in CapsidSites.all)
-            if (capsid != null && !capsid.vanishing && Inside(capsid.body))
+            if (capsid != null && !capsid.neutralized && Inside(capsid.body))
+                count++;
+        return count;
+    }
+
+    /// <summary>Neutralized capsids in the container.</summary>
+    public int CountNeutralized()
+    {
+        int count = 0;
+        foreach (var capsid in CapsidSites.all)
+            if (capsid != null && capsid.neutralized && Inside(capsid.body))
                 count++;
         return count;
     }
@@ -215,7 +252,7 @@ public class TunnelMovie : NetworkBehaviour
     {
         int count = 0;
         foreach (var capsid in CapsidSites.all)
-            if (capsid != null && !capsid.vanishing && Inside(capsid.body))
+            if (capsid != null && Inside(capsid.body))
                 count += capsid.bindingCount;
         return count;
     }
@@ -224,7 +261,7 @@ public class TunnelMovie : NetworkBehaviour
 
     void Update()
     {
-        // The host (or this headset, alone) ends the movie when no capsid is left in the container.
+        // The host (or this headset, alone) ends the movie when every capsid in the container is neutralized (or gone).
         bool decides = !IsSpawned || IsServer;
         if (decides && (state == State.Playing || state == State.Paused) && Time.time >= m_NextCheck)
         {
@@ -232,7 +269,7 @@ public class TunnelMovie : NetworkBehaviour
             if (CountCapsids() == 0)
             {
                 SetState(State.Ended);
-                Announce("The end: every capsid is gone.");
+                Announce("The end: every capsid is neutralized.");
             }
         }
 
@@ -268,38 +305,44 @@ public class TunnelMovie : NetworkBehaviour
     }
 
     /// <summary>
-    /// Over the container's top, facing whoever looks at it (it turns to face them only while they aren't typing). On
-    /// a mixed reality box set into a wall, over its front, on the tunnel's side.
+    /// Beside the container, on its left as whoever looks at it sees it, half way up, facing them; it turns (and moves
+    /// round) to face them only while they aren't typing. On a mixed reality box set into a wall it lies flat on the
+    /// wall, left of the box's front, facing into the tunnel.
     /// </summary>
     public void PlacePanel(bool snap)
     {
         var t = m_Container != null ? m_Container.transform : transform;
         var half = t.lossyScale * 0.5f;
-        var head = Camera.main != null ? Camera.main.transform.position : t.position - t.forward;
-        var toHead = head - t.position;
-        toHead.y = 0f;
-        var facing = toHead.sqrMagnitude > 1e-4f ? toHead.normalized : -t.forward;
-
         float Extent(Vector3 direction) => m_Container != null && m_Container.shape == TunnelContainer.Shape.Sphere
             ? half.x
             : Mathf.Abs(Vector3.Dot(t.right, direction)) * half.x + Mathf.Abs(Vector3.Dot(t.up, direction)) * half.y + Mathf.Abs(Vector3.Dot(t.forward, direction)) * half.z;
+        float halfWidth = m_Panel.width * 0.5f;
 
-        var position = t.position + Vector3.up * (Extent(Vector3.up) + m_PanelGap + m_Panel.height * 0.5f);
-        bool inWall = m_Container != null && m_Container.isSetInWall;
-        if (inWall)
-            position += facing * (Extent(facing) + 0.05f);
-        m_Panel.transform.position = position;
+        if (m_Container != null && m_Container.isSetInWall)
+        {
+            var normal = m_Container.frontNormal; // out of the wall, into the tunnel
+            var left = Vector3.Cross(Vector3.up, normal).normalized;
+            var front = t.position + normal * Extent(normal);
+            m_Panel.transform.SetPositionAndRotation(front + left * (Extent(left) + m_PanelGap + halfWidth) + normal * 0.01f,
+                Quaternion.LookRotation(-normal, Vector3.up));
+            m_Facing = normal;
+            m_Panel.PlaceKeyboard(0.12f);
+            return;
+        }
 
-        if (m_Panel.typing && !snap)
-            return;
-        // Its keyboard: just in front of the container's near top edge, below the panel.
-        m_Panel.PlaceKeyboard(inWall ? 0.1f : Extent(facing) + 0.1f);
-        var forward = position - head;
-        forward.y = 0f;
-        if (forward.sqrMagnitude < 1e-4f)
-            return;
-        var rotation = Quaternion.LookRotation(forward.normalized, Vector3.up);
-        m_Panel.transform.rotation = snap ? rotation : Quaternion.Slerp(m_Panel.transform.rotation, rotation, 1f - Mathf.Exp(-4f * Time.deltaTime));
+        var head = Camera.main != null ? Camera.main.transform.position : t.position - t.forward;
+        var toHead = head - t.position;
+        toHead.y = 0f;
+        if (toHead.sqrMagnitude > 1e-4f && (!m_Panel.typing || snap || m_Facing == Vector3.zero))
+        {
+            toHead.Normalize();
+            m_Facing = snap || m_Facing == Vector3.zero ? toHead : Vector3.Slerp(m_Facing, toHead, 1f - Mathf.Exp(-3f * Time.deltaTime)).normalized;
+        }
+        var facing = m_Facing != Vector3.zero ? m_Facing : -t.forward;
+        var side = Vector3.Cross(Vector3.up, facing).normalized; // their left
+        m_Panel.transform.SetPositionAndRotation(t.position + side * (Extent(side) + m_PanelGap + halfWidth),
+            Quaternion.LookRotation(-facing, Vector3.up));
+        m_Panel.PlaceKeyboard(0.12f);
     }
 
     #endregion

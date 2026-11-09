@@ -383,4 +383,4 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::TunnelMovie
   ShowTopMostFoldoutHeaderGroup: 1
   m_PanelPrefab: {fileID: 2535420819302649588, guid: 3fa608898f4d14ef8aa8fb20bcc8e68b, type: 3}
-  m_PanelGap: 0.03
+  m_PanelGap: 0.04

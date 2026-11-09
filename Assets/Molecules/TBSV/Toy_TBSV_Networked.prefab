@@ -703,7 +703,8 @@ MonoBehaviour:
   m_AntibodyPrefab: {fileID: 5793732862484036846, guid: 0aa5eb9b02b754392ae7e2ccca4efe27, type: 3}
   m_SiteMaterial: {fileID: 2100000, guid: 06c3c81f7e75748a692cf9e0786e227c, type: 2}
   m_SettleTime: 0.3
-  m_VanishDelay: 0.6
+  m_SeeThroughMaterial: {fileID: 2100000, guid: a74be29e961744779ad0781603cc6ec2, type: 2}
+  m_SeeThroughAlpha: 0.3
 --- !u!1 &3764095547672187423
 GameObject:
   m_ObjectHideFlags: 0

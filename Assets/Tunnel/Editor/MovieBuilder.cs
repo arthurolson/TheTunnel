@@ -10,7 +10,8 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 /// <summary>
 /// Makes the containers' 3D movie (see <see cref="TunnelMovie"/>):
 /// the capsids' binding sites (<see cref="CapsidSites"/>) on the symmetry axes found from each capsid's own surface
-/// (2-folds for TBSV and poliovirus, 3-folds for Zika); the antibody's Fab tips (<see cref="AntibodyBinder"/>) found
+/// (2-folds for TBSV, 5-folds for poliovirus, 3-folds for Zika), and the see-through material a neutralized one is
+/// drawn with; the antibody's Fab tips (<see cref="AntibodyBinder"/>) found
 /// from its chains; the movie's control panel (<see cref="TunnelMoviePanel"/>, from the TS Menu's rows and the
 /// browser's keyboard); and then the containers again, which carry the movie (Tunnel > Containers > Build Containers).
 /// Runs from Tunnel > Movie > Build 3D Movie.
@@ -24,13 +25,13 @@ static class MovieBuilder
     const string k_BrowserPath = "Assets/Tunnel/BrowserPanel.prefab";
 
     // The capsids and the symmetry axes their sites stand on: 2 = 2-folds, 3 = 3-folds, 5 = 5-folds.
-    static readonly (string name, int fold)[] k_Capsids = { ("TBSV", 2), ("2PLV", 2), ("Zika", 3) };
+    static readonly (string name, int fold)[] k_Capsids = { ("TBSV", 2), ("2PLV", 5), ("Zika", 3) };
 
     const float k_UnitsPerAngstrom = 0.2f / 167f; // as the molecule library
     const float k_SiteDiameterFraction = 0.1f;   // of the capsid's diameter
 
     const float k_CanvasScale = 0.0004f;                   // meters per canvas unit, as the palette
-    static readonly Vector2 k_CanvasSize = new(620f, 560f); // 25 x 22 cm
+    static readonly Vector2 k_CanvasSize = new(620f, 700f); // 25 x 28 cm
 
     [MenuItem("Tunnel/Movie/Build 3D Movie")]
     public static string Build()
@@ -39,9 +40,10 @@ static class MovieBuilder
             AssetDatabase.CreateFolder("Assets/Tunnel", "Movie");
         var log = new StringBuilder("[Movie] ");
         var siteMaterial = SiteMaterial();
+        var seeThrough = SeeThroughMaterial();
         var antibody = AssetDatabase.LoadAssetAtPath<GameObject>(k_AntibodyPath);
         foreach (var (name, fold) in k_Capsids)
-            log.Append(BuildCapsid(name, fold, antibody, siteMaterial)).Append("; ");
+            log.Append(BuildCapsid(name, fold, antibody, siteMaterial, seeThrough)).Append("; ");
         log.Append(BuildAntibody()).Append("; ");
         log.Append(BuildPanel()).Append("; ");
         AssetDatabase.SaveAssets();
@@ -76,6 +78,41 @@ static class MovieBuilder
         return material;
     }
 
+    // A see-through lit material (the molecules' own shader has no transparency). Kept as an asset so the build
+    // includes the shader's transparent version.
+    static Material SeeThroughMaterial()
+    {
+        string path = $"{k_Folder}/NeutralizedCapsid.mat";
+        var shader = Shader.Find("Universal Render Pipeline/Lit");
+        var material = AssetDatabase.LoadAssetAtPath<Material>(path);
+        if (material == null)
+        {
+            material = new Material(shader) { name = "NeutralizedCapsid" };
+            AssetDatabase.CreateAsset(material, path);
+        }
+        else if (material.shader != shader)
+        {
+            material.shader = shader;
+            material.shaderKeywords = new string[0];
+        }
+        material.SetColor("_BaseColor", new Color(0.5f, 0.5f, 0.5f, 0.3f));
+        material.SetFloat("_Smoothness", 0.5f);
+        material.SetFloat("_Metallic", 0f);
+        material.SetFloat("_Surface", 1f); // transparent
+        material.SetFloat("_Blend", 0f);   // alpha
+        material.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.SrcAlpha);
+        material.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+        material.SetFloat("_SrcBlendAlpha", (float)UnityEngine.Rendering.BlendMode.One);
+        material.SetFloat("_DstBlendAlpha", (float)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+        material.SetFloat("_ZWrite", 0f);
+        material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+        material.SetOverrideTag("RenderType", "Transparent");
+        material.SetShaderPassEnabled("ShadowCaster", false);
+        material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+        EditorUtility.SetDirty(material);
+        return material;
+    }
+
     static List<Vector3> Vertices(GameObject prefab, IEnumerable<MeshFilter> filters = null)
     {
         var points = new List<Vector3>();
@@ -90,7 +127,7 @@ static class MovieBuilder
 
     #region Capsids
 
-    static string BuildCapsid(string name, int fold, GameObject antibody, Material siteMaterial)
+    static string BuildCapsid(string name, int fold, GameObject antibody, Material siteMaterial, Material seeThrough)
     {
         string path = $"Assets/Molecules/{name}/Toy_{name}_Networked.prefab";
         var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
@@ -126,7 +163,7 @@ static class MovieBuilder
         try
         {
             var sites = root.GetComponent<CapsidSites>() ?? root.AddComponent<CapsidSites>();
-            sites.Configure($"{fold}-fold", axes.ToArray(), bases, radius, antibody, siteMaterial);
+            sites.Configure($"{fold}-fold", axes.ToArray(), bases, radius, antibody, siteMaterial, seeThrough);
             EditorUtility.SetDirty(sites);
             PrefabUtility.SaveAsPrefabAsset(root, path);
         }
@@ -426,7 +463,7 @@ static class MovieBuilder
             background.color = menuPanel.color;
 
             var titleTemplate = control.Find("Container List/Title").gameObject;
-            var title = Text(titleTemplate, canvas, "Title", "3D Movie", new Vector2(0f, 228f), new Vector2(560f, 64f));
+            var title = Text(titleTemplate, canvas, "Title", "3D Movie", new Vector2(0f, 298f), new Vector2(560f, 64f));
             title.alignment = TextAlignmentOptions.Left;
 
             var rowTemplate = control.Find("Container List/Box Row").gameObject;
@@ -450,12 +487,48 @@ static class MovieBuilder
                 }
                 return button;
             }
-            var start = Row("Start Row", new Vector2(0f, 155f), 560f, "Start movie", true);
-            var pause = Row("Pause Row", new Vector2(-142f, 90f), 276f, "Pause", true);
-            var play = Row("Play Row", new Vector2(142f, 90f), 276f, "Play", true);
-            var sites = Row("Sites Row", new Vector2(0f, 10f), 560f, "□  Show binding sites", false);
-            var save = Row("Save Row", new Vector2(0f, -55f), 560f, "Save starting state...", false);
-            var status = Text(titleTemplate, canvas, "Status", "", new Vector2(0f, -185f), new Vector2(560f, 180f));
+            var start = Row("Start Row", new Vector2(0f, 225f), 560f, "Start movie", true);
+            var pause = Row("Pause Row", new Vector2(-142f, 160f), 276f, "Pause", true);
+            var play = Row("Play Row", new Vector2(142f, 160f), 276f, "Play", true);
+            var sites = Row("Sites Row", new Vector2(0f, 80f), 560f, "□  Show binding sites", false);
+
+            // The sites' diameter: the Containers list's viscosity slider, 2% to 30% of the capsid's diameter.
+            var diameterGroup = Object.Instantiate(control.Find("Container List/Viscosity").gameObject, canvas, false);
+            diameterGroup.name = "Site Diameter";
+            var diameterRect = (RectTransform)diameterGroup.transform;
+            diameterRect.anchoredPosition = new Vector2(0f, -15f);
+            diameterRect.sizeDelta = new Vector2(540f, 60f);
+            var diameter = diameterGroup.GetComponentInChildren<Slider>(true);
+            diameter.name = "Site Diameter Slider";
+            diameter.onValueChanged = new Slider.SliderEvent();
+            diameter.minValue = TunnelMovie.k_MinSiteDiameter * 100f;
+            diameter.maxValue = TunnelMovie.k_MaxSiteDiameter * 100f;
+            diameter.wholeNumbers = true;
+            diameter.SetValueWithoutNotify(TunnelMovie.k_DefaultSiteDiameter * 100f);
+            foreach (var labelName in new[] { "Value Text", "Type Text" })
+            {
+                var label = diameter.transform.Find(labelName);
+                if (label != null)
+                    label.GetComponent<TMP_Text>().text = "";
+            }
+            var diameterText = diameterGroup.transform.Find("Viscosity Text").GetComponent<TMP_Text>();
+            diameterText.name = "Site Diameter Text";
+            diameterText.text = "Binding site diameter: 10%";
+            var ticks = diameterGroup.transform.Find("Ticks");
+            var tickValues = new[] { 2, 5, 10, 15, 20, 25, 30 };
+            while (ticks.childCount > tickValues.Length)
+                Object.DestroyImmediate(ticks.GetChild(ticks.childCount - 1).gameObject);
+            for (int i = 0; i < tickValues.Length; i++)
+            {
+                var tick = (RectTransform)ticks.GetChild(i);
+                float at = (tickValues[i] - diameter.minValue) / (diameter.maxValue - diameter.minValue);
+                tick.name = $"Tick {tickValues[i]}";
+                tick.anchorMin = tick.anchorMax = new Vector2(at, 0.5f);
+                tick.GetComponent<TMP_Text>().text = $"{tickValues[i]}%";
+            }
+
+            var save = Row("Save Row", new Vector2(0f, -110f), 560f, "Save starting state...", false);
+            var status = Text(titleTemplate, canvas, "Status", "", new Vector2(0f, -250f), new Vector2(560f, 150f));
             status.fontSize = 22f;
             status.fontStyle = FontStyles.Normal;
             status.alignment = TextAlignmentOptions.TopLeft;
@@ -478,7 +551,8 @@ static class MovieBuilder
             keyboardObject.SetActive(false);
 
             var component = panel.AddComponent<TunnelMoviePanel>();
-            component.Configure(start, pause, play, sites, save, title, status, keyboard, k_CanvasSize.y * k_CanvasScale);
+            component.Configure(start, pause, play, sites, save, diameter, diameterText, title, status, keyboard,
+                k_CanvasSize.x * k_CanvasScale, k_CanvasSize.y * k_CanvasScale);
             PrefabUtility.SaveAsPrefabAsset(panel, k_PanelPath);
             Object.DestroyImmediate(panel);
             return $"panel {k_PanelPath}";
