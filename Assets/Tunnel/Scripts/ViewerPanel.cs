@@ -94,6 +94,7 @@ public class ViewerPanel : NetworkBehaviour
     static readonly int k_RightTex = Shader.PropertyToID("_RightTex");
     static readonly int k_Layout = Shader.PropertyToID("_Layout");
     static readonly int k_SwapEyes = Shader.PropertyToID("_SwapEyes");
+    static readonly int k_UseAlpha = Shader.PropertyToID("_UseAlpha");
 
     readonly NetworkVariable<MediaState> m_Media = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<PlayState> m_Play = new(new PlayState { rate = 1f }, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
@@ -649,11 +650,35 @@ public class ViewerPanel : NetworkBehaviour
             texture = Rescaled(texture, Mathf.RoundToInt(texture.width * scale), Mathf.RoundToInt(texture.height * scale));
         }
 
+        texture.name = Premultiply(texture) ? "Transparent" : "Opaque";
         texture.wrapMode = TextureWrapMode.Clamp;
         texture.filterMode = FilterMode.Trilinear;
         texture.anisoLevel = 4;
         texture.Apply(true, true);
         return texture;
+    }
+
+    /// <summary>
+    /// A picture with transparent parts (a PNG with alpha) has its colours multiplied by its alpha, so its edges blend
+    /// cleanly and its transparent parts' hidden colours don't bleed in as the screen samples and shrinks it.
+    /// Returns whether it has any transparency.
+    /// </summary>
+    static bool Premultiply(Texture2D texture)
+    {
+        var pixels = texture.GetPixels32();
+        bool any = false;
+        for (int i = 0; i < pixels.Length; i++)
+        {
+            byte a = pixels[i].a;
+            if (a == 255)
+                continue;
+            any = true;
+            var p = pixels[i];
+            pixels[i] = new Color32((byte)(p.r * a / 255), (byte)(p.g * a / 255), (byte)(p.b * a / 255), a);
+        }
+        if (any)
+            texture.SetPixels32(pixels);
+        return any;
     }
 
     static Texture2D Rescaled(Texture2D source, int width, int height)
@@ -755,6 +780,11 @@ public class ViewerPanel : NetworkBehaviour
             m_Material.SetTexture(k_RightTex, layout == ViewerLibrary.StereoLayout.Pair ? m_RightImage : null);
             m_Material.SetFloat(k_Layout, (float)layout);
             m_Material.SetFloat(k_SwapEyes, ViewerLibrary.SwapsEyes(name) ? 1f : 0f);
+            // An image with transparent parts shows through them (the screen's dark backdrop goes too); a video is
+            // always opaque.
+            bool transparent = texture is Texture2D && texture.name == "Transparent";
+            m_Material.SetFloat(k_UseAlpha, transparent ? 1f : 0f);
+            ShowBackdrop(!transparent);
         }
 
         if (m_Screen != null)
@@ -769,9 +799,17 @@ public class ViewerPanel : NetworkBehaviour
             m_Panel.SetContentAspect(eyeWidth / eyeHeight);
     }
 
+    // The dark backdrop behind the screen (the hint's), which a transparent image is seen without.
+    void ShowBackdrop(bool show)
+    {
+        if (m_Hint != null && m_Hint.transform.parent != null && m_Hint.transform.parent.TryGetComponent(out UnityEngine.UI.Graphic backdrop))
+            backdrop.enabled = show;
+    }
+
     void ReleaseMedia()
     {
         m_VideoReady = false;
+        ShowBackdrop(true);
         if (m_Screen != null)
             m_Screen.enabled = false;
         if (m_Material != null)

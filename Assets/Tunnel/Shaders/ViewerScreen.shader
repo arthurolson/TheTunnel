@@ -1,7 +1,9 @@
 // The Viewer's screen: shows an image or video frame, unlit. For spatial (stereo) media each eye samples its own half
 // of the frame: _Layout 1 = side by side (left eye on the left), 2 = top and bottom (left eye on top); _SwapEyes
 // swaps them for right-eye-first files; 3 = a stereo pair in two textures (_MainTex left, _RightTex right). With one
-// eye (Editor, no headset) the left eye's view is shown.
+// eye (Editor, no headset) the left eye's view is shown. An image with transparency (_UseAlpha 1, its colours
+// premultiplied by its alpha when loaded) shows what's behind the screen through its transparent parts; videos and
+// opaque images are drawn opaque.
 Shader "Tunnel/ViewerScreen"
 {
     Properties
@@ -11,17 +13,19 @@ Shader "Tunnel/ViewerScreen"
         [Enum(Mono,0,SideBySide,1,TopBottom,2,Pair,3)] _Layout ("Layout", Float) = 0
         [Toggle] _SwapEyes ("Swap Eyes", Float) = 0
         _Brightness ("Brightness", Range(0, 2)) = 1
+        [Toggle] _UseAlpha ("Transparent (premultiplied)", Float) = 0
     }
 
     SubShader
     {
-        Tags { "RenderType" = "Opaque" "Queue" = "Geometry" "RenderPipeline" = "UniversalPipeline" }
+        Tags { "RenderType" = "Transparent" "Queue" = "Transparent" "RenderPipeline" = "UniversalPipeline" }
 
         Pass
         {
             Name "Unlit"
             Cull Back
-            ZWrite On
+            ZWrite Off
+            Blend One OneMinusSrcAlpha
 
             HLSLPROGRAM
             #pragma vertex Vert
@@ -39,6 +43,7 @@ Shader "Tunnel/ViewerScreen"
                 float _Layout;
                 float _SwapEyes;
                 float _Brightness;
+                float _UseAlpha;
             CBUFFER_END
 
             struct Attributes
@@ -79,11 +84,11 @@ Shader "Tunnel/ViewerScreen"
                 else if (_Layout > 1.5 && _Layout < 2.5)
                     uv.y = uv.y * 0.5 + (1.0 - eye) * 0.5;  // left eye: top half
 
-                half3 color = (_Layout > 2.5 && eye > 0.5)
-                    ? SAMPLE_TEXTURE2D(_RightTex, sampler_RightTex, uv).rgb
-                    : SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, uv).rgb;
-                color *= _Brightness;
-                return half4(color, 1.0);
+                half4 texel = (_Layout > 2.5 && eye > 0.5)
+                    ? SAMPLE_TEXTURE2D(_RightTex, sampler_RightTex, uv)
+                    : SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, uv);
+                half alpha = _UseAlpha > 0.5 ? texel.a : 1.0;
+                return half4(texel.rgb * _Brightness, alpha);
             }
             ENDHLSL
         }
