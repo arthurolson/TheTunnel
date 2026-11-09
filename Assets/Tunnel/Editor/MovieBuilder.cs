@@ -10,7 +10,7 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 /// <summary>
 /// Makes the containers' 3D movie (see <see cref="TunnelMovie"/>):
 /// the capsids' binding sites (<see cref="CapsidSites"/>) on the symmetry axes found from each capsid's own surface
-/// (2-folds for TBSV, 5-folds for poliovirus, 3-folds for Zika), and the see-through material a neutralized one is
+/// (2-folds for TBSV, 5-folds for poliovirus, 3-folds for Zika) and on SARS-CoV-2's spikes, and the see-through material a neutralized one is
 /// drawn with; the antibody's Fab tips (<see cref="AntibodyBinder"/>) found
 /// from its chains; the movie's control panel (<see cref="TunnelMoviePanel"/>, from the TS Menu's rows and the
 /// browser's keyboard); and then the containers again, which carry the movie (Tunnel > Containers > Build Containers).
@@ -44,6 +44,7 @@ static class MovieBuilder
         var antibody = AssetDatabase.LoadAssetAtPath<GameObject>(k_AntibodyPath);
         foreach (var (name, fold) in k_Capsids)
             log.Append(BuildCapsid(name, fold, antibody, siteMaterial, seeThrough)).Append("; ");
+        log.Append(BuildVirion(antibody, siteMaterial, seeThrough)).Append("; ");
         log.Append(BuildAntibody()).Append("; ");
         log.Append(BuildPanel()).Append("; ");
         AssetDatabase.SaveAssets();
@@ -173,6 +174,55 @@ static class MovieBuilder
         }
         return $"{name}: {axes.Count} {fold}-fold sites ({fit}; {fold}-fold match {check:P0}), outer radius {radius / k_UnitsPerAngstrom:0} Å, " +
             $"site bases {bases.Min() / k_UnitsPerAngstrom:0}-{bases.Max() / k_UnitsPerAngstrom:0} Å";
+    }
+
+    const string k_VirionPath = "Assets/Molecules/SARS/Toy_SARS_Networked.prefab";
+
+    /// <summary>
+    /// SARS-CoV-2's binding sites: its spikes, from the cylinders that enclose them (its "Spike N" colliders, made by
+    /// Tunnel > Molecules > Build SARS Toy). An antibody binds at the middle of a spike's outer end.
+    /// </summary>
+    public static string BuildVirion() => BuildVirion(AssetDatabase.LoadAssetAtPath<GameObject>(k_AntibodyPath), SiteMaterial(), SeeThroughMaterial());
+
+    static string BuildVirion(GameObject antibody, Material siteMaterial, Material seeThrough)
+    {
+        if (AssetDatabase.LoadAssetAtPath<GameObject>(k_VirionPath) == null)
+            return "SARS: no toy";
+        var root = PrefabUtility.LoadPrefabContents(k_VirionPath);
+        try
+        {
+            var holder = root.transform.Find("Collider");
+            var spikes = holder == null ? new List<Transform>() : holder.Cast<Transform>()
+                .Where(t => t.name.StartsWith("Spike ") && t.GetComponent<MeshCollider>() != null).ToList();
+            if (spikes.Count == 0)
+                return "SARS: no spike colliders (Tunnel > Molecules > Build SARS Toy first)";
+            var toRoot = root.transform.worldToLocalMatrix;
+            var points = new Vector3[spikes.Count];
+            var axes = new Vector3[spikes.Count];
+            var lengths = new float[spikes.Count];
+            var diameters = new float[spikes.Count];
+            for (int i = 0; i < spikes.Count; i++)
+            {
+                // Each cylinder runs along its +z from its position, its length its z scale, its diameter its x.
+                var spike = spikes[i];
+                var start = toRoot.MultiplyPoint3x4(spike.position);
+                var end = toRoot.MultiplyPoint3x4(spike.TransformPoint(Vector3.forward));
+                axes[i] = (end - start).normalized;
+                points[i] = end;
+                lengths[i] = (end - start).magnitude;
+                diameters[i] = toRoot.MultiplyVector(spike.TransformVector(Vector3.right)).magnitude;
+            }
+            float radius = points.Max(p => p.magnitude);
+            var sites = root.GetComponent<CapsidSites>() ?? root.AddComponent<CapsidSites>();
+            sites.ConfigureProtrusions("spikes", "virion", points, axes, lengths, diameters, radius, antibody, siteMaterial, seeThrough);
+            EditorUtility.SetDirty(sites);
+            PrefabUtility.SaveAsPrefabAsset(root, k_VirionPath);
+            return $"SARS: {spikes.Count} spike sites, tips {points.Min(p => p.magnitude) / k_UnitsPerAngstrom:0}-{radius / k_UnitsPerAngstrom:0} Å out";
+        }
+        finally
+        {
+            PrefabUtility.UnloadPrefabContents(root);
+        }
     }
 
     /// <summary>

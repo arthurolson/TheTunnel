@@ -6,7 +6,8 @@ using UnityEngine;
 /// the capsid's surface, while the container's heat goes on jostling it; when it reaches the capsid it binds there,
 /// its Fab arm pointing straight out along the site's axis. It lets go of a site that is taken meanwhile, or that it
 /// hasn't reached in a while, and isn't drawn while held in a hand or while the movie is paused (it waits).
-/// Only the headset that moves it (its owner) draws it; the host decides the binding.
+/// A spike's site (SARS-CoV-2) draws it up to the middle of the spike's outer end, and it binds there, pointing
+/// out along the spike. Only the headset that moves it (its owner) draws it; the host decides the binding.
 /// The Fab tips are found from its chains by Tunnel > Movie > Build 3D Movie.
 /// </summary>
 [RequireComponent(typeof(MoleculeGravity))]
@@ -111,7 +112,7 @@ public class AntibodyBinder : MonoBehaviour
         var tip = transform.TransformPoint(m_Tips[m_Tip]);
         var target = m_Target.SiteBase(m_Site);
         var toTarget = target - tip;
-        if (toTarget.magnitude < m_Target.siteLength * 0.1f)
+        if (toTarget.magnitude < m_Target.SiteLength(m_Site) * 0.1f)
         {
             Reach();
             return;
@@ -128,7 +129,8 @@ public class AntibodyBinder : MonoBehaviour
 
     void OnCollisionStay(Collision collision)
     {
-        if (m_Target != null && m_AskedAt < 0f && collision.rigidbody != null && collision.rigidbody == m_Target.body)
+        if (m_Target != null && m_AskedAt < 0f && collision.rigidbody != null && collision.rigidbody == m_Target.body
+            && m_Target.Reached(m_Site, transform.TransformPoint(m_Tips[m_Tip])))
             Reach();
     }
 

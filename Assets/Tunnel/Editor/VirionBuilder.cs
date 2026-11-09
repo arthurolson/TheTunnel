@@ -130,6 +130,7 @@ static class VirionBuilder
         var widths = spikes.Select(s => s.radius * 2f).OrderBy(w => w).ToList();
         string log = $"[Molecules] SARS toy: {string.Join("; ", report)}; collider sphere {sphere:0} Å, {spikes.Count} spike cylinders " +
             (spikes.Count > 0 ? $"{lengths[0]:0}-{lengths[^1]:0} Å long, {widths[0]:0}-{widths[^1]:0} Å across" : "");
+        log += "; " + MovieBuilder.BuildVirion(); // its movie binding sites follow its spikes
         Debug.Log(log);
         return log;
     }

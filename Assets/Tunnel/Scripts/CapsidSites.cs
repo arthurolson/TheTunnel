@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.XR.Interaction.Toolkit;
@@ -17,6 +18,9 @@ using UnityEngine.XR.Interaction.Toolkit.Interactables;
 /// it goes on moving and bumping into the rest as before. The movie's Show binding sites makes the sites visible.
 /// In a session the host decides each binding (the antibody's player asks), and everyone, late joiners too, sees the
 /// bound antibodies from the shared list of bindings.
+/// A virion's sites can instead be its protrusions (the spikes of SARS-CoV-2): each site is then the cylinder that
+/// encloses one spike (its collider, a little larger), the antibody is drawn to the middle of the spike's outer end
+/// and binds there, and the movie's slider leaves those sites the size of their spikes.
 /// </summary>
 public class CapsidSites : NetworkBehaviour
 {
@@ -56,6 +60,27 @@ public class CapsidSites : NetworkBehaviour
     [SerializeField]
     [Tooltip("How far out along each axis the capsid's surface is (its own units): the site's base.")]
     float[] m_BaseRadius = new float[0];
+
+    [SerializeField]
+    [Tooltip("Where each site's antibody binds (its own coordinates), when the sites are protrusions (spikes): the middle " +
+        "of each one's outer end. Empty for sites on axes through the centre, at their base radius.")]
+    Vector3[] m_Points = new Vector3[0];
+
+    [SerializeField]
+    [Tooltip("Each protrusion's length (its own units): its site runs that far in from its point. Empty for capsid sites.")]
+    float[] m_Lengths = new float[0];
+
+    [SerializeField]
+    [Tooltip("Each protrusion's diameter (its own units). Empty for capsid sites, whose diameter follows the movie's slider.")]
+    float[] m_Diameters = new float[0];
+
+    [SerializeField]
+    [Tooltip("How much larger than its protrusion a protrusion's site is, so an antibody that touches the protrusion is in it.")]
+    float m_Margin = 1.15f;
+
+    [SerializeField]
+    [Tooltip("What it is, in the movie's messages.")]
+    string m_Kind = "capsid";
 
     [SerializeField]
     [Tooltip("The capsid's outer radius (its own units).")]
@@ -135,6 +160,9 @@ public class CapsidSites : NetworkBehaviour
 
     public string symmetry => m_Symmetry;
 
+    /// <summary>Whether its sites are protrusions (spikes) the antibody binds to the outer end of.</summary>
+    public bool protrusions => m_Points.Length == m_Axes.Length && m_Points.Length > 0;
+
     Binding BindingAt(int i) => IsSpawned ? m_Bindings[i] : m_LocalBindings[i];
 
     void Awake()
@@ -171,13 +199,26 @@ public class CapsidSites : NetworkBehaviour
     }
 
     /// <summary>Where site i stands on the capsid's surface (world).</summary>
-    public Vector3 SiteBase(int i) => transform.TransformPoint(m_Axes[i] * m_BaseRadius[i]);
+    public Vector3 SiteBase(int i) => transform.TransformPoint(protrusions ? m_Points[i] : m_Axes[i] * m_BaseRadius[i]);
 
     /// <summary>The direction site i points out of the capsid (world).</summary>
     public Vector3 SiteAxis(int i) => transform.TransformDirection(m_Axes[i]).normalized;
 
-    /// <summary>A site's length (world).</summary>
-    public float siteLength => m_Radius * m_LengthFraction * transform.lossyScale.x;
+    /// <summary>Site i's length (world).</summary>
+    public float SiteLength(int i) => (protrusions && i < m_Lengths.Length ? m_Lengths[i] : m_Radius * m_LengthFraction) * transform.lossyScale.x;
+
+    /// <summary>
+    /// Whether an antibody touching it, with its Fab tip here (world), has reached site i: any touch for a capsid site
+    /// (it's drawn in to its surface), but only near the outer end for a protrusion, as one touching a spike's side
+    /// is still drawn up along it.
+    /// </summary>
+    public bool Reached(int i, Vector3 tip)
+    {
+        if (!protrusions)
+            return true;
+        float across = (i < m_Diameters.Length ? m_Diameters[i] : 2f * m_Radius * m_DiameterFraction) * transform.lossyScale.x;
+        return (tip - SiteBase(i)).magnitude < 0.5f * across;
+    }
 
     void Update()
     {
@@ -190,7 +231,7 @@ public class CapsidSites : NetworkBehaviour
         if (m_Sites != null)
         {
             float diameter = movie != null ? movie.siteDiameter : m_DiameterFraction;
-            if (diameter != m_DiameterShown)
+            if (diameter != m_DiameterShown && !protrusions)
             {
                 m_DiameterShown = diameter;
                 float across = 2f * m_Radius * diameter;
@@ -228,9 +269,21 @@ public class CapsidSites : NetworkBehaviour
             go.layer = k_IgnoreRaycastLayer;
             var t = go.transform;
             t.SetParent(transform, false);
-            t.localPosition = m_Axes[i] * m_BaseRadius[i];
             t.localRotation = Quaternion.FromToRotation(Vector3.forward, m_Axes[i]);
-            t.localScale = new Vector3(diameter, diameter, length);
+            if (protrusions)
+            {
+                // The spike's cylinder, a little wider and a little past its end.
+                float spike = i < m_Lengths.Length ? m_Lengths[i] : length;
+                float across = (i < m_Diameters.Length ? m_Diameters[i] : diameter) * m_Margin;
+                float past = spike * (m_Margin - 1f);
+                t.localPosition = m_Points[i] - m_Axes[i] * spike;
+                t.localScale = new Vector3(across, across, spike + past);
+            }
+            else
+            {
+                t.localPosition = m_Axes[i] * m_BaseRadius[i];
+                t.localScale = new Vector3(diameter, diameter, length);
+            }
             var collider = go.AddComponent<MeshCollider>();
             collider.sharedMesh = s_Cylinder;
             collider.convex = true;
@@ -249,7 +302,9 @@ public class CapsidSites : NetworkBehaviour
             m_SiteColliders[i] = collider;
             m_SiteRenderers[i] = renderer;
         }
-        Debug.Log($"[Movie] {name}: {count} binding sites on its {m_Symmetry} axes, {length * transform.lossyScale.x * 100f:0.0} cm long");
+        Debug.Log(protrusions
+            ? $"[Movie] {name}: {count} binding sites, one on each of its {m_Symmetry}"
+            : $"[Movie] {name}: {count} binding sites on its {m_Symmetry} axes, {length * transform.lossyScale.x * 100f:0.0} cm long");
     }
 
     // A cylinder of diameter 1 along +z from 0 to 1, closed at both ends.
@@ -320,10 +375,10 @@ public class CapsidSites : NetworkBehaviour
         else
             m_LocalBindings.Add(binding);
         int count = bindingCount;
-        Debug.Log($"[Movie] {antibody.name} bound to {name} at {m_Symmetry} site {binding.site + 1}: {count} antibod{(count == 1 ? "y" : "ies")}");
+        Debug.Log($"[Movie] {antibody.name} bound to {name} at {(protrusions ? "" : m_Symmetry + " ")}site {binding.site + 1}: {count} antibod{(count == 1 ? "y" : "ies")}");
         Remove(antibody);
         if (count > m_MaxAntibodies && movie != null)
-            movie.Announce($"A {MoleculeName(gameObject)} capsid took {count} antibodies: neutralized.");
+            movie.Announce($"A {MoleculeName(gameObject)} {m_Kind} took {count} antibodies: neutralized.");
     }
 
     /// <summary>
@@ -575,6 +630,24 @@ public class CapsidSites : NetworkBehaviour
         m_Radius = radius;
         m_AntibodyPrefab = antibody;
         m_SiteMaterial = siteMaterial;
+        m_Points = new Vector3[0];
+        m_Lengths = new float[0];
+        m_Diameters = new float[0];
+        m_Kind = "capsid";
+    }
+
+    /// <summary>
+    /// Set by Tunnel > Movie > Build 3D Movie for a virion whose sites are its protrusions: where each one's
+    /// antibody binds (the middle of its outer end), the direction it points out, its length and its diameter.
+    /// </summary>
+    public void ConfigureProtrusions(string what, string kind, Vector3[] points, Vector3[] axes, float[] lengths, float[] diameters,
+        float radius, GameObject antibody, Material siteMaterial, Material seeThrough)
+    {
+        Configure(what, axes, points.Select(p => p.magnitude).ToArray(), radius, antibody, siteMaterial, seeThrough);
+        m_Points = points;
+        m_Lengths = lengths;
+        m_Diameters = diameters;
+        m_Kind = kind;
     }
 #endif
 }
