@@ -1,7 +1,7 @@
 # The Tunnel: status
 
 What has been built, what is in progress, and where each build is. Updated as work lands; the plan ahead is in
-[TODO.md](TODO.md). Last updated 10 November 2026 (version 09.11.2026.4).
+[TODO.md](TODO.md). Last updated 10 November 2026 (version 10.11.2026.1).
 
 ## Accomplished
 
@@ -72,9 +72,16 @@ What has been built, what is in progress, and where each build is. Updated as wo
 - The marker's grip lights up while it's marking.
 - The airbrush sprays from up to 30 cm away: wider and fainter the farther it is.
 - The virtual marker follows the hand every frame instead of in physics steps (09.11.2026.3).
-- Real marker experiment (09.11.2026.3–.4): the palette's Real marker button tracks a physical marker by its cap
-  colour through the passthrough camera. It paints on a real 3 x 2 ft whiteboard located by a QR code in the
-  board's top-right corner.
+- Real marker (10.11.2026.1; first tried 09.11.2026.3–.4 on a whiteboard found by a QR code): the palette's Real
+  marker button tracks a physical marker by its blue cap through the passthrough camera.
+  - Its colour and diameter are learned with the marker held sideways against white (the cap is 1.5 in long).
+  - The surface is set by touching the cap's tip to three spots, each held still for 4 s until a beep and a dot.
+  - The canvas is a white panel with a dark lettered box on each corner, outlined dark; with no marks, a tunnel wall
+    lying on the touched surface (that paint is shared).
+  - The tip is the cap's end away from the hand holding it. A disk at the tip shows the brush's colour and size;
+    pinching it with the other hand and moving away or back sizes the brush.
+  - Copy to wall puts the panel's painting (see-through where unpainted) on the tunnel wall in view, for everyone;
+    its corners size and turn it.
 
 ### Viewer
 - Shared panel for images, videos and spatial (stereo) photos and videos. Quest stereo captures and screenshots are
@@ -99,7 +106,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 | Item | State |
 |---|---|
-| Real marker on a whiteboard | First headset test (09.11.2026.3): the airbrush marked, solid paint didn't, and the tip dot sat off the cap. The likely cause, picking the wrong end of the cap as the tip, is fixed in 09.11.2026.4 (built and pushed, not yet installed). Next: install, test, read the once-a-second log and adjust the touch thresholds and board outline. |
+| Real marker on a panel or tunnel wall | Rebuilt to the new design in 10.11.2026.1 (tested in the Editor: corner-mark detection, panel fitting, copying; not yet on a headset). Next: install, test with the blue-capped marker and the marked panel, read the [RealMarker] log (cap size and distance, tip end, height off the surface) and adjust. |
 | Headset checks still owed | SARS-CoV-2 in the 3D movie (09.11.2026.1); the movie panel's placement on the wall beside a mixed reality box; transparent Viewer images (09.11.2026.2); the virtual marker following the hand instantly (09.11.2026.3). |
 | Grab diagnostics | Every grab and release is logged (since 08.11.2026.1), to track down grabs that don't take. Still on. |
 
@@ -107,7 +114,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 09.11.2026.4 |
+| Latest build (Builds/TheTunnelDev.apk) | 10.11.2026.1 |
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 3497C10HC4041K | 09.11.2026.3 |
 | Quest 3S 3497C10HC4004X | 09.11.2026.2 |

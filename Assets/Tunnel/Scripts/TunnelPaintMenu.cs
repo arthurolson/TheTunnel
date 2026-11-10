@@ -83,4 +83,42 @@ public class TunnelPaintMenu : NetworkBehaviour
         }
         markerComponent.SetPalette(paletteComponent);
     }
+
+    /// <summary>
+    /// Puts a copy of a painting (the paint on a real panel, <paramref name="meters"/> across) at
+    /// <paramref name="pose"/>, for everyone (the host places it); this headset then fills it with the painting's
+    /// marks, which go to everyone (<see cref="PaintingCopy"/>).
+    /// </summary>
+    public void CopyPainting(TunnelSegmentPaint source, Vector2 meters, Pose pose)
+    {
+        int request = PaintingCopy.Remember(source);
+        if (IsSpawned)
+            CopyRpc(pose.position, pose.rotation, meters, request);
+        else
+            PlaceCopy(pose.position, pose.rotation, meters, request, 0);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void CopyRpc(Vector3 position, Quaternion rotation, Vector2 meters, int request, RpcParams rpcParams = default)
+        => PlaceCopy(position, rotation, meters, request, rpcParams.Receive.SenderClientId);
+
+    void PlaceCopy(Vector3 position, Quaternion rotation, Vector2 meters, int request, ulong requester)
+    {
+        if (m_Prefabs == null || m_Prefabs.paintCopy == null)
+        {
+            Debug.LogWarning("[Paint] can't copy the painting: its prefab is missing");
+            return;
+        }
+
+        // Set up before it wakes, as the palette is.
+        var holder = new GameObject("Painting Copy Holder");
+        holder.SetActive(false);
+        var copy = Instantiate(m_Prefabs.paintCopy, position, rotation, holder.transform);
+        copy.GetComponent<PaintingCopy>().Setup(meters, request, requester);
+        copy.transform.SetParent(null, true);
+        Destroy(holder);
+        if (IsSpawned && copy.TryGetComponent(out NetworkObject networkObject))
+            networkObject.SpawnWithOwnership(requester, true);
+        Debug.Log($"[Paint] painting copy {meters.x * 100f:0} x {meters.y * 100f:0} cm placed at {position:F2} for player {requester}");
+    }
 }

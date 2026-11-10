@@ -9,8 +9,9 @@ using UnityEngine.XR.Interaction.Toolkit.Transformers;
 using UnityEngine.XR.Templates.MRTTabletopAssets;
 
 /// <summary>
-/// Makes painting on the tunnel: the marker (<see cref="TunnelMarker"/>) and palette (<see cref="TunnelPalette"/>)
-/// prefabs, each a copy of the 2PLV molecule's toy without its molecule (so they are grabbed and shared the same way),
+/// Makes painting on the tunnel: the marker (<see cref="TunnelMarker"/>), palette (<see cref="TunnelPalette"/>) and
+/// painting copy (<see cref="PaintingCopy"/>) prefabs, each a copy of the 2PLV molecule's toy without its molecule (so
+/// they are grabbed and shared the same way),
 /// the palette's controls (copied from the TS Menu's colour chooser and rows), and in the tunnel segment prefab its
 /// paint (<see cref="TunnelSegmentPaint"/>) and the TS Menu's Paint button (<see cref="TunnelPaintMenu"/>).
 /// Runs from Tunnel > Paint > Build Paint.
@@ -46,19 +47,21 @@ static class PaintBuilder
             var control = segment.transform.Find("Control Panel");
             var marker = MakeMarker(body, cap);
             var palette = MakePalette(control, board);
+            var copy = MakeCopy(overlay);
             registry.marker = marker;
             registry.palette = palette;
+            registry.paintCopy = copy;
             EditorUtility.SetDirty(registry);
 
             var list = AssetDatabase.LoadAssetAtPath<NetworkPrefabsList>(k_NetworkListPath);
-            foreach (var prefab in new[] { marker, palette })
+            foreach (var prefab in new[] { marker, palette, copy })
                 if (!list.PrefabList.Any(p => p.Prefab == prefab))
                     list.Add(new NetworkPrefab { Prefab = prefab });
             EditorUtility.SetDirty(list);
 
             BuildSegment(segment, control, registry, overlay);
             bool saved = PrefabUtility.SaveAsPrefabAsset(segment, k_SegmentPath) != null;
-            log = $"[Paint] built {AssetDatabase.GetAssetPath(marker)} and {AssetDatabase.GetAssetPath(palette)}; segment {(saved ? "saved" : "NOT saved")}";
+            log = $"[Paint] built {AssetDatabase.GetAssetPath(marker)}, {AssetDatabase.GetAssetPath(palette)} and {AssetDatabase.GetAssetPath(copy)}; segment {(saved ? "saved" : "NOT saved")}";
         }
         finally
         {
@@ -286,8 +289,9 @@ static class PaintBuilder
         var endLine = Row("End Line Row", -50f, "End line");
         var clear = Row("Clear Row", -120f, "Clear all marks");
         var real = Row("Real Marker Row", -185f, "□  Real marker");
-        var status = Text(titleTemplate, canvasRect, "Status", "", new Vector2(k_RowsX, -295f), new Vector2(k_RowWidth, 140f));
-        status.fontSize = 24f;
+        var copyRow = Row("Copy Row", -250f, "Copy to wall");
+        var status = Text(titleTemplate, canvasRect, "Status", "", new Vector2(k_RowsX, -332f), new Vector2(k_RowWidth, 92f));
+        status.fontSize = 21f;
         status.alignment = TextAlignmentOptions.TopLeft;
         status.textWrappingMode = TextWrappingModes.Normal;
 
@@ -315,6 +319,7 @@ static class PaintBuilder
         so.FindProperty("m_EndLineRow").objectReferenceValue = endLine;
         so.FindProperty("m_ClearRow").objectReferenceValue = clear;
         so.FindProperty("m_RealRow").objectReferenceValue = real;
+        so.FindProperty("m_CopyRow").objectReferenceValue = copyRow;
         so.FindProperty("m_BoardOverlay").objectReferenceValue = AssetDatabase.LoadAssetAtPath<Material>($"{k_Folder}/PaintOverlay.mat");
         so.FindProperty("m_BoardBrush").objectReferenceValue = Shader.Find("Tunnel/Paint Brush");
         so.FindProperty("m_Status").objectReferenceValue = status;
@@ -322,6 +327,32 @@ static class PaintBuilder
         so.FindProperty("m_HolderGrab").objectReferenceValue = holderGrab;
         so.ApplyModifiedPropertiesWithoutUndo();
         return Save(palette);
+    }
+
+    // A copy of a real panel's painting, put on a tunnel wall: grabbed and shared like the palette, with its own paint.
+    static GameObject MakeCopy(Material overlay)
+    {
+        var copy = MakeToy("Paint_Copy_Networked");
+        var generalSo = new SerializedObject(copy.GetComponent<XRGeneralGrabTransformer>());
+        generalSo.FindProperty("m_AllowTwoHandedScaling").boolValue = false; // its corners size it
+        generalSo.ApplyModifiedPropertiesWithoutUndo();
+        copy.GetComponent<XRGrabInteractable>().movementType = XRBaseInteractable.MovementType.Instantaneous;
+        var box = copy.AddComponent<BoxCollider>();
+        box.size = new Vector3(0.9f, 0.6f, 0.02f); // sized to its painting when it wakes
+        box.excludeLayers = ~0;                     // found by the hands and lasers, pushes nothing
+
+        var paint = copy.AddComponent<TunnelSegmentPaint>();
+        var paintSo = new SerializedObject(paint);
+        paintSo.FindProperty("m_OverlayMaterial").objectReferenceValue = overlay;
+        paintSo.FindProperty("m_BrushShader").objectReferenceValue = Shader.Find("Tunnel/Paint Brush");
+        paintSo.ApplyModifiedPropertiesWithoutUndo();
+
+        var component = copy.AddComponent<PaintingCopy>();
+        var so = new SerializedObject(component);
+        so.FindProperty("m_Overlay").objectReferenceValue = overlay;
+        so.FindProperty("m_Brush").objectReferenceValue = Shader.Find("Tunnel/Paint Brush");
+        so.ApplyModifiedPropertiesWithoutUndo();
+        return Save(copy);
     }
 
     static Transform Box(Transform parent, string name, Vector3 position, Vector3 size, Mesh mesh, Material material)

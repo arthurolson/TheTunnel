@@ -231,6 +231,46 @@ public class TunnelSegmentPaint : NetworkBehaviour
             ClearPreviewRpc(marker);
     }
 
+    /// <summary>Whether anything has been painted here (and not cleared). Known on the host, or when not shared.</summary>
+    public bool hasMarks => m_History.Exists(op => op.kind == OpKind.Stamps && op.style.mode != PaintMode.Eraser);
+
+    /// <summary>
+    /// Paints everything painted here, in order, onto <paramref name="target"/> (which shares it as its own marks), a
+    /// few thousand stamps a frame so the network keeps up. The marks keep their size in meters of this canvas, so
+    /// the target should have the same canvas size.
+    /// </summary>
+    public System.Collections.IEnumerator ReplayInto(TunnelSegmentPaint target)
+    {
+        var history = m_History.ToArray();
+        int stamps = 0, thisFrame = 0;
+        var uvs = new List<Vector2>();
+        foreach (var (kind, style, packed) in history)
+        {
+            if (target == null)
+                yield break;
+            if (kind == OpKind.EndStroke)
+            {
+                target.EndStroke();
+                continue;
+            }
+            if (kind != OpKind.Stamps || packed == null)
+                continue;
+            uvs.Clear();
+            uvs.AddRange(Unpack(packed));
+            target.Draw(style, uvs);
+            stamps += uvs.Count;
+            thisFrame += uvs.Count;
+            if (thisFrame >= 2000)
+            {
+                thisFrame = 0;
+                yield return null;
+            }
+        }
+        if (target != null)
+            target.EndStroke();
+        Debug.Log($"[Paint] copied {stamps} stamps from {name} to {(target != null ? target.name : "nothing")}");
+    }
+
     // At most this many stamps, evenly picked along the way (the first and last kept).
     static Vector2[] Thin(List<Vector2> uvs, int most)
     {
@@ -362,6 +402,8 @@ public class TunnelSegmentPaint : NetworkBehaviour
     {
         if (m_Pending.Count == 0 && !m_PreviewDirty)
             return;
+        if (surface != null && (surface.paintCanvasMeters.x <= 0f || surface.paintCanvasMeters.y <= 0f))
+            return; // its size isn't known yet (a painting copy just arrived): the marks wait
         if (!EnsureCanvas())
         {
             m_Pending.Clear();

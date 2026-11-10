@@ -3,114 +3,213 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
-using UnityEngine.XR.ARFoundation;
-using UnityEngine.XR.ARSubsystems;
+using UnityEngine.XR.Hands;
 using UnityEngine.XR.Templates.MRTTabletopAssets;
-using ZXing;
-using ZXing.Common;
 using XRMultiplayer;
 
 /// <summary>
-/// Paints with a real marker, seen by the headset's passthrough camera, in place of the palette's virtual marker,
-/// on a real whiteboard in place of the tunnel's walls (an experiment). Started by the palette's Real marker button:
-///  1. Colour: the marker is held up with its coloured cap against something plain and white; the cap's colour
-///     (the strongest saturated colour in the middle of the view, seen steadily) becomes the colour that's tracked.
-///  2. Board: any QR code in the whiteboard's top-right corner. It is seen from several places as the head moves
-///     side to side, and its three corner squares are triangulated, which gives where it is, its size and the board's
-///     plane (set upright when nearly so, or onto a Space Setup wall it lies on). The board (3 x 2 ft) extends left
-///     and down from the code's top-right corner; a thin outline shows it (<see cref="WhiteboardSurface"/>).
-///  3. Touch: the cap is held on the board for a moment, which calibrates how far the cap is from its apparent width.
-///  4. Tracking: every camera image, the cap is found (colour lookup, then the biggest patch near where it was), its
-///     two ends turned into rays, the end nearer the board is the tip; where its ray meets the board is where it
-///     paints, and its estimated height off the board (from the cap's width) says whether it touches, with some
-///     hysteresis. The palette's marker paints from it (<see cref="TunnelMarker.SetRealTip"/>) with its own colour,
-///     size and kind of mark, on the whiteboard only. A dot on the board shows where the tip is seen, green while
-///     touching.
-/// Each image is about 40 ms old when it arrives, so the head pose from then is used. Local to this headset.
+/// Paints with a real marker, seen by the headset's passthrough camera, in place of the palette's virtual marker.
+/// The canvas is either a real white panel with a dark mark on each corner, or a tunnel wall that lies on a real wall.
+/// Started by the palette's Real marker button:
+///  1. Colour: the marker is held sideways with its coloured cap against something plain and white; the cap's colour
+///     becomes the colour that's tracked, and its known length (1.5 inches) against its width gives its diameter.
+///  2. Surface: the cap's tip is held still on the surface for 4 seconds; a dot appears there with a beep. Three such
+///     points, apart from each other and not in a line, give the surface's plane.
+///  3. Canvas: on a panel, the four dark corner marks (each a dark box with a letter) are found in the camera image,
+///     seen from wherever the head was, and placed on the plane; the canvas reaches their outer corners and a dark
+///     outline shows it (<see cref="WhiteboardSurface"/>). With no marks, a tunnel wall lying on the plane is the
+///     canvas, and its paint is shared like the virtual marker's.
+///  4. Painting: every camera image, the cap is found (colour lookup, then the biggest patch near where it was); its
+///     tip is the end away from the hand holding it. Where the tip's ray meets the plane is where it paints, and its
+///     height off the plane (its distance from the cap's apparent width) says whether it touches, with hysteresis.
+///     The palette's marker paints from it (<see cref="TunnelMarker.SetRealTip"/>) with the palette's colour.
+/// A disk at the tip shows the brush's colour and size. Pinching the disk with the other hand and moving away (or
+/// back) sizes the brush, until the pinch opens.
+/// Each image is about 40 ms old when it arrives, so the head pose from then is used. Local to this headset, apart
+/// from paint on a tunnel wall.
 /// </summary>
 [DefaultExecutionOrder(-1100)] // before the marker paints
 public class RealMarkerTracker : MonoBehaviour
 {
-    public enum Stage { Off, Colour, Board, Touch, Tracking }
+    public enum Stage { Off, Colour, Surface, Canvas, Tracking }
 
-    [Header("Whiteboard")]
-    [SerializeField]
-    Vector2 m_BoardSize = new(0.9144f, 0.6096f);
+    public enum CanvasKind { None, Panel, TunnelWall }
 
+    [Header("The marker")]
     [SerializeField]
-    [Tooltip("How far the QR code's top-right corner is in from the board's (meters, left and down).")]
-    Vector2 m_QrInset = Vector2.zero;
-
-    [SerializeField]
-    [Tooltip("Parallax needed to triangulate the QR code (degrees between the farthest views of it).")]
-    float m_MinParallax = 5f;
+    [Tooltip("The cap's length (meters): 1.5 inches.")]
+    float m_CapLength = 0.0381f;
 
     [SerializeField]
-    int m_MinQrSightings = 20;
+    [Tooltip("The cap's diameter (meters), used if it can't be measured when its colour is learned.")]
+    float m_CapDiameter = 0.016f;
 
     [SerializeField]
-    [Tooltip("A board within this angle of upright (degrees) is set exactly upright.")]
-    float m_UprightSnap = 12f;
+    [Tooltip("Smallest cap patch tracked (image pixels).")]
+    int m_MinPixels = 120;
 
-    [Header("Tracking")]
     [SerializeField]
     [Tooltip("How old a camera image is when it arrives (seconds): the head pose from then is used.")]
     float m_CameraLatency = 0.04f;
 
     [SerializeField]
-    [Tooltip("The cap's diameter (meters), used until the touch calibration measures it.")]
-    float m_CapDiameter = 0.019f;
+    [Tooltip("Lost from view this long (seconds), the marker stops painting.")]
+    float m_LostAfter = 0.2f;
+
+    [Header("The surface: three touches")]
+    [SerializeField]
+    [Tooltip("How long the tip is held still on the surface for a point (seconds).")]
+    float m_HoldTime = 4f;
 
     [SerializeField]
-    [Tooltip("The tip touches the board when its estimated height drops below this (meters)...")]
+    [Tooltip("The tip counts as still while it stays this close sideways (meters)...")]
+    float m_HoldSideways = 0.01f;
+
+    [SerializeField]
+    [Tooltip("...and this close in depth, which one camera judges less well.")]
+    float m_HoldDepth = 0.035f;
+
+    [SerializeField]
+    [Tooltip("The three points are at least this far apart (meters).")]
+    float m_TouchSpacing = 0.1f;
+
+    [SerializeField]
+    [Tooltip("The third point is at least this far off the line through the other two (meters).")]
+    float m_MinSpread = 0.05f;
+
+    [SerializeField]
+    [Tooltip("A surface within this angle of upright (degrees) is set exactly upright.")]
+    float m_UprightSnap = 5f;
+
+    [Header("The canvas")]
+    [SerializeField]
+    [Tooltip("Corner marks between these sizes (meters) are looked for.")]
+    Vector2 m_MarkSize = new(0.015f, 0.2f);
+
+    [SerializeField]
+    [Tooltip("Sightings of a mark within this distance (meters) on the surface are the same mark.")]
+    float m_MarkCluster = 0.03f;
+
+    [SerializeField]
+    [Tooltip("A mark must be seen this many times.")]
+    int m_MinMarkSightings = 6;
+
+    [SerializeField]
+    [Tooltip("The panel's marks are at least this far apart (meters).")]
+    float m_MinPanelSide = 0.15f;
+
+    [SerializeField]
+    [Tooltip("A tunnel wall is the canvas when the touched surface is within this angle (degrees)...")]
+    float m_WallAngle = 15f;
+
+    [SerializeField]
+    [Tooltip("...and this distance (meters) of it.")]
+    float m_WallDistance = 0.12f;
+
+    [SerializeField]
+    [Tooltip("Size of a canvas texel on the panel (meters).")]
+    float m_PanelTexel = 0.0015f;
+
+    [SerializeField]
+    [Tooltip("With no marks and no tunnel wall, give up after this long (seconds).")]
+    float m_CanvasTimeout = 90f;
+
+    [Header("Painting")]
+    [SerializeField]
+    [Tooltip("The tip touches when its estimated height drops below this (meters)...")]
     float m_TouchDown = 0.012f;
 
     [SerializeField]
     [Tooltip("...and stops touching when it rises above this.")]
     float m_TouchUp = 0.022f;
 
+    [Header("Brush size")]
     [SerializeField]
-    [Tooltip("Lost from view this long (seconds), the marker stops painting.")]
-    float m_LostAfter = 0.2f;
+    [Tooltip("A pinch starts sizing the brush within this far of the disk's edge (meters).")]
+    float m_PinchReach = 0.04f;
 
     [SerializeField]
-    [Tooltip("Smallest cap patch tracked (image pixels).")]
-    int m_MinPixels = 120;
+    [Tooltip("Thumb and index tips this close (meters) are a pinch...")]
+    float m_PinchClose = 0.015f;
+
+    [SerializeField]
+    [Tooltip("...and this far apart, the pinch has opened.")]
+    float m_PinchOpen = 0.035f;
 
     const int k_Cell = 8;
 
     public static RealMarkerTracker instance { get; private set; }
 
     public Stage stage { get; private set; }
+    public CanvasKind canvasKind { get; private set; }
     public TunnelPalette palette { get; private set; }
     public Color32 capColour { get; private set; }
     public string status { get; private set; } = "";
+
+    /// <summary>The canvas on the real panel, once found (it stays after the real marker is turned off).</summary>
     public WhiteboardSurface board => m_Board;
+
+    /// <summary>The paint on the panel's canvas, which can be copied onto a tunnel wall.</summary>
+    public TunnelSegmentPaint panelPaint => m_BoardPaint;
 
     PassthroughCameraReader m_Camera;
     Material m_Overlay;
     Shader m_Brush;
     WhiteboardSurface m_Board;
+    TunnelSegmentPaint m_BoardPaint;
+    TunnelSegmentPaint m_Canvas;
     Coroutine m_Run;
 
     ColourModel m_Model;
-    float m_K; // the cap's apparent width (pixels) times its distance (meters)
+    float m_Diameter; // the cap's, measured or the default
 
     // Head poses, for the pose when an image was taken.
     readonly (float time, Vector3 position, Quaternion rotation)[] m_HeadHistory = new (float, Vector3, Quaternion)[64];
     int m_HeadCount, m_HeadNext;
 
-    // Tracking.
+    // The cap.
     Blob m_LastBlob;
     float m_LastSeen = -10f;
-    bool m_Touching;
     Vector2 m_TipPixel;
+    Sighting m_Tip;
+    bool m_TipShown;
+    float m_NextLog;
+
+    // The surface.
+    readonly List<Vector3> m_Points = new();
+    readonly List<GameObject> m_PointDots = new();
+    readonly List<(float time, Vector3 point)> m_Hold = new();
+    float m_HoldLast;
+    float m_NextCount;
+    bool m_NeedMove;
+    bool m_HasPlane;
+    Vector3 m_PlanePoint, m_PlaneNormal; // the normal looks out of the surface, toward whoever paints
+    float m_CanvasSince;
+
+    // Corner marks, as seen: rays and how big they look.
+    readonly List<(Vector3 origin, Vector3 direction, float angle, float time)> m_MarkSightings = new();
+    bool m_MarksChanged;
+    float m_NextMarks;
+    int m_MarksFound;
+
+    // Painting.
+    bool m_Touching;
     readonly float[] m_Heights = new float[3];
     int m_HeightCount;
-    Transform m_Dot;
-    Material m_DotMaterial;
     float m_NextStatus;
-    float m_NextLog;
+
+    // The disk at the tip, and sizing it.
+    Transform m_Disk, m_DiskFace;
+    LineRenderer m_DiskRing;
+    Material m_DiskMaterial, m_DotMaterial, m_RingMaterial;
+    Vector3 m_DiskNormal;
+    bool m_Pinching;
+    Handedness m_PinchHand;
+    float m_PinchStartDistance, m_PinchStartDiameter;
+    Handedness m_HoldingHand = Handedness.Invalid;
+
+    AudioSource m_Audio;
+    AudioClip m_Beep;
 
     /// <summary>The tracker, made the first time it's needed.</summary>
     public static RealMarkerTracker Get()
@@ -142,24 +241,39 @@ public class RealMarkerTracker : MonoBehaviour
         m_Run = null;
         var marker = Marker();
         if (marker != null)
+        {
             marker.SetReal(false);
+            marker.SetRealCanvas(null);
+        }
         stage = Stage.Off;
+        canvasKind = CanvasKind.None;
+        m_Canvas = null;
         m_Touching = false;
-        ShowDot(false, default, false);
+        m_Pinching = false;
+        ShowDisk(false);
+        ClearPoints();
         var scanner = FindAnyObjectByType<QrFloorScanner>();
         if (m_Camera != null && (scanner == null || !scanner.isScanning))
             m_Camera.Stop();
         SetStatus(message);
     }
 
-    void Awake() => instance = this;
+    void Awake()
+    {
+        instance = this;
+        m_Audio = gameObject.AddComponent<AudioSource>();
+        m_Audio.playOnAwake = false;
+        m_Audio.spatialBlend = 0f;
+        m_Beep = Tone("Real Marker Beep", 1000f, 0.18f);
+    }
 
     void OnDestroy()
     {
         if (instance == this)
             instance = null;
-        if (m_DotMaterial != null)
-            Destroy(m_DotMaterial);
+        foreach (var o in new UnityEngine.Object[] { m_DiskMaterial, m_DotMaterial, m_RingMaterial, m_Beep })
+            if (o != null)
+                Destroy(o);
     }
 
     TunnelMarker Marker()
@@ -172,6 +286,8 @@ public class RealMarkerTracker : MonoBehaviour
 
     void SetStatus(string text)
     {
+        if (text == status)
+            return;
         status = text;
         Log(text);
     }
@@ -187,7 +303,13 @@ public class RealMarkerTracker : MonoBehaviour
         }
 
         if (stage != Stage.Off && palette == null)
+        {
             Stop("The palette is gone: real marker off.");
+            return;
+        }
+
+        if (stage >= Stage.Surface)
+            SizeBrush();
     }
 
     // The head's pose when the current camera image was taken.
@@ -221,11 +343,25 @@ public class RealMarkerTracker : MonoBehaviour
             yield break;
         }
 
+        var marker = Marker();
+        if (marker == null)
+        {
+            Stop("The palette has no marker.");
+            yield break;
+        }
+
         stage = Stage.Colour;
+        canvasKind = CanvasKind.None;
+        m_Canvas = null;
         m_LastBlob = default;
         m_LastSeen = -10f;
         m_HeightCount = 0;
         m_Touching = false;
+        m_HasPlane = false;
+        m_MarkSightings.Clear();
+        m_MarksFound = 0;
+        m_HoldingHand = Handedness.Invalid;
+        ClearPoints();
         SetStatus("Starting the camera...");
         bool started = false;
         yield return m_Camera.StartCamera(ok => started = ok);
@@ -239,28 +375,12 @@ public class RealMarkerTracker : MonoBehaviour
         if (stage != Stage.Colour)
             yield break;
 
-        stage = Stage.Board;
-        yield return FindBoard();
-        if (stage != Stage.Board)
-            yield break;
-
-        stage = Stage.Touch;
-        var marker = Marker();
-        if (marker == null)
-        {
-            Stop("The palette has no marker.");
-            yield break;
-        }
-
-        yield return CalibrateTouch();
-        if (stage != Stage.Touch)
-            yield break;
-
-        stage = Stage.Tracking;
+        // From here the real marker stands in for the virtual one, though it paints only once there's a canvas.
         marker.SetReal(true);
-        SetStatus($"Real marker on: draw on the whiteboard with the capped marker. It paints with the marker's colour; select a disk to change it.");
-        PlayerHudNotification.Instance?.ShowText("Real marker tracking", 2f);
-        yield return Track(marker);
+        marker.SetRealCanvas(null);
+        stage = Stage.Surface;
+        SetStatus("Touch the surface with the cap's tip and hold it still for 4 seconds, until it beeps. Then two more spots, apart and not in a line.");
+        yield return Loop(marker);
     }
 
     #region Colour
@@ -319,12 +439,13 @@ public class RealMarkerTracker : MonoBehaviour
         public ColourModel model;
         public Color32 colour;
         public int pixels;
+        public float length, width;
         public string why;
     }
 
     IEnumerator FindColour()
     {
-        SetStatus("Hold the marker up in front of you with its coloured cap toward you, against something plain and white, and keep it still...");
+        SetStatus("Hold the marker sideways in the middle of your view, its coloured cap against something plain and white, and keep it still...");
         float deadline = Time.unscaledTime + 25f;
         var steady = new List<ColourSighting>();
         string lastWhy = null;
@@ -352,20 +473,29 @@ public class RealMarkerTracker : MonoBehaviour
                 steady.Clear();
             steady.Add(seen);
             SetStatus($"Seeing a {Describe(seen.colour)} cap <color=#{ColorUtility.ToHtmlStringRGB(seen.colour)}>■</color>. Hold still...");
-            if (steady.Count < 6)
+            if (steady.Count < 8)
                 continue;
 
             // The steadiest view: the middle one by hue.
-            steady.Sort((a, b) => a.model.hue.CompareTo(b.model.hue));
-            var chosen = steady[steady.Count / 2];
+            var byHue = new List<ColourSighting>(steady);
+            byHue.Sort((a, b) => a.model.hue.CompareTo(b.model.hue));
+            var chosen = byHue[byHue.Count / 2];
             m_Model = chosen.model;
             capColour = chosen.colour;
-            Log($"cap colour {capColour} hue {m_Model.hue:0} ±{m_Model.tolerance:0}, saturation ≥ {m_Model.minSaturation:0.00}, value ≥ {m_Model.minValue:0.00}, {chosen.pixels} pixels");
+
+            // Its diameter, from its known length: the middle of the width-to-length ratios seen.
+            var ratios = steady.ConvertAll(s => s.width / Mathf.Max(s.length, 1f));
+            ratios.Sort();
+            float diameter = m_CapLength * ratios[ratios.Count / 2];
+            bool measured = diameter >= 0.008f && diameter <= 0.03f;
+            m_Diameter = measured ? diameter : m_CapDiameter;
+            Log($"cap colour {capColour} hue {m_Model.hue:0} ±{m_Model.tolerance:0}, saturation ≥ {m_Model.minSaturation:0.00}, value ≥ {m_Model.minValue:0.00}, {chosen.pixels} pixels; " +
+                (measured ? $"diameter {m_Diameter * 1000f:0.0} mm from its length" : $"diameter measured {diameter * 1000f:0.0} mm (held end-on?), using {m_CapDiameter * 1000f:0} mm"));
             PlayerHudNotification.Instance?.ShowText($"Tracking the {Describe(capColour)} cap", 2f);
             yield break;
         }
 
-        Stop("Couldn't find a coloured cap. Use a marker with a bright cap (blue, green, red...), hold it in the middle of your view against white, and try again.");
+        Stop("Couldn't find a coloured cap. Use a marker with a bright cap (blue, green, red...), hold it sideways in the middle of your view against white, and try again.");
     }
 
     static string Describe(Color32 c)
@@ -461,6 +591,8 @@ public class RealMarkerTracker : MonoBehaviour
             model = model,
             colour = new Color32((byte)(r / n), (byte)(g / n), (byte)(b / n), 255),
             pixels = blob.pixels,
+            length = blob.length,
+            width = blob.width,
         };
     }
 
@@ -474,35 +606,8 @@ public class RealMarkerTracker : MonoBehaviour
         public int pixels;
         public Vector2 center, axis; // image pixels (x right, rows up from the bottom, as Unity reads them)
         public float length, width;
-        public float white0, white1; // how much plain white lies just beyond each end (0..1)
 
         public Vector2 End(int which) => center + axis * (which == 0 ? 0.5f * length : -0.5f * length);
-    }
-
-    // How much of the image just beyond an end of the cap, along its axis, is plain white: beyond the tip lies the
-    // whiteboard; beyond the back end, the marker's body and the hand holding it.
-    static float WhiteBeyond(Color32[] pixels, int w, int h, Vector2 end, Vector2 outward, float width, float length)
-    {
-        var across = new Vector2(-outward.y, outward.x);
-        float reach = Mathf.Max(2.5f * length, 4f * width, 40f); // far enough to reach the hand
-        int white = 0, total = 0;
-        for (int i = 1; i <= 12; i++)
-        {
-            float along = width * 0.4f + reach * i / 12f;
-            for (int j = -2; j <= 2; j++)
-            {
-                var p = end + outward * along + across * (j * width * 0.12f);
-                int x = (int)p.x, y = (int)p.y;
-                if (x < 0 || y < 0 || x >= w || y >= h)
-                    continue;
-                total++;
-                Hsv(pixels[y * w + x], out _, out float s, out float v);
-                if (s < 0.25f && v > 0.45f)
-                    white++;
-            }
-        }
-
-        return total > 0 ? white / (float)total : 0.5f;
     }
 
     // The patch of the cap's colour: a coarse grid of cells finds the patches, the one nearest `near` (or the biggest)
@@ -537,7 +642,7 @@ public class RealMarkerTracker : MonoBehaviour
             if (counts[start] < 4 || label[start] != 0)
                 continue;
             next++;
-            int cells = 0, weight = 0;
+            int weight = 0;
             float sx = 0f, sy = 0f;
             label[start] = next;
             queue.Enqueue(start);
@@ -545,7 +650,6 @@ public class RealMarkerTracker : MonoBehaviour
             {
                 int i = queue.Dequeue();
                 int cx = i % gw, cy = i / gw;
-                cells++;
                 weight += counts[i];
                 sx += cx * counts[i];
                 sy += cy * counts[i];
@@ -622,7 +726,7 @@ public class RealMarkerTracker : MonoBehaviour
         double half = (a + c) * 0.5, root = Math.Sqrt(Math.Max(0, (a - c) * (a - c) * 0.25 + b * b));
         double major = half + root, minor = Math.Max(half - root, 0.25);
         double angle = 0.5 * Math.Atan2(2 * b, a - c);
-        var blob = new Blob
+        return new Blob
         {
             found = true,
             pixels = (int)n,
@@ -631,330 +735,111 @@ public class RealMarkerTracker : MonoBehaviour
             length = (float)Math.Sqrt(12 * major), // as for a rectangle
             width = (float)Math.Sqrt(12 * minor),
         };
-        blob.white0 = WhiteBeyond(pixels, w, h, blob.End(0), blob.axis, blob.width, blob.length);
-        blob.white1 = WhiteBeyond(pixels, w, h, blob.End(1), -blob.axis, blob.width, blob.length);
-        return blob;
     }
-
-    #endregion
-
-    #region The board
-
-    IEnumerator FindBoard()
-    {
-        SetStatus("Now look at the QR code in the whiteboard's top-right corner, and slowly move your head side to side (about 20 cm)...");
-        var reader = new BarcodeReaderGeneric
-        {
-            AutoRotate = false,
-            Options = new DecodingOptions { PossibleFormats = new List<BarcodeFormat> { BarcodeFormat.QR_CODE }, TryHarder = true },
-        };
-
-        var rays = new List<Ray>[3];
-        for (int i = 0; i < 3; i++)
-            rays[i] = new List<Ray>();
-        byte[] gray = null;
-        float deadline = Time.unscaledTime + 60f;
-        float parallax = 0f;
-        while (Time.unscaledTime < deadline)
-        {
-            yield return NextFrame();
-            var head = HeadAtCapture();
-            var pixels = m_Camera.GetPixels();
-            if (pixels == null)
-                continue;
-            int w = m_Camera.width, h = m_Camera.height;
-            if (gray == null || gray.Length != w * h)
-                gray = new byte[w * h];
-            var buffer = gray;
-            var task = Task.Run(() => DecodeQr(reader, pixels, buffer, w, h));
-            while (!task.IsCompleted)
-                yield return null;
-            var points = task.Result;
-            if (points == null)
-                continue;
-
-            var cameraPose = m_Camera.GetCameraPose(head);
-            for (int i = 0; i < 3; i++)
-                rays[i].Add(m_Camera.PixelToRay(points[i], cameraPose, false, true));
-            parallax = Parallax(rays[0]);
-            int seen = rays[0].Count;
-            if (seen >= m_MinQrSightings && parallax >= m_MinParallax)
-                break;
-            SetStatus(parallax < m_MinParallax
-                ? $"Seen the QR code {seen} times. Keep moving your head slowly side to side ({parallax:0.0}° of {m_MinParallax:0}°)..."
-                : $"Seen the QR code {seen} times. Hold on...");
-        }
-
-        if (rays[0].Count < m_MinQrSightings || parallax < m_MinParallax)
-        {
-            Stop(rays[0].Count == 0
-                ? "Couldn't see a QR code. Stand about 1 m from the whiteboard, look at the code in its top-right corner and try again."
-                : $"Saw the QR code but couldn't measure it (seen {rays[0].Count} times, {parallax:0.0}° of head movement). Move your head more side to side and try again.");
-            yield break;
-        }
-
-        var corners = new Vector3[3];
-        float worst = 0f;
-        for (int i = 0; i < 3; i++)
-        {
-            corners[i] = Triangulate(rays[i], out float rms);
-            worst = Mathf.Max(worst, rms);
-        }
-
-        if (!PlaceBoard(corners, worst, out string why))
-        {
-            Stop(why);
-            yield break;
-        }
-
-        PlayerHudNotification.Instance?.ShowText("Whiteboard found", 2f);
-    }
-
-    // Worker thread: the QR code's three corner squares, in image pixels (x right, y down), the corner one first, the
-    // other two in the same turning order every time.
-    static Vector2[] DecodeQr(BarcodeReaderGeneric reader, Color32[] pixels, byte[] gray, int w, int h)
-    {
-        for (int y = 0; y < h; y++)
-        {
-            int src = y * w, dst = (h - 1 - y) * w;
-            for (int x = 0; x < w; x++)
-            {
-                var c = pixels[src + x];
-                gray[dst + x] = (byte)((c.r * 77 + c.g * 150 + c.b * 29) >> 8);
-            }
-        }
-
-        Result result;
-        try
-        {
-            result = reader.Decode(new RGBLuminanceSource(gray, w, h, RGBLuminanceSource.BitmapFormat.Gray8));
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-
-        if (result?.ResultPoints == null || result.ResultPoints.Length < 3)
-            return null;
-        var p = new Vector2[3];
-        for (int i = 0; i < 3; i++)
-            p[i] = new Vector2(result.ResultPoints[i].X, result.ResultPoints[i].Y);
-
-        int corner = 0;
-        float bestCos = float.MaxValue;
-        for (int i = 0; i < 3; i++)
-        {
-            Vector2 a = (p[(i + 1) % 3] - p[i]).normalized, b = (p[(i + 2) % 3] - p[i]).normalized;
-            float cos = Mathf.Abs(Vector2.Dot(a, b));
-            if (cos < bestCos)
-            {
-                bestCos = cos;
-                corner = i;
-            }
-        }
-
-        Vector2 c0 = p[corner], c1 = p[(corner + 1) % 3], c2 = p[(corner + 2) % 3];
-        var d1 = c1 - c0;
-        var d2 = c2 - c0;
-        if (d1.x * d2.y - d1.y * d2.x < 0f)
-            (c1, c2) = (c2, c1);
-        return new[] { c0, c1, c2 };
-    }
-
-    // The widest angle between two of the rays (degrees).
-    static float Parallax(List<Ray> rays)
-    {
-        float widest = 0f;
-        int step = Mathf.Max(1, rays.Count / 40);
-        for (int i = 0; i < rays.Count; i += step)
-        for (int j = i + step; j < rays.Count; j += step)
-            widest = Mathf.Max(widest, Vector3.Angle(rays[i].direction, rays[j].direction));
-        return widest;
-    }
-
-    // The point nearest all the rays (least squares), and the rays' RMS distance from it.
-    static Vector3 Triangulate(List<Ray> rays, out float rms)
-    {
-        double a00 = 0, a01 = 0, a02 = 0, a11 = 0, a12 = 0, a22 = 0, b0 = 0, b1 = 0, b2 = 0;
-        foreach (var ray in rays)
-        {
-            Vector3 d = ray.direction.normalized, o = ray.origin;
-            double m00 = 1 - d.x * d.x, m01 = -d.x * d.y, m02 = -d.x * d.z, m11 = 1 - d.y * d.y, m12 = -d.y * d.z, m22 = 1 - d.z * d.z;
-            a00 += m00; a01 += m01; a02 += m02; a11 += m11; a12 += m12; a22 += m22;
-            b0 += m00 * o.x + m01 * o.y + m02 * o.z;
-            b1 += m01 * o.x + m11 * o.y + m12 * o.z;
-            b2 += m02 * o.x + m12 * o.y + m22 * o.z;
-        }
-
-        double det = a00 * (a11 * a22 - a12 * a12) - a01 * (a01 * a22 - a12 * a02) + a02 * (a01 * a12 - a11 * a02);
-        var p = Vector3.zero;
-        if (Math.Abs(det) > 1e-12)
-        {
-            double x = (b0 * (a11 * a22 - a12 * a12) - a01 * (b1 * a22 - a12 * b2) + a02 * (b1 * a12 - a11 * b2)) / det;
-            double y = (a00 * (b1 * a22 - a12 * b2) - b0 * (a01 * a22 - a12 * a02) + a02 * (a01 * b2 - b1 * a02)) / det;
-            double z = (a00 * (a11 * b2 - b1 * a12) - a01 * (a01 * b2 - b1 * a02) + b0 * (a01 * a12 - a11 * a02)) / det;
-            p = new Vector3((float)x, (float)y, (float)z);
-        }
-
-        double sum = 0;
-        foreach (var ray in rays)
-        {
-            var d = ray.direction.normalized;
-            var v = p - ray.origin;
-            sum += (v - d * Vector3.Dot(v, d)).sqrMagnitude;
-        }
-
-        rms = (float)Math.Sqrt(sum / Math.Max(1, rays.Count));
-        return p;
-    }
-
-    bool PlaceBoard(Vector3[] corners, float rms, out string why)
-    {
-        why = null;
-        Vector3 topLeft = corners[0], b = corners[1], c = corners[2];
-        var center = (b + c) * 0.5f;
-        var head = Camera.main.transform.position;
-        // Seen from the front, the code's right (to its top-right square) crossed with its up points away from us.
-        Vector3 topRight = b, bottomLeft = c;
-        var facingAway = Vector3.Cross(topRight - topLeft, topLeft - bottomLeft);
-        if (Vector3.Dot(facingAway, center - head) < 0f)
-        {
-            (topRight, bottomLeft) = (bottomLeft, topRight);
-            facingAway = -facingAway;
-        }
-
-        float right = (topRight - topLeft).magnitude, up = (topLeft - bottomLeft).magnitude;
-        float spacing = (right + up) * 0.5f;
-        float squareness = Mathf.Abs(1f - Mathf.Min(right, up) / Mathf.Max(right, up)) +
-            Mathf.Abs(Vector3.Dot((topRight - topLeft).normalized, (topLeft - bottomLeft).normalized));
-        Log($"QR corner squares at {topLeft} {topRight} {bottomLeft}: {right * 100f:0.0} x {up * 100f:0.0} cm apart, squareness error {squareness:0.00}, ray RMS {rms * 1000f:0.0} mm");
-        if (spacing < 0.02f || spacing > 0.6f || squareness > 0.3f || rms > 0.02f)
-        {
-            why = $"The QR code didn't measure up (corner squares {right * 100f:0.0} x {up * 100f:0.0} cm apart). Hold still more between movements and try again.";
-            return false;
-        }
-
-        var forward = facingAway.normalized; // into the board
-        string how = "from the QR code";
-        if (Mathf.Abs(forward.y) < Mathf.Sin(m_UprightSnap * Mathf.Deg2Rad))
-        {
-            forward = new Vector3(forward.x, 0f, forward.z).normalized;
-            how = "set upright";
-        }
-
-        // On a wall from Space Setup: the wall's plane is steadier than the code's three points.
-        var planes = FindAnyObjectByType<ARPlaneManager>();
-        if (planes != null)
-        {
-            foreach (var plane in planes.trackables)
-            {
-                if (plane.alignment != PlaneAlignment.Vertical)
-                    continue;
-                var wallNormal = plane.normal; // out of the wall
-                float off = Vector3.Dot(center - plane.center, wallNormal);
-                if (Vector3.Angle(-forward, wallNormal) < 12f && off > -0.03f && off < 0.08f)
-                {
-                    forward = -wallNormal;
-                    how = $"on a Space Setup wall ({off * 100f:0.0} cm in front of it)";
-                    break;
-                }
-            }
-        }
-
-        var boardUp = Mathf.Abs(forward.y) < 0.7f
-            ? Vector3.ProjectOnPlane(Vector3.up, forward).normalized
-            : Vector3.ProjectOnPlane(topLeft - bottomLeft, forward).normalized;
-        var boardRight = Vector3.Cross(boardUp, forward);
-        var onPlane = (topLeft + topRight + bottomLeft) / 3f;
-        var qrCenter = center - forward * Vector3.Dot(center - onPlane, forward);
-        // The code's outer corner: about 3.5 modules beyond its corner squares' centres (0.2 of their spacing).
-        float half = spacing * 0.7f;
-        var boardCorner = qrCenter + (boardRight + boardUp) * half + boardRight * m_QrInset.x + boardUp * m_QrInset.y;
-        var boardCenter = boardCorner - boardRight * (m_BoardSize.x * 0.5f) - boardUp * (m_BoardSize.y * 0.5f);
-
-        if (m_Board == null)
-        {
-            var go = new GameObject("Whiteboard");
-            m_Board = go.AddComponent<WhiteboardSurface>();
-            m_Board.Place(boardCenter, -forward, boardUp, m_BoardSize);
-            var paint = go.AddComponent<TunnelSegmentPaint>();
-            paint.UseSurface(m_Board, m_Overlay, m_Brush, 0.0015f);
-        }
-        else
-        {
-            m_Board.Place(boardCenter, -forward, boardUp, m_BoardSize);
-        }
-
-        Log($"whiteboard {m_BoardSize.x * 100f:0} x {m_BoardSize.y * 100f:0} cm, centre {boardCenter}, facing {-forward} ({how}); QR code about {spacing * 1.4f * 100f:0.0} cm wide");
-        return true;
-    }
-
-    #endregion
-
-    #region Touch calibration
-
-    IEnumerator CalibrateTouch()
-    {
-        float f = m_Camera.imageFocalLength;
-        m_K = f * m_CapDiameter;
-        SetStatus("Touch the whiteboard with the marker's cap (keep the cap on) and hold it there for a moment...");
-        var still = new List<(Vector3 point, float k, float time)>();
-        float deadline = Time.unscaledTime + 30f;
-        while (Time.unscaledTime < deadline)
-        {
-            yield return NextFrame();
-            if (!See(out var sighting))
-            {
-                still.Clear();
-                continue;
-            }
-
-            if (still.Count > 0 && Vector3.Distance(still[0].point, sighting.boardPoint) > 0.006f)
-                still.Clear();
-            // Its distance, if its tip is on the board, times its width.
-            float k = Vector3.Distance(sighting.cameraPosition, sighting.boardPoint) * sighting.blob.width;
-            still.Add((sighting.boardPoint, k, Time.unscaledTime));
-            if (still.Count >= 10 && still[^1].time - still[0].time >= 0.7f)
-            {
-                var ks = still.ConvertAll(s => s.k);
-                ks.Sort();
-                float measured = ks[ks.Count / 2];
-                float diameter = measured / f;
-                if (diameter > 0.006f && diameter < 0.05f)
-                {
-                    m_K = measured;
-                    Log($"touch calibrated: the cap looks {diameter * 1000f:0.0} mm wide ({ks.Count} images)");
-                    PlayerHudNotification.Instance?.ShowText("Touch calibrated", 1.5f);
-                }
-                else
-                {
-                    Log($"touch calibration gave a {diameter * 1000f:0.0} mm cap; keeping {m_CapDiameter * 1000f:0} mm");
-                }
-
-                yield break;
-            }
-
-            SetStatus("Holding... keep the cap still on the board.");
-        }
-
-        Log($"touch calibration timed out; using a {m_CapDiameter * 1000f:0} mm cap");
-    }
-
-    #endregion
-
-    #region Tracking
 
     struct Sighting
     {
         public Blob blob;
+        public Ray tipRay;
+        public Vector3 tip;            // the tip's estimated position (its depth from the cap's width)
         public Vector3 cameraPosition;
-        public Vector3 boardPoint; // where the tip's ray meets the board
-        public float height;       // the tip's estimated height off the board (meters)
     }
 
-    IEnumerator Track(TunnelMarker marker)
+    // The cap's two ends in the world (both at the depth its width gives), and which is the tip: the end away from
+    // the hand holding it; if no hand is seen, the end nearest the last tip, then the end nearer the surface.
+    bool Measure(Blob blob, Pose cameraPose, out Sighting sighting)
     {
-        while (stage == Stage.Tracking)
+        sighting = default;
+        if (!blob.found || blob.width < 2f)
+            return false;
+
+        float f = m_Camera.imageFocalLength;
+        var forward = cameraPose.rotation * Vector3.forward;
+        float depth = f * m_Diameter / blob.width; // along the camera's axis
+        var rays = new Ray[2];
+        var ends = new Vector3[2];
+        for (int e = 0; e < 2; e++)
+        {
+            rays[e] = m_Camera.PixelToRay(blob.End(e), cameraPose, false, false);
+            ends[e] = AtDepth(rays[e], forward, depth);
+        }
+
+        int tipEnd;
+        string how;
+        var center = (ends[0] + ends[1]) * 0.5f;
+        if (HoldingHand(center, out var palm) && Mathf.Abs(Vector3.Distance(ends[0], palm) - Vector3.Distance(ends[1], palm)) > 0.01f)
+        {
+            tipEnd = Vector3.Distance(ends[0], palm) > Vector3.Distance(ends[1], palm) ? 0 : 1;
+            how = $"hand ({m_HoldingHand})";
+        }
+        else if (m_LastBlob.found && Time.unscaledTime - m_LastSeen < 0.5f)
+        {
+            tipEnd = Vector2.Distance(blob.End(0), m_TipPixel) <= Vector2.Distance(blob.End(1), m_TipPixel) ? 0 : 1;
+            how = "last";
+        }
+        else if (m_HasPlane)
+        {
+            tipEnd = Vector3.Dot(ends[0] - m_PlanePoint, m_PlaneNormal) <= Vector3.Dot(ends[1] - m_PlanePoint, m_PlaneNormal) ? 0 : 1;
+            how = "surface";
+        }
+        else
+        {
+            tipEnd = ends[0].y <= ends[1].y ? 0 : 1; // the lower end
+            how = "lower";
+        }
+
+        if (Time.unscaledTime >= m_NextLog)
+        {
+            m_NextLog = Time.unscaledTime + 1f;
+            string height = m_HasPlane ? $", tip {Vector3.Dot(ends[tipEnd] - m_PlanePoint, m_PlaneNormal) * 100f:0.0} cm off the surface" : "";
+            Log($"cap {blob.length:0} x {blob.width:0.0} px ({blob.pixels} px) at {blob.center:F0}, {depth:0.00} m away, tip end by {how}{height}, touching {m_Touching}, stage {stage}");
+        }
+
+        m_LastBlob = blob;
+        m_TipPixel = blob.End(tipEnd);
+        sighting = new Sighting { blob = blob, tipRay = rays[tipEnd], tip = ends[tipEnd], cameraPosition = cameraPose.position };
+        return true;
+    }
+
+    static Vector3 AtDepth(Ray ray, Vector3 forward, float depth) =>
+        ray.origin + ray.direction * (depth / Mathf.Max(0.2f, Vector3.Dot(ray.direction, forward)));
+
+    // The tracked hand holding the marker: the one whose palm was nearest the cap when first seen, kept while it stays
+    // near (so the other hand, coming to pinch the disk, isn't taken for it).
+    bool HoldingHand(Vector3 cap, out Vector3 palm)
+    {
+        if (m_HoldingHand != Handedness.Invalid && HandPalm.TryGetPalm(m_HoldingHand, out palm, out _, out _) && Vector3.Distance(palm, cap) < 0.25f)
+            return true;
+        palm = default;
+        float best = 0.2f;
+        var found = Handedness.Invalid;
+        foreach (var hand in new[] { Handedness.Left, Handedness.Right })
+        {
+            if (m_Pinching && hand == m_PinchHand)
+                continue;
+            if (!HandPalm.TryGetPalm(hand, out var p, out _, out _))
+                continue;
+            float d = Vector3.Distance(p, cap);
+            if (d < best)
+            {
+                best = d;
+                found = hand;
+                palm = p;
+            }
+        }
+
+        if (found != Handedness.Invalid)
+            m_HoldingHand = found;
+        return found != Handedness.Invalid;
+    }
+
+    #endregion
+
+    #region The loop
+
+    IEnumerator Loop(TunnelMarker marker)
+    {
+        while (stage != Stage.Off)
         {
             yield return null;
             bool seen = false;
@@ -973,129 +858,748 @@ public class RealMarkerTracker : MonoBehaviour
                     near = m_LastBlob.center;
                 }
 
+                bool marks = WantMarks() && Time.unscaledTime >= m_NextMarks;
+                if (marks)
+                    m_NextMarks = Time.unscaledTime + 0.33f;
                 int minPixels = m_MinPixels;
-                var task = Task.Run(() => FindBlob(pixels, w, h, model, region, near, minPixels));
+                var task = Task.Run(() => (FindBlob(pixels, w, h, model, region, near, minPixels), marks ? FindMarks(pixels, w, h) : null));
                 while (!task.IsCompleted)
                     yield return null;
-                if (stage != Stage.Tracking)
+                if (stage == Stage.Off)
                     yield break;
-                seen = Measure(task.Result, head, out var sighting);
+                var cameraPose = m_Camera.GetCameraPose(head);
+                if (task.Result.Item2 != null)
+                    AddMarkSightings(task.Result.Item2, cameraPose);
+                seen = Measure(task.Result.Item1, cameraPose, out var sighting);
                 if (seen)
-                    Follow(marker, sighting);
+                {
+                    m_LastSeen = Time.unscaledTime;
+                    m_Tip = sighting;
+                    OnSighting(marker, sighting);
+                }
             }
 
             if (!seen && Time.unscaledTime - m_LastSeen > m_LostAfter)
             {
-                m_Touching = false;
-                marker.SetRealTip(false, default, default, false);
-                ShowDot(false, default, false);
-                status = "Real marker: can't see the cap";
+                if (m_Touching || m_TipShown)
+                {
+                    m_Touching = false;
+                    marker.SetRealTip(false, default, default, false);
+                    ShowDisk(false);
+                }
+                if (stage == Stage.Tracking && Time.unscaledTime >= m_NextStatus)
+                {
+                    m_NextStatus = Time.unscaledTime + 0.25f;
+                    status = "Real marker: can't see the cap";
+                }
             }
+
+            if (stage == Stage.Canvas)
+                ChooseCanvas(marker);
+            else if (stage == Stage.Tracking && canvasKind == CanvasKind.TunnelWall && TryFindPanel(out var panel))
+                UsePanel(marker, panel, "the panel's corner marks were found");
         }
     }
 
-    // A new sighting: touching or not (with hysteresis), and the marker paints from it.
+    void OnSighting(TunnelMarker marker, Sighting sighting)
+    {
+        switch (stage)
+        {
+            case Stage.Surface:
+                Hold(sighting);
+                ShowDisk(true, sighting.tip, (sighting.cameraPosition - sighting.tip).normalized, marker);
+                break;
+            case Stage.Canvas:
+                ShowDisk(true, sighting.tip, m_PlaneNormal, marker);
+                break;
+            case Stage.Tracking:
+                Follow(marker, sighting);
+                break;
+        }
+    }
+
+    bool WantMarks() => stage == Stage.Surface || stage == Stage.Canvas || (stage == Stage.Tracking && canvasKind == CanvasKind.TunnelWall);
+
+    #endregion
+
+    #region The surface: three touches
+
+    // The tip held still (sideways within a centimetre, in depth within a few) for 4 seconds makes a point.
+    void Hold(Sighting sighting)
+    {
+        float now = Time.unscaledTime;
+        if (m_NeedMove)
+        {
+            // After a point, the tip must move away before the next one starts.
+            if (m_Points.Count > 0 && Vector3.Distance(sighting.tip, m_Points[^1]) < 0.05f)
+                return;
+            m_NeedMove = false;
+        }
+
+        if (m_Hold.Count > 0 && (now - m_HoldLast > 0.3f || !StillNear(m_Hold[0].point, sighting)))
+            m_Hold.Clear();
+        m_Hold.Add((now, sighting.tip));
+        m_HoldLast = now;
+        float held = now - m_Hold[0].time;
+        if (held >= m_HoldTime)
+        {
+            var points = m_Hold.ConvertAll(s => s.point);
+            m_Hold.Clear();
+            AddPoint(Median(points));
+            return;
+        }
+
+        if (held >= 0.5f && now >= m_NextCount)
+        {
+            m_NextCount = now + 1f;
+            int left = Mathf.CeilToInt(m_HoldTime - held);
+            PlayerHudNotification.Instance?.ShowText($"Hold still: {left}", 0.9f);
+            SetStatus($"Point {m_Points.Count + 1} of 3: holding still, {left} s more...");
+        }
+    }
+
+    bool StillNear(Vector3 anchor, Sighting sighting)
+    {
+        var offset = sighting.tip - anchor;
+        var along = sighting.tipRay.direction;
+        float depth = Vector3.Dot(offset, along);
+        return (offset - along * depth).magnitude <= m_HoldSideways && Mathf.Abs(depth) <= m_HoldDepth;
+    }
+
+    static Vector3 Median(List<Vector3> points)
+    {
+        float Middle(Func<Vector3, float> axis)
+        {
+            var values = points.ConvertAll(p => axis(p));
+            values.Sort();
+            return values[values.Count / 2];
+        }
+
+        return new Vector3(Middle(p => p.x), Middle(p => p.y), Middle(p => p.z));
+    }
+
+    void AddPoint(Vector3 point)
+    {
+        m_NeedMove = true;
+        for (int i = 0; i < m_Points.Count; i++)
+        {
+            if (Vector3.Distance(point, m_Points[i]) < m_TouchSpacing)
+            {
+                SetStatus($"That's within {m_TouchSpacing * 100f:0} cm of point {i + 1}: touch a spot farther from the others.");
+                PlayerHudNotification.Instance?.ShowText("Too near another point", 1.5f);
+                return;
+            }
+        }
+
+        if (m_Points.Count == 2)
+        {
+            var a = m_Points[0];
+            var b = m_Points[1];
+            float spread = Vector3.Cross(b - a, point - a).magnitude / Mathf.Max((b - a).magnitude, 1e-4f);
+            if (spread < m_MinSpread)
+            {
+                SetStatus($"That's nearly in line with the other two ({spread * 100f:0.0} cm off): touch a spot farther from that line.");
+                PlayerHudNotification.Instance?.ShowText("Too near the line through the others", 1.5f);
+                return;
+            }
+        }
+
+        m_Points.Add(point);
+        m_PointDots.Add(MakeDot(point));
+        m_Audio.PlayOneShot(m_Beep);
+        Log($"point {m_Points.Count} at {point:F3}");
+        if (m_Points.Count < 3)
+        {
+            SetStatus($"Point {m_Points.Count} placed. Now hold the tip still on another spot, at least {m_TouchSpacing * 100f:0} cm away.");
+            return;
+        }
+
+        SetPlane();
+        stage = Stage.Canvas;
+        m_CanvasSince = Time.unscaledTime;
+        m_MarksChanged = true;
+        SetStatus("Surface set. Look at the panel's four corner marks...");
+    }
+
+    void SetPlane()
+    {
+        Vector3 a = m_Points[0], b = m_Points[1], c = m_Points[2];
+        var center = (a + b + c) / 3f;
+        var normal = Vector3.Cross(b - a, c - a).normalized;
+        var head = Camera.main != null ? Camera.main.transform.position : center + normal;
+        if (Vector3.Dot(normal, head - center) < 0f)
+            normal = -normal;
+        string how = "";
+        if (Mathf.Abs(normal.y) < Mathf.Sin(m_UprightSnap * Mathf.Deg2Rad))
+        {
+            normal = new Vector3(normal.x, 0f, normal.z).normalized;
+            how = ", set upright";
+        }
+
+        m_PlanePoint = center;
+        m_PlaneNormal = normal;
+        m_HasPlane = true;
+        float tilt = 90f - Vector3.Angle(normal, Vector3.up);
+        Log($"surface through {a:F3} {b:F3} {c:F3}: normal {normal:F3}, {tilt:0.0}° from upright{how}");
+    }
+
+    GameObject MakeDot(Vector3 point)
+    {
+        var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        go.name = "Real Marker Point";
+        Destroy(go.GetComponent<Collider>());
+        if (m_DotMaterial == null)
+            m_DotMaterial = UnlitMaterial("Real Marker Point", new Color(1f, 0.2f, 0.7f));
+        go.GetComponent<MeshRenderer>().sharedMaterial = m_DotMaterial;
+        go.transform.position = point;
+        go.transform.localScale = Vector3.one * 0.01f;
+        return go;
+    }
+
+    void ClearPoints()
+    {
+        foreach (var dot in m_PointDots)
+            if (dot != null)
+                Destroy(dot);
+        m_PointDots.Clear();
+        m_Points.Clear();
+        m_Hold.Clear();
+        m_NeedMove = false;
+    }
+
+    #endregion
+
+    #region The canvas: corner marks or a tunnel wall
+
+    struct MarkSeen
+    {
+        public Vector2 center; // image pixels, as the cap's
+        public float size;     // pixels across
+    }
+
+    void AddMarkSightings(List<MarkSeen> marks, Pose cameraPose)
+    {
+        float f = m_Camera.imageFocalLength;
+        float now = Time.unscaledTime;
+        foreach (var mark in marks)
+        {
+            var ray = m_Camera.PixelToRay(mark.center, cameraPose, false, false);
+            m_MarkSightings.Add((ray.origin, ray.direction, mark.size / f, now));
+        }
+
+        m_MarkSightings.RemoveAll(s => now - s.time > 60f);
+        if (m_MarkSightings.Count > 800)
+            m_MarkSightings.RemoveRange(0, m_MarkSightings.Count - 800);
+        if (marks.Count > 0)
+            m_MarksChanged = true;
+    }
+
+    // Worker thread: dark, square-ish boxes (filled, or outlined with a letter inside) with white all round them.
+    static List<MarkSeen> FindMarks(Color32[] pixels, int w, int h)
+    {
+        int hw = w / 2, hh = h / 2;
+        var lum = new byte[hw * hh];
+        for (int y = 0; y < hh; y++)
+        for (int x = 0; x < hw; x++)
+        {
+            var c = pixels[2 * y * w + 2 * x];
+            lum[y * hw + x] = (byte)((c.r * 77 + c.g * 150 + c.b * 29) >> 8);
+        }
+
+        // How white the paper is nearby: the brightest in the 3 x 3 blocks (16 pixels each) round each pixel.
+        const int B = 16;
+        int bw = (hw + B - 1) / B, bh = (hh + B - 1) / B;
+        var blockMax = new byte[bw * bh];
+        for (int y = 0; y < hh; y++)
+        for (int x = 0; x < hw; x++)
+        {
+            int i = y / B * bw + x / B;
+            if (lum[y * hw + x] > blockMax[i])
+                blockMax[i] = lum[y * hw + x];
+        }
+
+        var white = new byte[bw * bh];
+        for (int by = 0; by < bh; by++)
+        for (int bx = 0; bx < bw; bx++)
+        {
+            byte m = 0;
+            for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                int nx = bx + dx, ny = by + dy;
+                if (nx >= 0 && ny >= 0 && nx < bw && ny < bh && blockMax[ny * bw + nx] > m)
+                    m = blockMax[ny * bw + nx];
+            }
+            white[by * bw + bx] = m;
+        }
+
+        byte WhiteAt(int x, int y) => white[y / B * bw + x / B];
+        var dark = new bool[hw * hh];
+        for (int y = 0; y < hh; y++)
+        for (int x = 0; x < hw; x++)
+        {
+            byte paper = WhiteAt(x, y);
+            dark[y * hw + x] = paper >= 60 && lum[y * hw + x] < paper / 2;
+        }
+
+        // Patches of dark pixels.
+        var label = new int[hw * hh];
+        var stack = new int[hw * hh];
+        var found = new List<(int id, int minX, int minY, int maxX, int maxY)>();
+        int next = 0;
+        for (int start = 0; start < dark.Length; start++)
+        {
+            if (!dark[start] || label[start] != 0)
+                continue;
+            next++;
+            int top = 0, count = 0;
+            int minX = int.MaxValue, minY = int.MaxValue, maxX = -1, maxY = -1;
+            stack[top++] = start;
+            label[start] = next;
+            while (top > 0)
+            {
+                int i = stack[--top];
+                int x = i % hw, y = i / hw;
+                count++;
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+                if (x + 1 < hw && dark[i + 1] && label[i + 1] == 0) { label[i + 1] = next; stack[top++] = i + 1; }
+                if (x > 0 && dark[i - 1] && label[i - 1] == 0) { label[i - 1] = next; stack[top++] = i - 1; }
+                if (y + 1 < hh && dark[i + hw] && label[i + hw] == 0) { label[i + hw] = next; stack[top++] = i + hw; }
+                if (y > 0 && dark[i - hw] && label[i - hw] == 0) { label[i - hw] = next; stack[top++] = i - hw; }
+            }
+
+            int width = maxX - minX + 1, height = maxY - minY + 1;
+            if (width < 8 || height < 8 || Mathf.Max(width, height) > Mathf.Min(hw, hh) / 3)
+                continue;
+            if (Mathf.Max(width, height) > 1.6f * Mathf.Min(width, height))
+                continue;
+            if (count < 30 || count < 0.15f * width * height)
+                continue;
+            if (minX == 0 || minY == 0 || maxX == hw - 1 || maxY == hh - 1)
+                continue;
+
+            // A box's sides run all along its bounding square (a letter's or a circle's don't).
+            int band = Mathf.Max(1, (int)(0.15f * Mathf.Min(width, height)));
+            int hits = 0;
+            for (int k = 0; k < 16; k++)
+            {
+                float t = (k + 0.5f) / 16f;
+                int sx = minX + (int)(t * (width - 1)), sy = minY + (int)(t * (height - 1));
+                bool Any(int x0, int y0, int dx, int dy)
+                {
+                    for (int s = 0; s < band; s++)
+                        if (label[(y0 + dy * s) * hw + x0 + dx * s] == next)
+                            return true;
+                    return false;
+                }
+
+                if (Any(sx, maxY, 0, -1)) hits++;
+                if (Any(sx, minY, 0, 1)) hits++;
+                if (Any(minX, sy, 1, 0)) hits++;
+                if (Any(maxX, sy, -1, 0)) hits++;
+            }
+
+            if (hits < 0.75f * 64)
+                continue;
+
+            // White paper all round it.
+            int margin = Mathf.Max(2, (int)(0.3f * Mathf.Max(width, height)));
+            int bright = 0, samples = 0;
+            for (int k = 0; k < 32; k++)
+            {
+                float t = (k % 8 + 0.5f) / 8f;
+                int x, y;
+                switch (k / 8)
+                {
+                    case 0: x = minX - margin + (int)(t * (width + 2 * margin)); y = maxY + margin; break;
+                    case 1: x = minX - margin + (int)(t * (width + 2 * margin)); y = minY - margin; break;
+                    case 2: x = minX - margin; y = minY - margin + (int)(t * (height + 2 * margin)); break;
+                    default: x = maxX + margin; y = minY - margin + (int)(t * (height + 2 * margin)); break;
+                }
+                if (x < 0 || y < 0 || x >= hw || y >= hh)
+                    continue;
+                samples++;
+                if (!dark[y * hw + x] && lum[y * hw + x] >= WhiteAt(x, y) * 0.6f)
+                    bright++;
+            }
+
+            if (samples < 20 || bright < 0.7f * samples)
+                continue;
+            found.Add((next, minX, minY, maxX, maxY));
+        }
+
+        // A letter inside an outlined box isn't another mark.
+        var marks = new List<MarkSeen>();
+        foreach (var a in found)
+        {
+            bool inside = false;
+            foreach (var b in found)
+            {
+                if (b.id == a.id || (b.maxX - b.minX) <= (a.maxX - a.minX))
+                    continue;
+                float cx = (a.minX + a.maxX) * 0.5f, cy = (a.minY + a.maxY) * 0.5f;
+                if (cx > b.minX && cx < b.maxX && cy > b.minY && cy < b.maxY)
+                    inside = true;
+            }
+
+            if (!inside)
+                marks.Add(new MarkSeen
+                {
+                    center = new Vector2((a.minX + a.maxX + 1) * 0.5f * 2f, (a.minY + a.maxY + 1) * 0.5f * 2f),
+                    size = ((a.maxX - a.minX + 1) + (a.maxY - a.minY + 1)) * 0.5f * 2f,
+                });
+        }
+
+        return marks;
+    }
+
+    struct PanelFit
+    {
+        public Vector3 center, up;
+        public Vector2 size;
+        public float markSize, error;
+    }
+
+    // The four corner marks on the surface: sightings placed on the plane, gathered into marks, and the four that
+    // make the best rectangle.
+    bool TryFindPanel(out PanelFit fit)
+    {
+        fit = default;
+        if (!m_HasPlane || !m_MarksChanged)
+            return false;
+        m_MarksChanged = false;
+
+        var clusters = new List<(Vector3 sum, int count, List<float> sizes, List<Vector3> points)>();
+        foreach (var (origin, direction, angle, _) in m_MarkSightings)
+        {
+            float toward = Vector3.Dot(direction, m_PlaneNormal);
+            if (toward > -0.15f)
+                continue; // along the surface or from behind it
+            float t = Vector3.Dot(m_PlanePoint - origin, m_PlaneNormal) / toward;
+            if (t < 0.1f || t > 5f)
+                continue;
+            var p = origin + direction * t;
+            float size = angle * t;
+            if (size < m_MarkSize.x || size > m_MarkSize.y)
+                continue;
+            int best = -1;
+            float nearest = m_MarkCluster;
+            for (int i = 0; i < clusters.Count; i++)
+            {
+                float d = Vector3.Distance(clusters[i].sum / clusters[i].count, p);
+                if (d < nearest)
+                {
+                    nearest = d;
+                    best = i;
+                }
+            }
+
+            if (best < 0)
+            {
+                clusters.Add((p, 1, new List<float> { size }, new List<Vector3> { p }));
+            }
+            else
+            {
+                var c = clusters[best];
+                c.sizes.Add(size);
+                c.points.Add(p);
+                clusters[best] = (c.sum + p, c.count + 1, c.sizes, c.points);
+            }
+        }
+
+        var marks = new List<(Vector3 point, float size, int count)>();
+        foreach (var c in clusters)
+        {
+            if (c.count < m_MinMarkSightings)
+                continue;
+            var mean = c.sum / c.count;
+            float rms = 0f;
+            foreach (var p in c.points)
+                rms += (p - mean).sqrMagnitude;
+            if (Mathf.Sqrt(rms / c.count) > 0.015f)
+                continue;
+            c.sizes.Sort();
+            marks.Add((mean, c.sizes[c.sizes.Count / 2], c.count));
+        }
+
+        m_MarksFound = marks.Count;
+        if (marks.Count < 4)
+            return false;
+        marks.Sort((a, b) => b.count.CompareTo(a.count));
+        if (marks.Count > 10)
+            marks.RemoveRange(10, marks.Count - 10);
+
+        // The in-surface directions: up is the world's up on an upright surface, away from the head on a flat one.
+        var head = Camera.main != null ? Camera.main.transform.position : m_PlanePoint + m_PlaneNormal;
+        var up = Mathf.Abs(m_PlaneNormal.y) < 0.7f
+            ? Vector3.ProjectOnPlane(Vector3.up, m_PlaneNormal).normalized
+            : Vector3.ProjectOnPlane(m_PlanePoint - head, m_PlaneNormal).normalized;
+        var right = Vector3.Cross(up, -m_PlaneNormal);
+
+        float bestError = 0.35f;
+        bool any = false;
+        var picked = new int[4];
+        int n = marks.Count;
+        for (int a = 0; a < n; a++)
+        for (int b = a + 1; b < n; b++)
+        for (int c = b + 1; c < n; c++)
+        for (int d = c + 1; d < n; d++)
+        {
+            var four = new[] { a, b, c, d };
+            var ordered = Order(four, marks, right, up);
+            float error = RectangleError(ordered, marks);
+            if (error < bestError)
+            {
+                bestError = error;
+                any = true;
+                ordered.CopyTo(picked, 0);
+            }
+        }
+
+        if (!any)
+            return false;
+
+        Vector3 topLeft = marks[picked[0]].point, topRight = marks[picked[1]].point, bottomRight = marks[picked[2]].point, bottomLeft = marks[picked[3]].point;
+        var across = ((topRight - topLeft) + (bottomRight - bottomLeft)).normalized;
+        var upward = ((topLeft - bottomLeft) + (topRight - bottomRight));
+        upward = (upward - across * Vector3.Dot(upward, across)).normalized;
+        float markSize = 0f;
+        foreach (int i in picked)
+            markSize += marks[i].size * 0.25f;
+        fit = new PanelFit
+        {
+            center = (topLeft + topRight + bottomRight + bottomLeft) * 0.25f,
+            up = upward,
+            size = new Vector2(
+                0.5f * (Vector3.Distance(topLeft, topRight) + Vector3.Distance(bottomLeft, bottomRight)) + markSize,
+                0.5f * (Vector3.Distance(topLeft, bottomLeft) + Vector3.Distance(topRight, bottomRight)) + markSize),
+            markSize = markSize,
+            error = bestError,
+        };
+        Log($"corner marks at {topLeft:F3} {topRight:F3} {bottomRight:F3} {bottomLeft:F3} (seen {marks[picked[0]].count}/{marks[picked[1]].count}/{marks[picked[2]].count}/{marks[picked[3]].count} times), " +
+            $"marks {markSize * 100f:0.0} cm, rectangle error {bestError:0.00}, {marks.Count} marks in all");
+        return true;
+    }
+
+    // Four marks in order: top-left, top-right, bottom-right, bottom-left.
+    static int[] Order(int[] four, List<(Vector3 point, float size, int count)> marks, Vector3 right, Vector3 up)
+    {
+        var center = Vector3.zero;
+        foreach (int i in four)
+            center += marks[i].point * 0.25f;
+        var byAngle = new List<(int index, float angle)>();
+        foreach (int i in four)
+        {
+            var offset = marks[i].point - center;
+            byAngle.Add((i, Mathf.Atan2(Vector3.Dot(offset, up), Vector3.Dot(offset, right)) * Mathf.Rad2Deg));
+        }
+
+        byAngle.Sort((a, b) => b.angle.CompareTo(a.angle)); // turning clockwise, as seen
+        float[] wanted = { 135f, 45f, -45f, -135f };
+        int bestShift = 0;
+        float bestMiss = float.MaxValue;
+        for (int shift = 0; shift < 4; shift++)
+        {
+            float miss = 0f;
+            for (int k = 0; k < 4; k++)
+                miss += Mathf.Abs(Mathf.DeltaAngle(byAngle[(k + shift) % 4].angle, wanted[k]));
+            if (miss < bestMiss)
+            {
+                bestMiss = miss;
+                bestShift = shift;
+            }
+        }
+
+        var ordered = new int[4];
+        for (int k = 0; k < 4; k++)
+            ordered[k] = byAngle[(k + bestShift) % 4].index;
+        return ordered;
+    }
+
+    // How far four marks (in order round) are from the corners of a rectangle, with marks of one size; large if
+    // it's no rectangle at all.
+    float RectangleError(int[] ordered, List<(Vector3 point, float size, int count)> marks)
+    {
+        var p = new Vector3[4];
+        for (int k = 0; k < 4; k++)
+            p[k] = marks[ordered[k]].point;
+        var sides = new float[4];
+        float error = 0f;
+        for (int k = 0; k < 4; k++)
+        {
+            sides[k] = Vector3.Distance(p[k], p[(k + 1) % 4]);
+            if (sides[k] < m_MinPanelSide)
+                return float.MaxValue;
+            var before = (p[(k + 3) % 4] - p[k]).normalized;
+            var after = (p[(k + 1) % 4] - p[k]).normalized;
+            float corner = Mathf.Abs(Vector3.Dot(before, after));
+            if (corner > 0.15f)
+                return float.MaxValue;
+            error += corner;
+        }
+
+        float a = Mathf.Abs(sides[0] - sides[2]) / Mathf.Max(sides[0], sides[2]);
+        float b = Mathf.Abs(sides[1] - sides[3]) / Mathf.Max(sides[1], sides[3]);
+        if (a > 0.12f || b > 0.12f)
+            return float.MaxValue;
+        float smallest = float.MaxValue, largest = 0f;
+        foreach (int i in ordered)
+        {
+            smallest = Mathf.Min(smallest, marks[i].size);
+            largest = Mathf.Max(largest, marks[i].size);
+        }
+
+        if (largest > 1.6f * smallest)
+            return float.MaxValue;
+        return error + a + b + 0.5f * (largest / smallest - 1f);
+    }
+
+    // After the three touches: the panel if its marks are seen, otherwise a tunnel wall on the surface, if there is
+    // one (a panel found later still takes over).
+    void ChooseCanvas(TunnelMarker marker)
+    {
+        if (TryFindPanel(out var panel))
+        {
+            UsePanel(marker, panel, "found its corner marks");
+            return;
+        }
+
+        float waited = Time.unscaledTime - m_CanvasSince;
+        if (waited >= 1.5f)
+        {
+            var wall = MatchTunnelWall(out string where);
+            if (wall != null)
+            {
+                UseCanvas(marker, wall, CanvasKind.TunnelWall);
+                Log($"canvas: the tunnel wall {where}");
+                SetStatus("Painting on the tunnel wall. (At a panel, look at its four corner marks to paint on the panel instead.)");
+                PlayerHudNotification.Instance?.ShowText("Real marker: painting on the tunnel wall", 2f);
+                return;
+            }
+        }
+
+        if (waited > m_CanvasTimeout)
+        {
+            Stop($"Couldn't find the panel's four corner marks ({m_MarksFound} seen) or a tunnel wall on the touched surface. Turn on Real marker to try again.");
+            return;
+        }
+
+        SetStatus($"Surface set. Look at the panel's four corner marks (seen {m_MarksFound} of 4); step back if they don't all fit in view.");
+    }
+
+    void UsePanel(TunnelMarker marker, PanelFit panel, string why)
+    {
+        if (m_Board == null)
+        {
+            var go = new GameObject("Canvas Panel");
+            m_Board = go.AddComponent<WhiteboardSurface>();
+            m_Board.Place(panel.center, m_PlaneNormal, panel.up, panel.size);
+            m_BoardPaint = go.AddComponent<TunnelSegmentPaint>();
+            m_BoardPaint.UseSurface(m_Board, m_Overlay, m_Brush, m_PanelTexel);
+        }
+        else
+        {
+            m_Board.Place(panel.center, m_PlaneNormal, panel.up, panel.size);
+        }
+
+        UseCanvas(marker, m_BoardPaint, CanvasKind.Panel);
+        Log($"canvas: the panel ({why}), {panel.size.x * 100f:0.0} x {panel.size.y * 100f:0.0} cm, centre {panel.center:F3}");
+        SetStatus($"Canvas found: {panel.size.x * 100f:0} x {panel.size.y * 100f:0} cm. Paint on it with the marker; pinch the disk at its tip to size the brush.");
+        PlayerHudNotification.Instance?.ShowText("Canvas found", 2f);
+    }
+
+    void UseCanvas(TunnelMarker marker, TunnelSegmentPaint canvas, CanvasKind kind)
+    {
+        m_Canvas = canvas;
+        canvasKind = kind;
+        marker.SetRealCanvas(canvas);
+        if (stage != Stage.Tracking)
+        {
+            stage = Stage.Tracking;
+            m_Touching = false;
+            m_HeightCount = 0;
+            ClearPoints();
+        }
+    }
+
+    // A flat tunnel wall the touched surface lies on (or near): the nearest within the angle and distance allowed.
+    TunnelSegmentPaint MatchTunnelWall(out string where)
+    {
+        where = null;
+        TunnelSegmentPaint best = null;
+        float nearest = m_WallDistance;
+        foreach (var paint in TunnelSegmentPaint.all)
+        {
+            var segment = paint != null ? paint.geometry : null;
+            if (segment == null || !segment.isActiveAndEnabled || !paint.paintable)
+                continue;
+            var frame = segment.transform;
+            var local = frame.InverseTransformPoint(m_PlanePoint);
+            if (Mathf.Abs(local.z) > segment.length * 0.5f + 0.05f || local.y < -0.05f || local.y > segment.wallHeight + 0.05f)
+                continue;
+            float side = local.x < 0f ? -1f : 1f;
+            float gap = Mathf.Abs(segment.width * 0.5f - Mathf.Abs(local.x));
+            var inward = frame.TransformDirection(Vector3.right * -side);
+            float angle = Vector3.Angle(m_PlaneNormal, inward);
+            if (gap >= nearest || angle > m_WallAngle)
+                continue;
+            nearest = gap;
+            best = paint;
+            where = $"{(side < 0 ? "-X" : "+X")} of {segment.name} ({gap * 100f:0.0} cm and {angle:0}° from the touched surface)";
+        }
+
+        return best;
+    }
+
+    #endregion
+
+    #region Painting
+
+    // A new sighting while painting: where the tip's ray meets the surface, how high the tip is, touching or not
+    // (with hysteresis), and the marker paints from it.
     void Follow(TunnelMarker marker, Sighting sighting)
     {
-        m_LastSeen = Time.unscaledTime;
-        float height = SmoothHeight(sighting.height);
-        bool onBoard = m_Board.ToPaintCanvas(sighting.boardPoint, out _, out _, out _);
-        if (!onBoard)
-            m_Touching = false;
-        else if (!m_Touching && height < m_TouchDown)
-            m_Touching = true;
-        else if (m_Touching && height > m_TouchUp)
-            m_Touching = false;
+        var ray = sighting.tipRay;
+        float toward = Vector3.Dot(ray.direction, m_PlaneNormal);
+        if (toward > -0.05f || m_Canvas == null)
+            return; // looking along the surface or away from it
+        float along = Vector3.Dot(m_PlanePoint - ray.origin, m_PlaneNormal) / toward;
+        if (along <= 0f)
+            return;
+        var onPlane = ray.origin + ray.direction * along;
+        float height = SmoothHeight(Vector3.Dot(sighting.tip - m_PlanePoint, m_PlaneNormal));
 
-        var normal = m_Board.normal;
-        var tip = m_Touching ? sighting.boardPoint : sighting.boardPoint + normal * Mathf.Max(height, 0f);
-        marker.SetRealTip(true, tip, -normal, m_Touching);
-        ShowDot(onBoard, sighting.boardPoint, m_Touching);
+        bool onCanvas = m_Canvas.surface.ToPaintCanvas(onPlane, out var uv, out _, out var onSurface) &&
+            (canvasKind == CanvasKind.Panel || (uv.x >= 0f && uv.x <= 1f));
+        if (!onCanvas)
+        {
+            onSurface = onPlane;
+            m_Touching = false;
+        }
+        else if (!m_Touching && height < m_TouchDown)
+        {
+            m_Touching = true;
+        }
+        else if (m_Touching && height > m_TouchUp)
+        {
+            m_Touching = false;
+        }
+
+        var tip = m_Touching ? onSurface : onSurface + m_PlaneNormal * Mathf.Max(height, 0f);
+        marker.SetRealTip(true, tip, -m_PlaneNormal, m_Touching);
+        ShowDisk(true, tip, m_PlaneNormal, marker);
 
         if (Time.unscaledTime >= m_NextStatus)
         {
             m_NextStatus = Time.unscaledTime + 0.25f;
-            status = onBoard
-                ? (m_Touching ? "Real marker: touching the board" : $"Real marker: {height * 100f:0.0} cm off the board")
-                : "Real marker: off the board";
+            string where = canvasKind == CanvasKind.Panel ? "the canvas" : "the tunnel wall";
+            status = onCanvas
+                ? (m_Touching ? $"Real marker: touching {where}" : $"Real marker: {height * 100f:0.0} cm off {where}")
+                : $"Real marker: off {where}";
         }
-    }
-
-    bool See(out Sighting sighting)
-    {
-        var pixels = m_Camera.GetPixels();
-        sighting = default;
-        if (pixels == null)
-            return false;
-        var blob = FindBlob(pixels, m_Camera.width, m_Camera.height, m_Model, new RectInt(0, 0, m_Camera.width, m_Camera.height), m_LastBlob.found ? m_LastBlob.center : (Vector2?)null, m_MinPixels);
-        return Measure(blob, HeadAtCapture(), out sighting);
-    }
-
-    // Which end of the cap is its tip (the one nearer the board), where its ray meets the board, and how high it is.
-    bool Measure(Blob blob, Pose head, out Sighting sighting)
-    {
-        sighting = default;
-        if (!blob.found || blob.width < 2f || m_Board == null)
-            return false;
-
-        var cameraPose = m_Camera.GetCameraPose(head);
-        var normal = m_Board.normal;
-        var origin = m_Board.transform.position;
-        float distance = m_K / blob.width;
-        int tipEnd;
-        var heights = new float[2];
-        var rays = new Ray[2];
-        for (int e = 0; e < 2; e++)
-        {
-            rays[e] = m_Camera.PixelToRay(blob.End(e), cameraPose, false, false);
-            heights[e] = Vector3.Dot(rays[e].origin + rays[e].direction.normalized * distance - origin, normal);
-        }
-
-        // The tip: the end with the whiteboard beyond it; if that's unclear, the end nearest the last tip; at first,
-        // the end that seems nearer the board.
-        string how;
-        if (Mathf.Abs(blob.white0 - blob.white1) >= 0.15f)
-        {
-            tipEnd = blob.white0 > blob.white1 ? 0 : 1;
-            how = "white";
-        }
-        else if (m_LastBlob.found && Time.unscaledTime - m_LastSeen < 0.5f)
-        {
-            tipEnd = Vector2.Distance(blob.End(0), m_TipPixel) <= Vector2.Distance(blob.End(1), m_TipPixel) ? 0 : 1;
-            how = "last";
-        }
-        else
-        {
-            tipEnd = heights[0] <= heights[1] ? 0 : 1;
-            how = "height";
-        }
-
-        float best = heights[tipEnd];
-        if (Time.unscaledTime >= m_NextLog)
-        {
-            m_NextLog = Time.unscaledTime + 1f;
-            Log($"cap {blob.length:0} x {blob.width:0.0} px ({blob.pixels} px) at {blob.center:F0}, white beyond ends {blob.white0:0.00}/{blob.white1:0.00}, tip end {tipEnd} by {how}, " +
-                $"end heights {heights[0] * 100f:0.0}/{heights[1] * 100f:0.0} cm, distance {distance:0.00} m, touching {m_Touching}");
-        }
-
-        var ray = rays[tipEnd];
-        float toward = Vector3.Dot(ray.direction, -normal);
-        if (toward < 0.05f)
-            return false; // looking along the board or away from it
-        float along = Vector3.Dot(origin - ray.origin, -normal) / toward;
-        if (along <= 0f)
-            return false;
-
-        m_LastBlob = blob;
-        m_TipPixel = blob.End(tipEnd);
-        sighting = new Sighting
-        {
-            blob = blob,
-            cameraPosition = cameraPose.position,
-            boardPoint = ray.origin + ray.direction * along,
-            height = best,
-        };
-        return true;
     }
 
     // The median of the last three heights: one bad image doesn't lift or drop the tip.
@@ -1109,35 +1613,145 @@ public class RealMarkerTracker : MonoBehaviour
         return Mathf.Max(Mathf.Min(a, b), Mathf.Min(Mathf.Max(a, b), c));
     }
 
-    void ShowDot(bool show, Vector3 point, bool touching)
+    #endregion
+
+    #region The disk at the tip, and sizing the brush
+
+    void ShowDisk(bool show, Vector3 tip = default, Vector3 normal = default, TunnelMarker marker = null)
     {
+        m_TipShown = show;
         if (!show)
         {
-            if (m_Dot != null)
-                m_Dot.gameObject.SetActive(false);
+            if (m_Disk != null)
+                m_Disk.gameObject.SetActive(false);
             return;
         }
 
-        if (m_Dot == null)
+        if (m_Disk == null)
         {
-            var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            go.name = "Real Marker Tip";
-            Destroy(go.GetComponent<Collider>());
-            var shader = Shader.Find("Universal Render Pipeline/Unlit");
-            m_DotMaterial = new Material(shader != null ? shader : Shader.Find("Sprites/Default"));
-            go.GetComponent<MeshRenderer>().sharedMaterial = m_DotMaterial;
-            go.transform.localScale = Vector3.one * 0.008f;
-            m_Dot = go.transform;
+            m_Disk = new GameObject("Real Marker Disk").transform;
+            var face = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            face.name = "Face";
+            Destroy(face.GetComponent<Collider>());
+            face.transform.SetParent(m_Disk, false);
+            face.transform.localRotation = Quaternion.Euler(90f, 0f, 0f); // its round face along the disk's forward
+            m_DiskFace = face.transform;
+            m_DiskMaterial = UnlitMaterial("Real Marker Disk", Color.white);
+            face.GetComponent<MeshRenderer>().sharedMaterial = m_DiskMaterial;
+
+            var ring = new GameObject("Ring");
+            ring.transform.SetParent(m_Disk, false);
+            m_DiskRing = ring.AddComponent<LineRenderer>();
+            m_DiskRing.useWorldSpace = false;
+            m_DiskRing.loop = true;
+            m_DiskRing.positionCount = 32;
+            m_DiskRing.widthMultiplier = 0.0012f;
+            m_DiskRing.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            m_RingMaterial = UnlitMaterial("Real Marker Disk Ring", new Color(0.08f, 0.08f, 0.09f));
+            m_DiskRing.sharedMaterial = m_RingMaterial;
         }
 
-        m_Dot.gameObject.SetActive(true);
-        m_Dot.position = point + m_Board.normal * 0.005f;
-        var colour = touching ? new Color(0.2f, 1f, 0.35f) : new Color(1f, 1f, 1f, 0.8f);
-        m_DotMaterial.SetColor("_BaseColor", colour);
-        m_DotMaterial.color = colour;
+        marker ??= Marker();
+        float diameter = marker != null ? marker.realDiameter : 0.006f;
+        Color colour = marker != null ? (Color)marker.color : Color.white;
+        colour.a = 1f;
+        m_DiskMaterial.SetColor("_BaseColor", colour);
+        m_DiskMaterial.color = colour;
+
+        m_Disk.gameObject.SetActive(true);
+        m_DiskNormal = normal.sqrMagnitude > 0f ? normal.normalized : Vector3.up;
+        m_Disk.SetPositionAndRotation(tip + m_DiskNormal * 0.002f, Quaternion.LookRotation(-m_DiskNormal));
+        m_DiskFace.localScale = new Vector3(diameter, 0.0004f, diameter);
+        for (int i = 0; i < 32; i++)
+        {
+            float a = i / 32f * Mathf.PI * 2f;
+            float r = diameter * 0.5f + 0.0006f;
+            m_DiskRing.SetPosition(i, new Vector3(Mathf.Cos(a) * r, Mathf.Sin(a) * r, -0.0006f));
+        }
+    }
+
+    // The other hand pinches the disk and moves away (or back) to size the brush, until the pinch opens.
+    void SizeBrush()
+    {
+        var marker = Marker();
+        if (marker == null || m_Disk == null || !m_TipShown)
+        {
+            m_Pinching = false;
+            return;
+        }
+
+        var center = m_Disk.position;
+        if (m_Pinching)
+        {
+            if (!Pinch(m_PinchHand, out var point, out float gap) || gap > m_PinchOpen)
+            {
+                m_Pinching = false;
+                Log($"brush size {marker.realDiameter * 1000f:0.0} mm");
+                PlayerHudNotification.Instance?.ShowText($"Brush {marker.realDiameter * 1000f:0} mm", 1.5f);
+                return;
+            }
+
+            float distance = Vector3.Distance(ProjectOnDisk(point), center);
+            marker.realDiameter = m_PinchStartDiameter + 2f * (distance - m_PinchStartDistance);
+            return;
+        }
+
+        foreach (var hand in new[] { Handedness.Left, Handedness.Right })
+        {
+            if (hand == m_HoldingHand || !Pinch(hand, out var point, out float gap) || gap > m_PinchClose)
+                continue;
+            float distance = Vector3.Distance(ProjectOnDisk(point), center);
+            if (distance > marker.realDiameter * 0.5f + m_PinchReach || Mathf.Abs(Vector3.Dot(point - center, m_DiskNormal)) > m_PinchReach)
+                continue;
+            m_Pinching = true;
+            m_PinchHand = hand;
+            m_PinchStartDistance = distance;
+            m_PinchStartDiameter = marker.realDiameter;
+            PlayerHudNotification.Instance?.ShowText("Sizing the brush: move away to enlarge, back to shrink, open to set", 2f);
+            return;
+        }
+    }
+
+    Vector3 ProjectOnDisk(Vector3 point) => point - m_DiskNormal * Vector3.Dot(point - m_Disk.position, m_DiskNormal);
+
+    static bool Pinch(Handedness hand, out Vector3 point, out float gap)
+    {
+        point = default;
+        gap = float.MaxValue;
+        if (!HandPalm.TryGetJoint(hand, XRHandJointID.ThumbTip, out var thumb) || !HandPalm.TryGetJoint(hand, XRHandJointID.IndexTip, out var index))
+            return false;
+        point = (thumb + index) * 0.5f;
+        gap = Vector3.Distance(thumb, index);
+        return true;
     }
 
     #endregion
+
+    static Material UnlitMaterial(string name, Color colour)
+    {
+        var shader = Shader.Find("Universal Render Pipeline/Unlit");
+        var material = new Material(shader != null ? shader : Shader.Find("Sprites/Default")) { name = name };
+        material.SetColor("_BaseColor", colour);
+        material.color = colour;
+        return material;
+    }
+
+    static AudioClip Tone(string clipName, float frequency, float seconds)
+    {
+        const int rate = 44100;
+        int count = Mathf.CeilToInt(rate * seconds);
+        var data = new float[count];
+        for (int i = 0; i < count; i++)
+        {
+            float t = i / (float)rate;
+            float envelope = Mathf.Min(1f, t * 200f) * Mathf.Clamp01((seconds - t) * 30f);
+            data[i] = Mathf.Sin(2f * Mathf.PI * frequency * t) * envelope * 0.6f;
+        }
+
+        var clip = AudioClip.Create(clipName, count, 1, rate, false);
+        clip.SetData(data, 0);
+        return clip;
+    }
 
     // Waits for the next camera image.
     IEnumerator NextFrame()

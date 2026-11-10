@@ -106,10 +106,22 @@ public class TunnelMarker : NetworkBehaviour
     bool m_RealTouching;
     Vector3 m_RealTip;
     Vector3 m_RealAxis;
+    TunnelSegmentPaint m_RealCanvas;
+    float m_RealDiameter = 0.006f;
 
     public Color32 color => IsSpawned ? m_SharedColor.Value : m_LocalColor;
     public bool docked => IsSpawned ? m_SharedDocked.Value : m_LocalDocked;
     public float diameter => Mathf.Abs(transform.lossyScale.x);
+
+    /// <summary>The size of the marks it makes: its diameter, or with a real marker, the real marker's brush size.</summary>
+    public float brush => m_Real ? m_RealDiameter : diameter;
+
+    /// <summary>The real marker's brush size (meters), set by pinching the disk at its tip.</summary>
+    public float realDiameter
+    {
+        get => m_RealDiameter;
+        set => m_RealDiameter = Mathf.Clamp(value, m_DiameterRange.x, m_DiameterRange.y);
+    }
     public Vector3 tip => transform.TransformPoint(0f, 0f, 0.5f);
     ulong key => IsSpawned ? NetworkObjectId : m_LocalKey;
     ulong m_LocalKey;
@@ -435,7 +447,7 @@ public class TunnelMarker : NetworkBehaviour
         }
 
         var tipPoint = real ? m_RealTip : tip;
-        float radius = diameter * 0.5f;
+        float radius = brush * 0.5f;
 
         // A colour disk on the palette: the marker takes its colour.
         if (holder != null)
@@ -491,9 +503,9 @@ public class TunnelMarker : NetworkBehaviour
         }
     }
 
-    // The surfaces it paints on: all of them, or with a real marker, only the real whiteboard.
+    // The surfaces it paints on: all of them, or with a real marker, only the canvas it was set on.
     bool Paints(TunnelSegmentPaint paint) =>
-        paint != null && paint.paintable && (!m_Real || paint.surface is WhiteboardSurface);
+        paint != null && paint.paintable && (!m_Real || paint == m_RealCanvas);
 
     /// <summary>
     /// A real marker paints in this one's place (on this headset) from now on, or stops. While on, this marker paints
@@ -511,8 +523,21 @@ public class TunnelMarker : NetworkBehaviour
     }
 
     /// <summary>
+    /// The canvas the real marker paints on: the paint of a panel (<see cref="WhiteboardSurface"/>) or of a tunnel
+    /// segment. Any pencil line or stroke on the old one is finished first.
+    /// </summary>
+    public void SetRealCanvas(TunnelSegmentPaint canvas)
+    {
+        if (canvas == m_RealCanvas)
+            return;
+        FinishPencil(true);
+        EndStroke();
+        m_RealCanvas = canvas;
+    }
+
+    /// <summary>
     /// Where the real marker's tip is this frame: <paramref name="seen"/> false when the camera lost it; touching
-    /// when it's on the whiteboard; <paramref name="axis"/> points from the tip into the board (the airbrush's aim).
+    /// when it's on its canvas; <paramref name="axis"/> points from the tip into the board (the airbrush's aim).
     /// </summary>
     public void SetRealTip(bool seen, Vector3 tipPoint, Vector3 axis, bool touching)
     {
@@ -685,7 +710,7 @@ public class TunnelMarker : NetworkBehaviour
         }
 
         // The last point touched again finishes the line.
-        if (m_PencilPoints.Count > 0 && Vector3.Distance(point, m_PencilPoints[^1]) < Mathf.Max(diameter * 1.5f, 0.015f))
+        if (m_PencilPoints.Count > 0 && Vector3.Distance(point, m_PencilPoints[^1]) < Mathf.Max(brush * 1.5f, 0.015f))
         {
             FinishPencil(true);
             return;
@@ -711,7 +736,7 @@ public class TunnelMarker : NetworkBehaviour
         var path = new List<Vector3>();
         if (m_PencilPoints.Count == 0)
             return path;
-        float spacing = Mathf.Max(diameter * 0.35f, 0.001f);
+        float spacing = Mathf.Max(brush * 0.35f, 0.001f);
         if (!curve || m_PencilPoints.Count < 3)
         {
             path.Add(m_PencilPoints[0]);
@@ -771,14 +796,14 @@ public class TunnelMarker : NetworkBehaviour
         var holder = palette;
         bool curve = holder != null && holder.curve;
         m_PencilCurveShown = curve;
-        float radius = diameter * 0.5f;
+        float radius = brush * 0.5f;
         var line = OnCanvases(PencilPath(curve), radius);
         var polygon = curve && m_PencilPoints.Count >= 3 ? OnCanvases(PolygonPath(), 0.002f) : new Dictionary<TunnelSegmentPaint, List<Vector2>>();
         var points = OnCanvases(m_PencilPoints, Mathf.Max(radius * 1.6f, 0.007f));
 
-        var lineStyle = Style(PaintMode.Pencil, diameter, 1f);
+        var lineStyle = Style(PaintMode.Pencil, brush, 1f);
         var polygonStyle = new PaintStyle(PaintMode.Pencil, new Color32(255, 255, 255, 110), 0.003f);
-        var pointStyle = new PaintStyle(PaintMode.Pencil, new Color32(255, 255, 255, 230), Mathf.Max(diameter * 1.6f, 0.014f));
+        var pointStyle = new PaintStyle(PaintMode.Pencil, new Color32(255, 255, 255, 230), Mathf.Max(brush * 1.6f, 0.014f));
         var shown = new HashSet<TunnelSegmentPaint>();
         foreach (var paint in TunnelSegmentPaint.all)
         {
@@ -822,8 +847,8 @@ public class TunnelMarker : NetworkBehaviour
         {
             var holder = palette;
             bool curve = holder != null && holder.curve;
-            var style = Style(PaintMode.Pencil, diameter, 1f);
-            foreach (var (paint, uvs) in OnCanvases(PencilPath(curve), diameter * 0.5f))
+            var style = Style(PaintMode.Pencil, brush, 1f);
+            foreach (var (paint, uvs) in OnCanvases(PencilPath(curve), brush * 0.5f))
             {
                 paint.Draw(style, uvs);
                 paint.EndStroke();

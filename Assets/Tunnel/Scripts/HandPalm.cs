@@ -43,6 +43,27 @@ public static class HandPalm
         buttonRoot.SetPositionAndRotation(buttonPosition, Quaternion.LookRotation(buttonPosition - head, Vector3.up));
     }
 
+    /// <summary>Where one of a tracked hand's joints is in the world (false when that hand isn't tracked).</summary>
+    public static bool TryGetJoint(Handedness handedness, XRHandJointID joint, out Vector3 position)
+    {
+        position = default;
+        if (!TryGetHand(handedness, out var hand, out var space) || !hand.GetJoint(joint).TryGetPose(out Pose pose))
+            return false;
+        position = space.TransformPoint(pose.position);
+        return true;
+    }
+
+    static bool TryGetHand(Handedness handedness, out XRHand hand, out Transform space)
+    {
+        hand = default;
+        space = null;
+        if (!TryGetPalm(handedness, out _, out _, out _))
+            return false;
+        hand = handedness == Handedness.Left ? s_Hands.leftHand : s_Hands.rightHand;
+        space = s_Origin.CameraFloorOffsetObject.transform;
+        return true;
+    }
+
     /// <summary>The palm's centre and the direction it faces (out of the palm), and the head, in the world.</summary>
     public static bool TryGetPalm(Handedness handedness, out Vector3 position, out Vector3 normal, out Vector3 head)
     {

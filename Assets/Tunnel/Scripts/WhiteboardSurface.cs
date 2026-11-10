@@ -3,10 +3,11 @@ using UnityEngine;
 using UnityEngine.XR.Templates.MRTTabletopAssets;
 
 /// <summary>
-/// A real whiteboard, found by the headset's camera (<see cref="RealMarkerTracker"/>), as a surface markers paint on
-/// in place of the tunnel's walls. Its transform sits at the board's centre with +X to the right, +Y up and +Z into
-/// the board, so the board's face looks along -Z. A thin outline shows where the headset thinks the board is.
-/// Its paint (<see cref="TunnelSegmentPaint"/>) stays on this headset.
+/// The canvas on a real white panel, apart from the tunnel: its corners are found by the headset's camera from the
+/// dark marks on them, and its surface from three touches of the real marker (<see cref="RealMarkerTracker"/>). Its
+/// transform sits at the panel's centre with +X to the right, +Y up and +Z into the panel, so its face looks along
+/// -Z. A thin dark outline shows where the headset thinks the canvas is. Its paint (<see cref="TunnelSegmentPaint"/>)
+/// stays on this headset; a copy can be put on a tunnel wall for everyone (<see cref="PaintingCopy"/>).
 /// </summary>
 public class WhiteboardSurface : MonoBehaviour, IPaintSurface
 {
@@ -18,7 +19,7 @@ public class WhiteboardSurface : MonoBehaviour, IPaintSurface
     float m_EdgeMargin = 0.03f;
 
     [SerializeField]
-    Color m_OutlineColor = new(0.3f, 0.85f, 1f, 0.9f);
+    Color m_OutlineColor = new(0.05f, 0.05f, 0.06f, 1f);
 
     LineRenderer m_Outline;
     Material m_OutlineMaterial;
@@ -79,7 +80,7 @@ public class WhiteboardSurface : MonoBehaviour, IPaintSurface
             m_Outline = go.AddComponent<LineRenderer>();
             m_Outline.useWorldSpace = false;
             m_Outline.loop = true;
-            m_Outline.widthMultiplier = 0.004f;
+            m_Outline.widthMultiplier = 0.005f;
             m_Outline.numCornerVertices = 2;
             m_Outline.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             m_Outline.receiveShadows = false;

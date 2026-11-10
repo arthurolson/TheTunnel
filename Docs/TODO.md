@@ -10,8 +10,9 @@ Items under "Ideas" are suggestions only, not yet agreed.
 From the project's list: improve the painting activity to enable better tracking and sensory feedback.
 
 Open now:
-- Install 09.11.2026.4 and repeat the real-marker test on the whiteboard. Adjust the touch thresholds, the board
-  outline (where the QR code sits on the board) and the camera latency from the log.
+- Install 10.11.2026.1 and test the real marker: colour, the three touches, the panel's corner marks, painting,
+  sizing the brush by pinching, a tunnel wall as the canvas, and Copy to wall (with a second player). Adjust the
+  touch thresholds, hold stillness and mark detection from the [RealMarker] log.
 
 Ideas:
 - Touch you can feel on the virtual marker: a controller vibration when it touches the wall, and a soft drawing

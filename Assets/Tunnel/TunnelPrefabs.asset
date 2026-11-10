@@ -19,6 +19,7 @@ MonoBehaviour:
   containerSphere: {fileID: 4142911118070260877, guid: eba5dfb6d05444d9091f72443c6b2ee5, type: 3}
   palette: {fileID: 7975227741998209254, guid: 138417c8f158b4c50945bf81d577dea9, type: 3}
   marker: {fileID: 8446639336854627958, guid: a07d169b1df7043f585d5c9b68f3dab1, type: 3}
+  paintCopy: {fileID: 635559419747914839, guid: ada53d9c82b2c4781a057eee3a04e007, type: 3}
   molecules:
   - name: 2PLV
     prefab: {fileID: 592917901370543573, guid: 9ebea7aea0a414c6dbbdec5f8b358726, type: 3}
