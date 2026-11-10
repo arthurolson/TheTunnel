@@ -13,6 +13,8 @@ using XRMultiplayer;
 /// Started by the palette's Real marker button:
 ///  1. Colour: the marker is held sideways with its coloured cap against something plain and white; the cap's colour
 ///     becomes the colour that's tracked, and its known length (1.5 inches) against its width gives its diameter.
+///  1b. Aligning: the marker is moved around the view in the hand; matching the cap's place in the image to the
+///     tracked hand holding it settles how the camera image is read and checks the cap's diameter.
 ///  2. Surface: the cap's tip is held still on the surface for 4 seconds; a dot appears there with a beep. Three such
 ///     points, apart from each other and not in a line, give the surface's plane.
 ///  3. Canvas: on a panel, the four dark corner marks (each a dark box with a letter) are found in the camera image,
@@ -25,13 +27,15 @@ using XRMultiplayer;
 ///     The palette's marker paints from it (<see cref="TunnelMarker.SetRealTip"/>) with the palette's colour.
 /// A disk at the tip shows the brush's colour and size. Pinching the disk with the other hand and moving away (or
 /// back) sizes the brush, until the pinch opens.
+/// A log and camera snapshots with what was found drawn on them are saved on the headset, in the app's files folder
+/// under RealMarker (adb pull /sdcard/Android/data/edu.scripps.tunnel/files/RealMarker).
 /// Each image is about 40 ms old when it arrives, so the head pose from then is used. Local to this headset, apart
 /// from paint on a tunnel wall.
 /// </summary>
 [DefaultExecutionOrder(-1100)] // before the marker paints
 public class RealMarkerTracker : MonoBehaviour
 {
-    public enum Stage { Off, Colour, Surface, Canvas, Tracking }
+    public enum Stage { Off, Colour, Aligning, Surface, Canvas, Tracking }
 
     public enum CanvasKind { None, Panel, TunnelWall }
 
@@ -55,6 +59,14 @@ public class RealMarkerTracker : MonoBehaviour
     [SerializeField]
     [Tooltip("Lost from view this long (seconds), the marker stops painting.")]
     float m_LostAfter = 0.2f;
+
+    [SerializeField]
+    [Tooltip("The camera's image has red and blue swapped (only for naming the cap's colour).")]
+    bool m_SwapRedBlue = true;
+
+    [SerializeField]
+    [Tooltip("At most this many camera snapshots are saved per run, for looking into problems.")]
+    int m_MaxSnapshots = 40;
 
     [Header("The surface: three touches")]
     [SerializeField]
@@ -211,6 +223,18 @@ public class RealMarkerTracker : MonoBehaviour
     AudioSource m_Audio;
     AudioClip m_Beep;
 
+    // How the camera image is read: found by matching the cap to the hand holding it (see Align).
+    bool m_FlipX, m_FlipY, m_AxisTurn = true;
+
+    // A log and snapshots on the headset (Android/data/edu.scripps.tunnel/files/RealMarker).
+    static System.IO.StreamWriter s_File;
+    static string s_Folder;
+    int m_Snapshots;
+    float m_NextSnapshot;
+    string m_SnapNext;
+    List<MarkSeen> m_LastMarks;
+    Texture2D m_SnapTexture;
+
     /// <summary>The tracker, made the first time it's needed.</summary>
     public static RealMarkerTracker Get()
     {
@@ -362,6 +386,8 @@ public class RealMarkerTracker : MonoBehaviour
         m_MarksFound = 0;
         m_HoldingHand = Handedness.Invalid;
         ClearPoints();
+        OpenLog();
+        m_Snapshots = 0;
         SetStatus("Starting the camera...");
         bool started = false;
         yield return m_Camera.StartCamera(ok => started = ok);
@@ -373,6 +399,11 @@ public class RealMarkerTracker : MonoBehaviour
 
         yield return FindColour();
         if (stage != Stage.Colour)
+            yield break;
+
+        stage = Stage.Aligning;
+        yield return Align();
+        if (stage != Stage.Aligning)
             yield break;
 
         // From here the real marker stands in for the virtual one, though it paints only once there's a canvas.
@@ -472,7 +503,7 @@ public class RealMarkerTracker : MonoBehaviour
             if (steady.Count > 0 && HueDistance(steady[^1].model.hue, seen.model.hue) > 12f)
                 steady.Clear();
             steady.Add(seen);
-            SetStatus($"Seeing a {Describe(seen.colour)} cap <color=#{ColorUtility.ToHtmlStringRGB(seen.colour)}>■</color>. Hold still...");
+            SetStatus($"Seeing a {Describe(Shown(seen.colour))} cap <color=#{ColorUtility.ToHtmlStringRGB(Shown(seen.colour))}>■</color>. Hold still...");
             if (steady.Count < 8)
                 continue;
 
@@ -481,7 +512,7 @@ public class RealMarkerTracker : MonoBehaviour
             byHue.Sort((a, b) => a.model.hue.CompareTo(b.model.hue));
             var chosen = byHue[byHue.Count / 2];
             m_Model = chosen.model;
-            capColour = chosen.colour;
+            capColour = Shown(chosen.colour);
 
             // Its diameter, from its known length: the middle of the width-to-length ratios seen.
             var ratios = steady.ConvertAll(s => s.width / Mathf.Max(s.length, 1f));
@@ -497,6 +528,9 @@ public class RealMarkerTracker : MonoBehaviour
 
         Stop("Couldn't find a coloured cap. Use a marker with a bright cap (blue, green, red...), hold it sideways in the middle of your view against white, and try again.");
     }
+
+    // The colour as it really is (the camera's red and blue may be swapped).
+    Color32 Shown(Color32 c) => m_SwapRedBlue ? new Color32(c.b, c.g, c.r, c.a) : c;
 
     static string Describe(Color32 c)
     {
@@ -594,6 +628,160 @@ public class RealMarkerTracker : MonoBehaviour
             length = blob.length,
             width = blob.width,
         };
+    }
+
+    #endregion
+
+    #region Aligning the camera image with the hand
+
+    // The camera image can be read 8 ways (mirrored across, mirrored up and down, and Android's axes turned or not),
+    // and only one puts the cap where it really is. The hand holding the marker is tracked in 3D, and the cap is
+    // always right beside it: the way that keeps the cap's direction nearest the hand's joints, over many views with
+    // the cap away from the middle of the image, is the right one. The hand's distance also checks the cap's
+    // diameter (and so how far away it's judged to be).
+    IEnumerator Align()
+    {
+        SetStatus("Now hold the marker as you would to draw and move it slowly around your view, out toward the edges too, for a few seconds. (Controllers down: your hands must be tracked.)");
+        var angles = new List<float>[8];
+        var diameters = new List<float>[8];
+        for (int i = 0; i < 8; i++)
+        {
+            angles[i] = new List<float>();
+            diameters[i] = new List<float>();
+        }
+
+        float f = m_Camera.imageFocalLength;
+        float deadline = Time.unscaledTime + 30f;
+        int counted = 0, chosen = -1;
+        Blob blob = default;
+        Pose lastPose = default;
+        Color32[] lastPixels = null;
+        while (Time.unscaledTime < deadline)
+        {
+            yield return NextFrame();
+            var pixels = m_Camera.GetPixels();
+            if (pixels == null)
+                continue;
+            var head = HeadAtCapture();
+            int w = m_Camera.width, h = m_Camera.height;
+            var model = m_Model;
+            int minPixels = m_MinPixels;
+            var task = Task.Run(() => FindBlob(pixels, w, h, model, new RectInt(0, 0, w, h), null, minPixels));
+            while (!task.IsCompleted)
+                yield return null;
+            if (stage != Stage.Aligning)
+                yield break;
+            blob = task.Result;
+            lastPixels = pixels;
+            lastPose = m_Camera.GetCameraPose(head, m_AxisTurn);
+            if (Time.unscaledTime >= m_NextSnapshot)
+            {
+                m_NextSnapshot = Time.unscaledTime + 3f;
+                Snapshot("align", pixels, w, h, blob, lastPose);
+            }
+            if (!blob.found)
+            {
+                SetStatus("Aligning: can't see the cap. Hold the marker in view, its cap toward the camera's side.");
+                continue;
+            }
+
+            var joints = new List<Vector3>();
+            foreach (var hand in new[] { Handedness.Left, Handedness.Right })
+                foreach (var joint in new[] { XRHandJointID.Palm, XRHandJointID.IndexTip, XRHandJointID.ThumbTip, XRHandJointID.IndexProximal, XRHandJointID.MiddleTip })
+                    if (HandPalm.TryGetJoint(hand, joint, out var p))
+                        joints.Add(p);
+            if (joints.Count == 0)
+            {
+                SetStatus("Aligning: can't see your hands. Put the controllers down so the headset tracks your hands.");
+                continue;
+            }
+
+            if (Vector2.Distance(blob.center, m_Camera.imageCenter) < 0.15f * Mathf.Min(w, h))
+            {
+                SetStatus($"Aligning ({counted} views): move the marker away from the middle of your view, toward the edges.");
+                continue;
+            }
+
+            for (int o = 0; o < 8; o++)
+            {
+                var pose = m_Camera.GetCameraPose(head, (o & 4) == 0);
+                var ray = m_Camera.PixelToRay(blob.center, pose, (o & 1) != 0, (o & 2) != 0);
+                float best = 180f, depth = 0f;
+                foreach (var joint in joints)
+                {
+                    float a = Vector3.Angle(ray.direction, joint - ray.origin);
+                    if (a < best)
+                    {
+                        best = a;
+                        depth = Vector3.Dot(joint - pose.position, pose.rotation * Vector3.forward);
+                    }
+                }
+                angles[o].Add(best);
+                diameters[o].Add(depth * blob.width / f);
+            }
+
+            counted++;
+            SetStatus($"Aligning: {counted} views. Keep moving the marker slowly around your view...");
+            if (counted < 20)
+                continue;
+            int first = -1, second = -1;
+            for (int o = 0; o < 8; o++)
+            {
+                if (first < 0 || Middle(angles[o]) < Middle(angles[first]))
+                {
+                    second = first;
+                    first = o;
+                }
+                else if (second < 0 || Middle(angles[o]) < Middle(angles[second]))
+                {
+                    second = o;
+                }
+            }
+
+            if (Middle(angles[first]) < 10f && Middle(angles[second]) > 2.5f * Middle(angles[first]))
+            {
+                chosen = first;
+                break;
+            }
+        }
+
+        var table = new System.Text.StringBuilder();
+        for (int o = 0; o < 8; o++)
+            table.Append($"\n  flipX={(o & 1) != 0} flipY={(o & 2) != 0} axisTurn={(o & 4) == 0}: cap {Middle(angles[o]):0.0}° from the hand, diameter by the hand's distance {Middle(diameters[o]) * 1000f:0.0} mm");
+        Log($"aligning: {counted} views{table}");
+
+        if (chosen < 0)
+        {
+            Log("aligning: couldn't tell which way the image is read; keeping flipX=False flipY=False axisTurn=True");
+            PlayerHudNotification.Instance?.ShowText("Couldn't align the camera with your hand; carrying on", 2f);
+        }
+        else
+        {
+            m_FlipX = (chosen & 1) != 0;
+            m_FlipY = (chosen & 2) != 0;
+            m_AxisTurn = (chosen & 4) == 0;
+            float byHand = Middle(diameters[chosen]);
+            string use = "";
+            if (byHand >= 0.008f && byHand <= 0.03f && (m_Diameter > byHand * 1.25f || m_Diameter < byHand * 0.8f))
+            {
+                use = $"; using the hand's {byHand * 1000f:0.0} mm in place of {m_Diameter * 1000f:0.0} mm";
+                m_Diameter = byHand;
+            }
+            Log($"aligned: flipX={m_FlipX} flipY={m_FlipY} axisTurn={m_AxisTurn}, cap {Middle(angles[chosen]):0.0}° from the hand; diameter {m_Diameter * 1000f:0.0} mm, by the hand's distance {byHand * 1000f:0.0} mm{use}");
+            PlayerHudNotification.Instance?.ShowText("Camera aligned", 1.5f);
+        }
+
+        if (lastPixels != null)
+            Snapshot("aligned", lastPixels, m_Camera.width, m_Camera.height, blob, m_Camera.GetCameraPose(HeadAtCapture(), m_AxisTurn));
+    }
+
+    static float Middle(List<float> values)
+    {
+        if (values.Count == 0)
+            return float.MaxValue;
+        var sorted = new List<float>(values);
+        sorted.Sort();
+        return sorted[sorted.Count / 2];
     }
 
     #endregion
@@ -760,7 +948,7 @@ public class RealMarkerTracker : MonoBehaviour
         var ends = new Vector3[2];
         for (int e = 0; e < 2; e++)
         {
-            rays[e] = m_Camera.PixelToRay(blob.End(e), cameraPose, false, false);
+            rays[e] = m_Camera.PixelToRay(blob.End(e), cameraPose, m_FlipX, m_FlipY);
             ends[e] = AtDepth(rays[e], forward, depth);
         }
 
@@ -867,15 +1055,27 @@ public class RealMarkerTracker : MonoBehaviour
                     yield return null;
                 if (stage == Stage.Off)
                     yield break;
-                var cameraPose = m_Camera.GetCameraPose(head);
+                var cameraPose = m_Camera.GetCameraPose(head, m_AxisTurn);
                 if (task.Result.Item2 != null)
+                {
                     AddMarkSightings(task.Result.Item2, cameraPose);
+                    m_LastMarks = task.Result.Item2;
+                }
                 seen = Measure(task.Result.Item1, cameraPose, out var sighting);
                 if (seen)
                 {
                     m_LastSeen = Time.unscaledTime;
                     m_Tip = sighting;
                     OnSighting(marker, sighting);
+                }
+
+                // Snapshots: when a point is placed, and every few seconds while looking for the canvas or painting.
+                bool due = (stage == Stage.Canvas || stage == Stage.Surface || stage == Stage.Tracking) && Time.unscaledTime >= m_NextSnapshot;
+                if (m_SnapNext != null || due)
+                {
+                    m_NextSnapshot = Time.unscaledTime + (stage == Stage.Tracking ? 6f : 3f);
+                    Snapshot(m_SnapNext ?? stage.ToString().ToLowerInvariant(), pixels, w, h, task.Result.Item1, cameraPose);
+                    m_SnapNext = null;
                 }
             }
 
@@ -1006,6 +1206,7 @@ public class RealMarkerTracker : MonoBehaviour
 
         m_Points.Add(point);
         m_PointDots.Add(MakeDot(point));
+        m_SnapNext = $"point{m_Points.Count}";
         m_Audio.PlayOneShot(m_Beep);
         Log($"point {m_Points.Count} at {point:F3}");
         if (m_Points.Count < 3)
@@ -1083,7 +1284,7 @@ public class RealMarkerTracker : MonoBehaviour
         float now = Time.unscaledTime;
         foreach (var mark in marks)
         {
-            var ray = m_Camera.PixelToRay(mark.center, cameraPose, false, false);
+            var ray = m_Camera.PixelToRay(mark.center, cameraPose, m_FlipX, m_FlipY);
             m_MarkSightings.Add((ray.origin, ray.direction, mark.size / f, now));
         }
 
@@ -1103,7 +1304,7 @@ public class RealMarkerTracker : MonoBehaviour
         for (int x = 0; x < hw; x++)
         {
             var c = pixels[2 * y * w + 2 * x];
-            lum[y * hw + x] = (byte)((c.r * 77 + c.g * 150 + c.b * 29) >> 8);
+            lum[y * hw + x] = (byte)((c.r + 2 * c.g + c.b) >> 2); // the same whichever way red and blue come
         }
 
         // How white the paper is nearby: the brightest in the 3 x 3 blocks (16 pixels each) round each pixel.
@@ -1761,5 +1962,102 @@ public class RealMarkerTracker : MonoBehaviour
         while (!m_Camera.hasNewFrame && m_Camera.isPlaying);
     }
 
-    static void Log(string message) => Debug.Log("[RealMarker] " + message);
+    static void Log(string message)
+    {
+        Debug.Log("[RealMarker] " + message);
+        try
+        {
+            s_File?.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {message}");
+            s_File?.Flush();
+        }
+        catch (Exception)
+        {
+            s_File = null;
+        }
+    }
+
+    // A fresh log file and snapshot folder for this run, on the headset.
+    static void OpenLog()
+    {
+        try
+        {
+            s_Folder = System.IO.Path.Combine(Application.persistentDataPath, "RealMarker");
+            if (System.IO.Directory.Exists(s_Folder))
+                foreach (var file in System.IO.Directory.GetFiles(s_Folder))
+                    System.IO.File.Delete(file);
+            System.IO.Directory.CreateDirectory(s_Folder);
+            s_File?.Dispose();
+            s_File = new System.IO.StreamWriter(System.IO.Path.Combine(s_Folder, "log.txt"), false);
+            Log($"run started {DateTime.Now:yyyy-MM-dd HH:mm:ss}, version {Application.version}");
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[RealMarker] no log file: " + e.Message);
+            s_File = null;
+        }
+    }
+
+    // Saves the camera image as a JPEG with what was found drawn on it: the cap's ends (tip green, back red), the
+    // corner marks seen (yellow), the hands' joints (magenta) and the placed points (cyan), as this headset maps
+    // them into the image. Files are numbered in order.
+    void Snapshot(string tag, Color32[] pixels, int w, int h, Blob blob, Pose cameraPose)
+    {
+        if (s_Folder == null || pixels == null || m_Snapshots >= m_MaxSnapshots)
+            return;
+        try
+        {
+            var image = (Color32[])pixels.Clone();
+            void Dot(Vector2 p, int radius, Color32 colour)
+            {
+                for (int dy = -radius; dy <= radius; dy++)
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    int x = (int)p.x + dx, y = (int)p.y + dy;
+                    if (x >= 0 && y >= 0 && x < w && y < h && (Mathf.Abs(dx) <= 1 || Mathf.Abs(dy) <= 1))
+                        image[y * w + x] = colour;
+                }
+            }
+
+            // The image's own colours come with red and blue swapped; draw in the same order.
+            Color32 C(byte r, byte g, byte b) => m_SwapRedBlue ? new Color32(b, g, r, 255) : new Color32(r, g, b, 255);
+            if (blob.found)
+            {
+                Dot(blob.End(0), 7, Vector2.Distance(blob.End(0), m_TipPixel) < 1f ? C(0, 255, 0) : C(255, 0, 0));
+                Dot(blob.End(1), 7, Vector2.Distance(blob.End(1), m_TipPixel) < 1f ? C(0, 255, 0) : C(255, 0, 0));
+            }
+            if (m_LastMarks != null)
+                foreach (var mark in m_LastMarks)
+                {
+                    float r = mark.size * 0.5f;
+                    for (float t = -r; t <= r; t += 1f)
+                    {
+                        Dot(mark.center + new Vector2(t, r), 0, C(255, 230, 0));
+                        Dot(mark.center + new Vector2(t, -r), 0, C(255, 230, 0));
+                        Dot(mark.center + new Vector2(r, t), 0, C(255, 230, 0));
+                        Dot(mark.center + new Vector2(-r, t), 0, C(255, 230, 0));
+                    }
+                }
+            foreach (var hand in new[] { Handedness.Left, Handedness.Right })
+                foreach (var joint in new[] { XRHandJointID.Palm, XRHandJointID.IndexTip, XRHandJointID.ThumbTip })
+                    if (HandPalm.TryGetJoint(hand, joint, out var p) && m_Camera.WorldToPixel(p, cameraPose, m_FlipX, m_FlipY, out var pixel))
+                        Dot(pixel, 5, C(255, 0, 255));
+            foreach (var point in m_Points)
+                if (m_Camera.WorldToPixel(point, cameraPose, m_FlipX, m_FlipY, out var pixel))
+                    Dot(pixel, 9, C(0, 220, 255));
+
+            if (m_SnapTexture == null || m_SnapTexture.width != w || m_SnapTexture.height != h)
+                m_SnapTexture = new Texture2D(w, h, TextureFormat.RGBA32, false);
+            m_SnapTexture.SetPixels32(image);
+            m_SnapTexture.Apply(false);
+            var bytes = m_SnapTexture.EncodeToJPG(80);
+            string file = $"{m_Snapshots:00}_{tag}.jpg";
+            m_Snapshots++;
+            System.IO.File.WriteAllBytes(System.IO.Path.Combine(s_Folder, file), bytes);
+            Log($"snapshot {file}: cap {(blob.found ? $"{blob.center:F0}, {blob.length:0} x {blob.width:0.0} px" : "not seen")}, {m_LastMarks?.Count ?? 0} marks in view, head {cameraPose.position:F2}");
+        }
+        catch (Exception e)
+        {
+            Log("snapshot failed: " + e.Message);
+        }
+    }
 }

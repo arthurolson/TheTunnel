@@ -174,6 +174,38 @@ public class PassthroughCameraReader : MonoBehaviour
         return new Ray(cameraPose.position, cameraPose.rotation * direction);
     }
 
+    /// <summary>
+    /// Where a world point appears in the image (the inverse of <see cref="PixelToRay"/>, with the same flips);
+    /// false if it's behind the camera.
+    /// </summary>
+    public bool WorldToPixel(Vector3 world, Pose cameraPose, bool flipX, bool flipY, out Vector2 pixel)
+    {
+        pixel = default;
+        var local = Quaternion.Inverse(cameraPose.rotation) * (world - cameraPose.position);
+        if (local.z <= 0.01f || width == 0)
+            return false;
+        var sensor = new Vector2(local.x / local.z * m_FocalLength.x + m_PrincipalPoint.x, local.y / local.z * m_FocalLength.y + m_PrincipalPoint.y);
+        float scale = Mathf.Min(m_SensorResolution.x / (float)width, m_SensorResolution.y / (float)height);
+        var offset = new Vector2((m_SensorResolution.x - width * scale) * 0.5f, (m_SensorResolution.y - height * scale) * 0.5f);
+        pixel = (sensor - offset) / scale;
+        if (flipX)
+            pixel.x = width - pixel.x;
+        if (flipY)
+            pixel.y = height - pixel.y;
+        return true;
+    }
+
+    /// <summary>The image's principal point (the optical axis), in image pixels.</summary>
+    public Vector2 imageCenter
+    {
+        get
+        {
+            float scale = Mathf.Min(m_SensorResolution.x / (float)Mathf.Max(width, 1), m_SensorResolution.y / (float)Mathf.Max(height, 1));
+            var offset = new Vector2((m_SensorResolution.x - width * scale) * 0.5f, (m_SensorResolution.y - height * scale) * 0.5f);
+            return (m_PrincipalPoint - offset) / scale;
+        }
+    }
+
     bool TryReadCameraInfo(out int deviceIndex)
     {
         deviceIndex = -1;
