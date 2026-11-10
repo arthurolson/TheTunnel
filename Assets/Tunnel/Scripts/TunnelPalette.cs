@@ -20,6 +20,8 @@ using XRMultiplayer;
 /// marker. Check boxes choose what the marker does: solid Paint, Pencil lines (straight from touch to touch, or with
 /// Curve a Bezier curve whose control points are the touches; End line finishes one, as does touching the same spot
 /// twice), Airbrush, or Eraser. Clear all marks (pressed twice) takes every mark off the tunnel.
+/// Real marker (an experiment) paints with a real marker, tracked by this headset's camera, on a real whiteboard
+/// (<see cref="RealMarkerTracker"/>): it uses the marker's colour, and selecting a disk then gives the marker its colour.
 /// Shared: everyone sees the same disks, choices and messages. Works locally when not connected.
 /// </summary>
 public class TunnelPalette : NetworkBehaviour
@@ -43,7 +45,17 @@ public class TunnelPalette : NetworkBehaviour
     [SerializeField] Button m_CurveRow;
     [SerializeField] Button m_EndLineRow;
     [SerializeField] Button m_ClearRow;
+    [SerializeField] Button m_RealRow;
     [SerializeField] TMP_Text m_Status;
+
+    [Header("Real marker")]
+    [SerializeField]
+    [Tooltip("Tunnel/Paint Overlay: draws the paint on the real whiteboard.")]
+    Material m_BoardOverlay;
+
+    [SerializeField]
+    [Tooltip("Tunnel/Paint Brush.")]
+    Shader m_BoardBrush;
 
     [Header("Holder and wall")]
     [SerializeField]
@@ -143,6 +155,7 @@ public class TunnelPalette : NetworkBehaviour
         m_CurveRow?.onClick.AddListener(() => SetCurve(!curve));
         m_EndLineRow?.onClick.AddListener(RequestEndLine);
         m_ClearRow?.onClick.AddListener(PressClear);
+        m_RealRow?.onClick.AddListener(() => RealMarkerTracker.Get().Toggle(this, m_BoardOverlay, m_BoardBrush));
         SetStatus("Touch a disk with the marker's tip to take its colour. Select a disk here to change its colour.");
     }
 
@@ -165,6 +178,22 @@ public class TunnelPalette : NetworkBehaviour
         ShowDisks();
         ShowRows();
         ShowSliders();
+        ShowRealStatus();
+    }
+
+    bool realOn => RealMarkerTracker.instance != null && RealMarkerTracker.instance.palette == this &&
+        RealMarkerTracker.instance.stage != RealMarkerTracker.Stage.Off;
+
+    string m_RealStatusShown;
+
+    // The real marker's progress, on this headset only.
+    void ShowRealStatus()
+    {
+        var tracker = RealMarkerTracker.instance;
+        if (tracker == null || tracker.palette != this || tracker.status == m_RealStatusShown)
+            return;
+        m_RealStatusShown = tracker.status;
+        SetStatus(tracker.status);
     }
 
     #region Showing
@@ -196,6 +225,7 @@ public class TunnelPalette : NetworkBehaviour
         SetRow(m_CurveRow, Check(curve) + "  Curve  <color=#AAA>" + (pencil ? "touches are Bezier controls" : "(pencil)") + "</color>", pencil);
         SetRow(m_EndLineRow, "End line  <color=#AAA>" + (pencil ? "or touch the last point again" : "(pencil)") + "</color>", pencil);
         SetRow(m_ClearRow, Time.time < m_ClearArmedUntil ? "<color=#F88>Press again to clear every mark</color>" : "Clear all marks", true);
+        SetRow(m_RealRow, Check(realOn) + "  Real marker  <color=#AAA>" + (realOn ? "press to stop" : "camera-tracked, on a whiteboard") + "</color>", true);
     }
 
     static string Check(bool on) => on ? "■" : "□";
@@ -271,6 +301,15 @@ public class TunnelPalette : NetworkBehaviour
             SelectDiskRpc((byte)index);
         else
             m_LocalSelected = index;
+        if (realOn)
+        {
+            // The real marker can't touch the disks: selecting one gives it the disk's colour.
+            foreach (var marker in TunnelMarker.all)
+                if (marker != null && marker.palette == this)
+                    marker.TakeColor(DiskColor(index));
+            PlayerHudNotification.Instance?.ShowText($"Real marker: colour of disk {index + 1}", 1.5f);
+            return;
+        }
         ShareStatus($"Disk {index + 1} selected: the colour chooser now changes its colour.");
     }
 

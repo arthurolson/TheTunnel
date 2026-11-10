@@ -149,6 +149,9 @@ static class PaintBuilder
         generalSo.FindProperty("m_MaximumScaleRatio").floatValue = 50f;
         generalSo.ApplyModifiedPropertiesWithoutUndo();
 
+        // It follows the hand every frame, not in physics steps.
+        marker.GetComponent<XRGrabInteractable>().movementType = XRBaseInteractable.MovementType.Instantaneous;
+
         var component = marker.AddComponent<TunnelMarker>();
         var so = new SerializedObject(component);
         so.FindProperty("m_Length").floatValue = k_MarkerLength;
@@ -281,8 +284,9 @@ static class PaintBuilder
         var eraser = Row("Eraser Row", 105f, "□  Eraser");
         var curve = Row("Curve Row", 15f, "□  Curve");
         var endLine = Row("End Line Row", -50f, "End line");
-        var clear = Row("Clear Row", -140f, "Clear all marks");
-        var status = Text(titleTemplate, canvasRect, "Status", "", new Vector2(k_RowsX, -270f), new Vector2(k_RowWidth, 180f));
+        var clear = Row("Clear Row", -120f, "Clear all marks");
+        var real = Row("Real Marker Row", -185f, "□  Real marker");
+        var status = Text(titleTemplate, canvasRect, "Status", "", new Vector2(k_RowsX, -295f), new Vector2(k_RowWidth, 140f));
         status.fontSize = 24f;
         status.alignment = TextAlignmentOptions.TopLeft;
         status.textWrappingMode = TextWrappingModes.Normal;
@@ -310,6 +314,9 @@ static class PaintBuilder
         so.FindProperty("m_CurveRow").objectReferenceValue = curve;
         so.FindProperty("m_EndLineRow").objectReferenceValue = endLine;
         so.FindProperty("m_ClearRow").objectReferenceValue = clear;
+        so.FindProperty("m_RealRow").objectReferenceValue = real;
+        so.FindProperty("m_BoardOverlay").objectReferenceValue = AssetDatabase.LoadAssetAtPath<Material>($"{k_Folder}/PaintOverlay.mat");
+        so.FindProperty("m_BoardBrush").objectReferenceValue = Shader.Find("Tunnel/Paint Brush");
         so.FindProperty("m_Status").objectReferenceValue = status;
         so.FindProperty("m_Dock").objectReferenceValue = dock;
         so.FindProperty("m_HolderGrab").objectReferenceValue = holderGrab;

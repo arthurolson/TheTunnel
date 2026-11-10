@@ -31,6 +31,21 @@ public class PassthroughCameraReader : MonoBehaviour
     public int height => m_Texture != null ? m_Texture.height : 0;
     public string error { get; private set; }
 
+    /// <summary>A new image arrived this frame.</summary>
+    public bool hasNewFrame => isPlaying && m_Texture.didUpdateThisFrame;
+
+    /// <summary>The lens's focal length in image pixels (the image may be a scaled crop of the sensor).</summary>
+    public float imageFocalLength
+    {
+        get
+        {
+            if (width == 0 || height == 0)
+                return 0f;
+            float scale = Mathf.Min(m_SensorResolution.x / (float)width, m_SensorResolution.y / (float)height);
+            return 0.5f * (m_FocalLength.x + m_FocalLength.y) / scale;
+        }
+    }
+
     public static bool hasPermission =>
         Application.platform != RuntimePlatform.Android ||
         (Permission.HasUserAuthorizedPermission(k_CameraPermission) && Permission.HasUserAuthorizedPermission(HeadsetCameraPermission));

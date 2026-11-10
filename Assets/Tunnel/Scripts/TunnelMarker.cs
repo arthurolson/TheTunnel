@@ -24,6 +24,8 @@ using XRMultiplayer;
 /// Its dark grip at the back lights up green, for the player holding it, while it is marking (touching the wall, or for
 /// the airbrush, aimed at it within range). Only the player holding it paints with it; the marks are shared through each segment's
 /// <see cref="TunnelSegmentPaint"/>. Shared over the network like the molecules.
+/// A real marker can paint in its place (<see cref="RealMarkerTracker"/>): while one is tracked, its tip, as the
+/// headset's camera sees it, paints with this marker's colour, size and kind of mark, on the real whiteboard only.
 /// </summary>
 [DefaultExecutionOrder(-1000)] // builds its collider before the grab interactable collects it
 public class TunnelMarker : NetworkBehaviour
@@ -97,6 +99,13 @@ public class TunnelMarker : NetworkBehaviour
     readonly List<Vector3> m_PencilPoints = new();
     readonly HashSet<TunnelSegmentPaint> m_PreviewSegments = new();
     PaintMode m_LastMode;
+
+    // A real marker painting in this one's place (see SetRealTip).
+    bool m_Real;
+    bool m_RealSeen;
+    bool m_RealTouching;
+    Vector3 m_RealTip;
+    Vector3 m_RealAxis;
 
     public Color32 color => IsSpawned ? m_SharedColor.Value : m_LocalColor;
     public bool docked => IsSpawned ? m_SharedDocked.Value : m_LocalDocked;
@@ -416,7 +425,8 @@ public class TunnelMarker : NetworkBehaviour
         if (m_PencilPoints.Count > 0 && holder != null && mode == PaintMode.Pencil && m_PencilCurveShown != holder.curve)
             ShowPencil();
 
-        if (m_Grab == null || !m_Grab.isSelected)
+        bool real = m_Real && m_RealSeen;
+        if (!real && (m_Grab == null || !m_Grab.isSelected || m_Real))
         {
             if (m_Touching)
                 EndStroke();
@@ -424,7 +434,7 @@ public class TunnelMarker : NetworkBehaviour
             return;
         }
 
-        var tipPoint = tip;
+        var tipPoint = real ? m_RealTip : tip;
         float radius = diameter * 0.5f;
 
         // A colour disk on the palette: the marker takes its colour.
@@ -448,7 +458,7 @@ public class TunnelMarker : NetworkBehaviour
 
         if (mode == PaintMode.Airbrush)
         {
-            bool aimed = SprayTarget(tipPoint, out var hit, out float distance);
+            bool aimed = SprayTarget(tipPoint, real ? m_RealAxis : transform.forward, out var hit, out float distance);
             if (aimed)
             {
                 // Wider and fainter the farther it is: the same paint spread over a bigger splat.
@@ -463,7 +473,7 @@ public class TunnelMarker : NetworkBehaviour
             return;
         }
 
-        bool touching = TouchesWall(tipPoint, radius);
+        bool touching = real ? m_RealTouching : TouchesWall(tipPoint, radius);
         LightGrip(touching);
         switch (mode)
         {
@@ -480,6 +490,40 @@ public class TunnelMarker : NetworkBehaviour
                 break;
         }
     }
+
+    // The surfaces it paints on: all of them, or with a real marker, only the real whiteboard.
+    bool Paints(TunnelSegmentPaint paint) =>
+        paint != null && paint.paintable && (!m_Real || paint.surface is WhiteboardSurface);
+
+    /// <summary>
+    /// A real marker paints in this one's place (on this headset) from now on, or stops. While on, this marker paints
+    /// only from <see cref="SetRealTip"/> and not when held.
+    /// </summary>
+    public void SetReal(bool on)
+    {
+        if (on == m_Real)
+            return;
+        FinishPencil(true);
+        EndStroke();
+        m_Real = on;
+        m_RealSeen = false;
+        m_RealTouching = false;
+    }
+
+    /// <summary>
+    /// Where the real marker's tip is this frame: <paramref name="seen"/> false when the camera lost it; touching
+    /// when it's on the whiteboard; <paramref name="axis"/> points from the tip into the board (the airbrush's aim).
+    /// </summary>
+    public void SetRealTip(bool seen, Vector3 tipPoint, Vector3 axis, bool touching)
+    {
+        m_RealSeen = seen;
+        m_RealTip = tipPoint;
+        m_RealAxis = axis;
+        m_RealTouching = seen && touching;
+    }
+
+    /// <summary>Gives it a colour (with its opacity), as touching a palette disk does.</summary>
+    public void TakeColor(Color32 value) => SetColor(value);
 
     PaintStyle Style(PaintMode mode, float size, float strength)
     {
@@ -500,20 +544,19 @@ public class TunnelMarker : NetworkBehaviour
     /// Airbrush: where the spray from its tip, along the marker, meets the walls or arch within the spray range, and
     /// how far that is (0 when the tip touches). Steps along the marker's axis toward the nearest surface.
     /// </summary>
-    bool SprayTarget(Vector3 tipPoint, out Vector3 hit, out float distance)
+    bool SprayTarget(Vector3 tipPoint, Vector3 axis, out Vector3 hit, out float distance)
     {
         hit = default;
         distance = float.MaxValue;
-        var axis = transform.forward;
         foreach (var paint in TunnelSegmentPaint.all)
         {
-            if (paint == null || paint.geometry == null || !paint.geometry.isActiveAndEnabled)
+            if (!Paints(paint))
                 continue;
             var point = tipPoint;
             float travelled = 0f;
             for (int i = 0; i < 6; i++)
             {
-                if (!paint.geometry.ToPaintCanvas(point, out var uv, out float depth, out var onSurface))
+                if (!paint.surface.ToPaintCanvas(point, out var uv, out float depth, out var onSurface))
                     break;
                 if (depth <= 0.002f)
                 {
@@ -551,9 +594,9 @@ public class TunnelMarker : NetworkBehaviour
     bool Contact(TunnelSegmentPaint paint, Vector3 point, float radius, out Vector2 uv)
     {
         uv = default;
-        if (paint == null || paint.geometry == null || !paint.geometry.isActiveAndEnabled)
+        if (!Paints(paint))
             return false;
-        if (!paint.geometry.ToPaintCanvas(point, out uv, out float depth, out _))
+        if (!paint.surface.ToPaintCanvas(point, out uv, out float depth, out _))
             return false;
         float margin = radius / paint.canvasMeters.x;
         return depth <= radius + m_ContactSlack && depth > -0.15f && uv.x >= -margin && uv.x <= 1f + margin;
@@ -633,7 +676,7 @@ public class TunnelMarker : NetworkBehaviour
         float best = float.MaxValue;
         foreach (var paint in TunnelSegmentPaint.all)
         {
-            if (paint == null || paint.geometry == null || !paint.geometry.ToPaintCanvas(tipPoint, out var uv, out float depth, out var onSurface))
+            if (!Paints(paint) || !paint.surface.ToPaintCanvas(tipPoint, out var uv, out float depth, out var onSurface))
                 continue;
             if (uv.x < 0f || uv.x > 1f || Mathf.Abs(depth) >= best)
                 continue;
@@ -709,7 +752,7 @@ public class TunnelMarker : NetworkBehaviour
         {
             foreach (var paint in TunnelSegmentPaint.all)
             {
-                if (paint == null || paint.geometry == null || !paint.geometry.ToPaintCanvas(point, out var uv, out _, out _))
+                if (!Paints(paint) || !paint.surface.ToPaintCanvas(point, out var uv, out _, out _))
                     continue;
                 float margin = radius / paint.canvasMeters.x;
                 if (uv.x < -margin || uv.x > 1f + margin)

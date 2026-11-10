@@ -18,6 +18,8 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// Shared: every stamp goes to everyone, and the host keeps them all, so a player who joins later gets the marks
 /// already made. Clear takes every mark off for everyone. Works locally when not connected.
 /// The canvas is made the first time something is painted, and the surface is drawn only while there is paint.
+/// The same paint also goes on other surfaces (<see cref="IPaintSurface"/>): a real whiteboard found by the camera
+/// (<see cref="WhiteboardSurface"/>) is given its own, local to the headset that found it (see <see cref="UseSurface"/>).
 /// </summary>
 public class TunnelSegmentPaint : NetworkBehaviour
 {
@@ -51,6 +53,15 @@ public class TunnelSegmentPaint : NetworkBehaviour
     public static readonly List<TunnelSegmentPaint> all = new();
 
     public TunnelSegmentGeometry geometry => m_Geometry;
+
+    // A surface other than a tunnel segment (a whiteboard), set at runtime.
+    IPaintSurface m_Other;
+
+    /// <summary>What this paints on: the segment's walls and arch, or another surface.</summary>
+    public IPaintSurface surface => m_Other ?? (m_Geometry != null ? m_Geometry : null);
+
+    /// <summary>Whether it can be painted on now.</summary>
+    public bool paintable => surface is { paintable: true };
 
     const int k_HardPass = 0, k_AirPass = 1, k_ErasePass = 2;
     const int k_MaxStampsPerMessage = 1000;
@@ -90,15 +101,31 @@ public class TunnelSegmentPaint : NetworkBehaviour
     void OnEnable()
     {
         all.Add(this);
-        if (m_Geometry != null)
-            m_Geometry.rebuilt += OnGeometryRebuilt;
+        if (surface != null)
+            surface.rebuilt += OnGeometryRebuilt;
     }
 
     void OnDisable()
     {
         all.Remove(this);
-        if (m_Geometry != null)
-            m_Geometry.rebuilt -= OnGeometryRebuilt;
+        if (surface != null)
+            surface.rebuilt -= OnGeometryRebuilt;
+    }
+
+    /// <summary>
+    /// Paints on another surface (a whiteboard) instead of a segment: drawn with these materials, its canvas texels
+    /// <paramref name="texel"/> meters across. Not shared over the network.
+    /// </summary>
+    public void UseSurface(IPaintSurface other, Material overlay, Shader brush, float texel)
+    {
+        if (isActiveAndEnabled && surface != null)
+            surface.rebuilt -= OnGeometryRebuilt;
+        m_Other = other;
+        m_OverlayMaterial = overlay;
+        m_BrushShader = brush;
+        m_Texel = texel;
+        if (isActiveAndEnabled && surface != null)
+            surface.rebuilt += OnGeometryRebuilt;
     }
 
     public override void OnDestroy()
@@ -127,14 +154,14 @@ public class TunnelSegmentPaint : NetworkBehaviour
         if (m_SurfaceMesh == null)
             return;
         Destroy(m_SurfaceMesh);
-        m_SurfaceMesh = m_Geometry.BuildPaintMesh(m_Inset);
+        m_SurfaceMesh = surface.BuildPaintMesh(m_Inset);
         m_Surface.GetComponent<MeshFilter>().sharedMesh = m_SurfaceMesh;
     }
 
     #region Drawing (called on the painter's headset)
 
     /// <summary>The canvas's scale: meters per unit of u (along the tunnel) and v (around it).</summary>
-    public Vector2 canvasMeters => new(m_Geometry.length, m_Geometry.paintPerimeter);
+    public Vector2 canvasMeters => surface.paintCanvasMeters;
 
     /// <summary>Draws stamps (canvas coordinates) for everyone.</summary>
     public void Draw(PaintStyle style, List<Vector2> uvs)
@@ -447,9 +474,9 @@ public class TunnelSegmentPaint : NetworkBehaviour
     {
         if (m_CanvasTexture != null && m_CanvasTexture.IsCreated())
             return true;
-        if (m_Geometry == null || m_BrushShader == null || m_OverlayMaterial == null)
+        if (surface == null || m_BrushShader == null || m_OverlayMaterial == null)
         {
-            Debug.LogWarning($"[Paint] {name} can't paint: missing its geometry, brush shader or overlay material");
+            Debug.LogWarning($"[Paint] {name} can't paint: missing its surface, brush shader or overlay material");
             return false;
         }
 
@@ -477,9 +504,9 @@ public class TunnelSegmentPaint : NetworkBehaviour
         if (m_Surface == null)
         {
             m_Overlay = new Material(m_OverlayMaterial) { name = "Paint Overlay" };
-            m_SurfaceMesh = m_Geometry.BuildPaintMesh(m_Inset);
+            m_SurfaceMesh = surface.BuildPaintMesh(m_Inset);
             var go = new GameObject("Paint");
-            go.transform.SetParent(m_Geometry.transform, false);
+            go.transform.SetParent(surface.paintParent, false);
             go.AddComponent<MeshFilter>().sharedMesh = m_SurfaceMesh;
             m_Surface = go.AddComponent<MeshRenderer>();
             m_Surface.sharedMaterial = m_Overlay;

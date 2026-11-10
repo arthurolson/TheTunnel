@@ -10,7 +10,7 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
     /// </summary>
     [ExecuteAlways]
     [RequireComponent(typeof(MeshFilter))]
-    public class TunnelSegmentGeometry : MonoBehaviour
+    public class TunnelSegmentGeometry : MonoBehaviour, IPaintSurface
     {
         const float k_FeetToMeters = 0.3048f;
 
@@ -152,6 +152,14 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
 
         /// <summary>Fires after the shell is rebuilt (its size may have changed).</summary>
         public event System.Action rebuilt;
+
+        public Vector2 paintCanvasMeters => new(length, paintPerimeter);
+
+        public bool paintable => isActiveAndEnabled;
+
+        Transform IPaintSurface.paintParent => transform;
+
+        Mesh IPaintSurface.BuildPaintMesh(float inset) => BuildPaintMesh(inset);
 
         /// <summary>
         /// Distance around the inside of the walls and arch, in meters, measured along the true arch (a little more
