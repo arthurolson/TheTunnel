@@ -110,6 +110,7 @@ public class RealMarkerTracker : MonoBehaviour
     Transform m_Dot;
     Material m_DotMaterial;
     float m_NextStatus;
+    float m_NextLog;
 
     /// <summary>The tracker, made the first time it's needed.</summary>
     public static RealMarkerTracker Get()
@@ -473,8 +474,35 @@ public class RealMarkerTracker : MonoBehaviour
         public int pixels;
         public Vector2 center, axis; // image pixels (x right, rows up from the bottom, as Unity reads them)
         public float length, width;
+        public float white0, white1; // how much plain white lies just beyond each end (0..1)
 
         public Vector2 End(int which) => center + axis * (which == 0 ? 0.5f * length : -0.5f * length);
+    }
+
+    // How much of the image just beyond an end of the cap, along its axis, is plain white: beyond the tip lies the
+    // whiteboard; beyond the back end, the marker's body and the hand holding it.
+    static float WhiteBeyond(Color32[] pixels, int w, int h, Vector2 end, Vector2 outward, float width, float length)
+    {
+        var across = new Vector2(-outward.y, outward.x);
+        float reach = Mathf.Max(2.5f * length, 4f * width, 40f); // far enough to reach the hand
+        int white = 0, total = 0;
+        for (int i = 1; i <= 12; i++)
+        {
+            float along = width * 0.4f + reach * i / 12f;
+            for (int j = -2; j <= 2; j++)
+            {
+                var p = end + outward * along + across * (j * width * 0.12f);
+                int x = (int)p.x, y = (int)p.y;
+                if (x < 0 || y < 0 || x >= w || y >= h)
+                    continue;
+                total++;
+                Hsv(pixels[y * w + x], out _, out float s, out float v);
+                if (s < 0.25f && v > 0.45f)
+                    white++;
+            }
+        }
+
+        return total > 0 ? white / (float)total : 0.5f;
     }
 
     // The patch of the cap's colour: a coarse grid of cells finds the patches, the one nearest `near` (or the biggest)
@@ -594,7 +622,7 @@ public class RealMarkerTracker : MonoBehaviour
         double half = (a + c) * 0.5, root = Math.Sqrt(Math.Max(0, (a - c) * (a - c) * 0.25 + b * b));
         double major = half + root, minor = Math.Max(half - root, 0.25);
         double angle = 0.5 * Math.Atan2(2 * b, a - c);
-        return new Blob
+        var blob = new Blob
         {
             found = true,
             pixels = (int)n,
@@ -603,6 +631,9 @@ public class RealMarkerTracker : MonoBehaviour
             length = (float)Math.Sqrt(12 * major), // as for a rectangle
             width = (float)Math.Sqrt(12 * minor),
         };
+        blob.white0 = WhiteBeyond(pixels, w, h, blob.End(0), blob.axis, blob.width, blob.length);
+        blob.white1 = WhiteBeyond(pixels, w, h, blob.End(1), -blob.axis, blob.width, blob.length);
+        return blob;
     }
 
     #endregion
@@ -1020,11 +1051,32 @@ public class RealMarkerTracker : MonoBehaviour
             heights[e] = Vector3.Dot(rays[e].origin + rays[e].direction.normalized * distance - origin, normal);
         }
 
-        if (Mathf.Abs(heights[0] - heights[1]) < 0.01f && m_LastBlob.found)
+        // The tip: the end with the whiteboard beyond it; if that's unclear, the end nearest the last tip; at first,
+        // the end that seems nearer the board.
+        string how;
+        if (Mathf.Abs(blob.white0 - blob.white1) >= 0.15f)
+        {
+            tipEnd = blob.white0 > blob.white1 ? 0 : 1;
+            how = "white";
+        }
+        else if (m_LastBlob.found && Time.unscaledTime - m_LastSeen < 0.5f)
+        {
             tipEnd = Vector2.Distance(blob.End(0), m_TipPixel) <= Vector2.Distance(blob.End(1), m_TipPixel) ? 0 : 1;
+            how = "last";
+        }
         else
+        {
             tipEnd = heights[0] <= heights[1] ? 0 : 1;
+            how = "height";
+        }
+
         float best = heights[tipEnd];
+        if (Time.unscaledTime >= m_NextLog)
+        {
+            m_NextLog = Time.unscaledTime + 1f;
+            Log($"cap {blob.length:0} x {blob.width:0.0} px ({blob.pixels} px) at {blob.center:F0}, white beyond ends {blob.white0:0.00}/{blob.white1:0.00}, tip end {tipEnd} by {how}, " +
+                $"end heights {heights[0] * 100f:0.0}/{heights[1] * 100f:0.0} cm, distance {distance:0.00} m, touching {m_Touching}");
+        }
 
         var ray = rays[tipEnd];
         float toward = Vector3.Dot(ray.direction, -normal);
