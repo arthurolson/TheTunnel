@@ -1,0 +1,114 @@
+# The Tunnel: status
+
+What has been built, what is in progress, and where each build is. Updated as work lands; the plan ahead is in
+[TODO.md](TODO.md). Last updated 10 November 2026 (version 09.11.2026.4).
+
+## Accomplished
+
+### Platform and delivery
+- Unity 6000.6.7f1 (URP) with OpenXR for Meta Quest 3 and 3S, XR Interaction Toolkit 3, Netcode for GameObjects
+  multiplayer and Vivox voice.
+- Store builds signed with the release key and stamped with a version of the form DD.MM.YYYY.N; uploaded to the
+  Meta store's ArtDev channel (app edu.scripps.tunnel) or installed on headsets directly.
+- Editor builders (the Tunnel menu in Unity) regenerate the prefabs for molecules, containers, the 3D movie, paint,
+  the Viewer and the SARS-CoV-2 virion, so changes are repeatable.
+
+### The tunnel and the room
+- Tunnel segments placed in the real room. Added segments lock to the tunnel's end. The upper walls and arch always
+  cover the real ceiling, even a low one.
+- Mixed reality occlusion from the Space Setup room mesh. Real people and objects hide virtual ones, using the
+  headset's live depth, with smoothed, slightly widened edges.
+- Co-location: a printed QR code on the floor (Printables/) lines up every player's headset with the same real room.
+  Players aligned this way see each other's real bodies instead of avatars.
+- Shared TS Menu: everyone sees the same menus and objects.
+
+### Molecules
+- Molecule toys built from Assets/Molecules, chosen from the TS Menu's Molecules list. A slider magnifies them
+  from 1x to 10x, and new molecules don't overlap.
+- Physics:
+  - each molecule's mass comes from its volume;
+  - molecules bounce, and drift when pushed;
+  - gravity can be turned on or off;
+  - the host can toggle gravity from a palm button.
+- IgG with a tightest-fit ellipsoid collider.
+- SARS-CoV-2 virion built from its bead model: about 310,000 triangles, with colliders on its membrane and on each of
+  its 30 spikes.
+- The molecule library simplifies any model over 200,000 vertices.
+- Delete mode in the TS Menu.
+
+### Containers
+- Box and sphere containers. A box has quarter-inch rod edges, and a Collider check box sets whether its walls hold
+  molecules in.
+- Viscosity (0 to 1) and temperature (0 to 100 °C). Molecules inside move randomly (Brownian) or ballistically, and
+  random motion spins them too.
+- Mixed reality boxes:
+  - opaque walls and a glass front;
+  - let go against a tunnel wall, a box sets itself into the wall, which opens there;
+  - Unsnap from wall pulls the box back out, with the molecules inside;
+  - balls on the front corners stretch the front.
+
+### 3D movie (in a container)
+- Capsids carry invisible antibody binding sites, found from each capsid's surface: TBSV on its 2-folds, poliovirus
+  on its 5-folds, Zika on its 3-folds.
+- SARS-CoV-2 takes part too: each of its 30 spikes is a binding site, and an IgG binds at the spike's tip.
+- How binding works:
+  - an IgG that touches a site is drawn in by a Fab tip and binds;
+  - each binding darkens the capsid and adds the antibody's mass;
+  - a fourth antibody neutralizes the capsid, which turns see-through but still collides;
+  - the movie ends when every capsid is neutralized.
+- Movie controls on a panel beside the container (flat on the wall next to a mixed reality box):
+  - Start, Pause and Play;
+  - Show binding sites, and a slider for the sites' size;
+  - save the starting state by name to 3D Movies.
+
+### Painting
+- The TS Menu's Paint button places a palette and a marker:
+  - the palette has a colour chooser and five colour disks;
+  - its modes are Paint, Pencil (straight or Bezier lines), Airbrush and Eraser, plus Clear all marks;
+  - the marker's diameter sets the size of its marks.
+- Marks go on the tunnel walls and arch, shared with every player and with players who join later.
+- The palette snaps flat onto a wall.
+- Double-clicking the holder calls the marker back from anywhere.
+- The marker's grip lights up while it's marking.
+- The airbrush sprays from up to 30 cm away: wider and fainter the farther it is.
+- The virtual marker follows the hand every frame instead of in physics steps (09.11.2026.3).
+- Real marker experiment (09.11.2026.3–.4): the palette's Real marker button tracks a physical marker by its cap
+  colour through the passthrough camera. It paints on a real 3 x 2 ft whiteboard located by a QR code in the
+  board's top-right corner.
+
+### Viewer
+- Shared panel for images, videos and spatial (stereo) photos and videos. Quest stereo captures and screenshots are
+  recognized as spatial.
+- Lists the media built into the app and the headset's own captures by date, with < and > to step through them.
+- Save, Delete and Rename.
+- Video controls, including seeking, kept in step for every player.
+- Copy an address from the browser and paste it into the Viewer. For a web page, the Viewer finds the page's main
+  image or video.
+- Images with transparency show what's behind them (cells, DNA, E. coli and viruses images included).
+- Microphone:
+  - an indicator shows whether the mic is being recorded;
+  - Mic to recording frees the mic from voice chat, so Quest recordings capture your voice;
+  - other players' voices play at their heads and are recorded too.
+
+### Browser
+- Shared web browser panels.
+- Close, Unsnap/Snap, copy, bookmarks, a shared search bar and address bar, and on-panel keyboards.
+- Menus and keyboards can be moved.
+
+## In progress
+
+| Item | State |
+|---|---|
+| Real marker on a whiteboard | First headset test (09.11.2026.3): the airbrush marked, solid paint didn't, and the tip dot sat off the cap. The likely cause, picking the wrong end of the cap as the tip, is fixed in 09.11.2026.4 (built and pushed, not yet installed). Next: install, test, read the once-a-second log and adjust the touch thresholds and board outline. |
+| Headset checks still owed | SARS-CoV-2 in the 3D movie (09.11.2026.1); the movie panel's placement on the wall beside a mixed reality box; transparent Viewer images (09.11.2026.2); the virtual marker following the hand instantly (09.11.2026.3). |
+| Grab diagnostics | Every grab and release is logged (since 08.11.2026.1), to track down grabs that don't take. Still on. |
+
+## Builds and headsets
+
+| Where | Version |
+|---|---|
+| Latest build (Builds/TheTunnelDev.apk) | 09.11.2026.4 |
+| Meta store, ArtDev channel | 09.11.2026.2 |
+| Quest 3S 3497C10HC4041K | 09.11.2026.3 |
+| Quest 3S 3497C10HC4004X | 09.11.2026.2 |
+| Quest 3 2G0YC1ZF760BMQ | 08.11.2026.6 |
