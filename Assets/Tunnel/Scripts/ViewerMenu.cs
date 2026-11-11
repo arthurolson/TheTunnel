@@ -23,6 +23,8 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 /// Paste shows an address copied in the browser (its Copy button); with the keyboard open it adds the address to
 /// the typed text instead, to edit before pressing Enter.
 /// The open list is shared, like the TS Menu: whoever opens or closes it does so for everyone.
+/// Content only hides this bar and everything else around the media, for everyone, until the small button at the
+/// media's lower right corner brings it back (see <see cref="ViewerContentOnly"/>).
 /// </summary>
 public class ViewerMenu : MonoBehaviour
 {
@@ -97,6 +99,10 @@ public class ViewerMenu : MonoBehaviour
     Button m_ClearButton;
 
     [SerializeField]
+    [Tooltip("Hides everything but the media itself, for everyone.")]
+    Button m_ContentOnlyButton;
+
+    [SerializeField]
     XRKeyboard m_Keyboard;
 
     const string k_FieldPlaceholder = "<color=#999>Name or address</color>";
@@ -145,6 +151,12 @@ public class ViewerMenu : MonoBehaviour
             {
                 if (m_Viewer != null)
                     m_Viewer.Clear();
+            });
+        if (m_ContentOnlyButton != null)
+            m_ContentOnlyButton.onClick.AddListener(() =>
+            {
+                if (m_Viewer != null && m_Viewer.hasContent)
+                    m_Viewer.SetContentOnly(true);
             });
         if (m_DeleteButton != null)
         {
@@ -198,6 +210,9 @@ public class ViewerMenu : MonoBehaviour
             m_Keyboard.onTextSubmitted.RemoveListener(OnTextSubmitted);
             m_Keyboard.onClosed.RemoveListener(OnKeyboardClosed);
         }
+
+        // Hidden by content only: a list being read in has stopped, so it's read again when the bar comes back.
+        m_ShownList = -2;
     }
 
     void ToggleList(sbyte kind)
@@ -228,6 +243,9 @@ public class ViewerMenu : MonoBehaviour
                 BuildList(true);
         }
 
+        // Content only needs something to leave on the screen.
+        if (m_ContentOnlyButton != null)
+            m_ContentOnlyButton.interactable = m_Viewer.hasContent;
         UpdateField();
     }
 

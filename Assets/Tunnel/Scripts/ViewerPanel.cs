@@ -15,7 +15,8 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// Everyone sees the same thing: whoever picks something (from the menu's lists or by typing its name or address)
 /// picks it for all, and video play, pause, seeking, speed and looping are shared too, with each headset playing its
 /// own copy in step with a shared clock. Media comes from <see cref="ViewerLibrary"/> or straight from a URL.
-/// Works locally when not connected.
+/// Content only (<see cref="SetContentOnly"/>) hides everything around the media for everyone, leaving just the
+/// picture or video where it is (see <see cref="ViewerContentOnly"/>). Works locally when not connected.
 /// </summary>
 public class ViewerPanel : NetworkBehaviour
 {
@@ -100,11 +101,13 @@ public class ViewerPanel : NetworkBehaviour
     readonly NetworkVariable<PlayState> m_Play = new(new PlayState { rate = 1f }, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<double> m_Length = new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<sbyte> m_OpenList = new(NoList, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<bool> m_ContentOnly = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
     MediaState m_LocalMedia;
     PlayState m_LocalPlay = new() { rate = 1f };
     double m_LocalLength;
     sbyte m_LocalOpenList = NoList;
+    bool m_LocalContentOnly;
 
     Material m_Material;
     Texture2D m_Image;
@@ -118,6 +121,10 @@ public class ViewerPanel : NetworkBehaviour
     float m_SeekGraceUntil;
     string m_Title = string.Empty;
     string m_Status = string.Empty;
+    // What's loaded wants the video controls (a video) and the dark backdrop (anything but a transparent image).
+    bool m_WantsControls;
+    bool m_WantsBackdrop = true;
+    bool m_ChromeHidden;
 
     MediaState media => IsSpawned ? m_Media.Value : m_LocalMedia;
     PlayState play => IsSpawned ? m_Play.Value : m_LocalPlay;
@@ -147,6 +154,15 @@ public class ViewerPanel : NetworkBehaviour
     public float rate => play.rate;
     public double duration => length;
     public sbyte openList => IsSpawned ? m_OpenList.Value : m_LocalOpenList;
+
+    /// <summary>Content only was chosen: everything around the media is hidden, for everyone.</summary>
+    public bool contentOnly => IsSpawned ? m_ContentOnly.Value : m_LocalContentOnly;
+
+    /// <summary>
+    /// The frame, menus and controls are hidden right now: content only, with something on the screen (an empty screen
+    /// always keeps its frame and menu, so there's a way to pick something).
+    /// </summary>
+    public bool chromeHidden => contentOnly && hasContent;
 
     /// <summary>Where the video should be now, by the shared clock.</summary>
     public double currentTime => TimeAt(play, clock);
@@ -198,8 +214,10 @@ public class ViewerPanel : NetworkBehaviour
         m_Media.OnValueChanged += OnMediaChanged;
         m_Play.OnValueChanged += OnPlayChanged;
         m_OpenList.OnValueChanged += OnOpenListChanged;
+        m_ContentOnly.OnValueChanged += OnContentOnlyChanged;
         if (m_Media.Value.id != 0)
             StartLoad(m_Media.Value);
+        ApplyChrome();
         changed?.Invoke();
     }
 
@@ -209,6 +227,7 @@ public class ViewerPanel : NetworkBehaviour
         m_Media.OnValueChanged -= OnMediaChanged;
         m_Play.OnValueChanged -= OnPlayChanged;
         m_OpenList.OnValueChanged -= OnOpenListChanged;
+        m_ContentOnly.OnValueChanged -= OnContentOnlyChanged;
     }
 
     public override void OnDestroy()
@@ -235,6 +254,12 @@ public class ViewerPanel : NetworkBehaviour
     }
 
     void OnOpenListChanged(sbyte previous, sbyte current) => changed?.Invoke();
+
+    void OnContentOnlyChanged(bool previous, bool current)
+    {
+        ApplyChrome();
+        changed?.Invoke();
+    }
 
     #region Choosing what to show
 
@@ -393,6 +418,49 @@ public class ViewerPanel : NetworkBehaviour
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     void SetOpenListRpc(sbyte list) => m_OpenList.Value = list;
+
+    /// <summary>
+    /// Content only (true): the frame, backdrop, menus, keyboard and video controls go for everyone, and only the media
+    /// stays, at the same place and size, with a small button at its lower right corner to bring them back (false).
+    /// The media itself is untouched: a video keeps playing. Kept when the media changes.
+    /// </summary>
+    public void SetContentOnly(bool on)
+    {
+        Debug.Log($"[Viewer] content only {(on ? "on" : "off")}");
+        if (IsSpawned)
+        {
+            SetContentOnlyRpc(on);
+            return;
+        }
+
+        if (m_LocalContentOnly == on)
+            return;
+        m_LocalContentOnly = on;
+        ApplyChrome();
+        changed?.Invoke();
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void SetContentOnlyRpc(bool on) => m_ContentOnly.Value = on;
+
+    /// <summary>
+    /// Shows or hides the parts this script looks after (the video controls and the dark backdrop) for content only;
+    /// the rest of the chrome is <see cref="ViewerContentOnly"/>'s, which follows <see cref="changed"/>.
+    /// </summary>
+    void ApplyChrome()
+    {
+        m_ChromeHidden = chromeHidden;
+        bool showControls = m_WantsControls && !m_ChromeHidden;
+        if (m_Controls != null && m_Controls.activeSelf != showControls)
+        {
+            m_Controls.SetActive(showControls);
+            if (m_Panel != null)
+                m_Panel.RefreshLayout();
+        }
+
+        if (m_Hint != null && m_Hint.transform.parent != null && m_Hint.transform.parent.TryGetComponent(out UnityEngine.UI.Graphic backdrop))
+            backdrop.enabled = m_WantsBackdrop && !m_ChromeHidden;
+    }
 
     #endregion
 
@@ -555,12 +623,8 @@ public class ViewerPanel : NetworkBehaviour
         m_Title = state.title.ToString();
         string source = state.source.ToString();
         bool video = source.Length > 0 && ViewerLibrary.IsVideoKind(state.kind);
-        if (m_Controls != null && m_Controls.activeSelf != video)
-        {
-            m_Controls.SetActive(video);
-            if (m_Panel != null)
-                m_Panel.RefreshLayout();
-        }
+        m_WantsControls = video;
+        ApplyChrome();
 
         // Cleared: an empty screen, ready for the next thing.
         if (source.Length == 0)
@@ -780,12 +844,15 @@ public class ViewerPanel : NetworkBehaviour
             m_Material.SetTexture(k_RightTex, layout == ViewerLibrary.StereoLayout.Pair ? m_RightImage : null);
             m_Material.SetFloat(k_Layout, (float)layout);
             m_Material.SetFloat(k_SwapEyes, ViewerLibrary.SwapsEyes(name) ? 1f : 0f);
-            // An image with transparent parts shows through them (the screen's dark backdrop goes too); a video is
-            // always opaque.
+            // An image with transparent parts shows through them; a video is always opaque.
             bool transparent = texture is Texture2D && texture.name == "Transparent";
             m_Material.SetFloat(k_UseAlpha, transparent ? 1f : 0f);
-            ShowBackdrop(!transparent);
         }
+
+        // The dark backdrop is only for the empty screen and its messages: once media is showing it goes, as an opaque
+        // picture covers it anyway, and the screen draws blended, so the backdrop's canvas (drawn after it) would
+        // otherwise cover videos and opaque pictures.
+        ShowBackdrop(false);
 
         if (m_Screen != null)
             m_Screen.enabled = true;
@@ -799,11 +866,12 @@ public class ViewerPanel : NetworkBehaviour
             m_Panel.SetContentAspect(eyeWidth / eyeHeight);
     }
 
-    // The dark backdrop behind the screen (the hint's), which a transparent image is seen without.
+    // The dark backdrop behind the screen (the hint's): shown for the empty screen, a loading message or an error,
+    // hidden while media is showing (and in content only).
     void ShowBackdrop(bool show)
     {
-        if (m_Hint != null && m_Hint.transform.parent != null && m_Hint.transform.parent.TryGetComponent(out UnityEngine.UI.Graphic backdrop))
-            backdrop.enabled = show;
+        m_WantsBackdrop = show;
+        ApplyChrome();
     }
 
     void ReleaseMedia()
@@ -851,6 +919,9 @@ public class ViewerPanel : NetworkBehaviour
         m_Status = text;
         if (m_Hint != null)
             m_Hint.text = text;
+        // Emptying the screen or picking something can change whether the chrome is hidden.
+        if (m_ChromeHidden != chromeHidden)
+            ApplyChrome();
         changed?.Invoke();
     }
 }

@@ -15,7 +15,8 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// (borrowing the TS Menu's list), and adds the video controls. Also gives the browser's keyboard a move handle and
 /// its bar a Copy button (for the Viewer's Paste) and an Unsnap button (both panels), makes both panels' bars and the
 /// browser's page larger to read from a distance, registers the prefab for spawning and adds a New Viewer button to
-/// the TS Menu. Safe to run again: the prefab keeps
+/// the TS Menu. The Viewer gets a Content only button and the small show frame button that undoes it (see
+/// <see cref="ViewerContentOnly"/>). Safe to run again: the prefab keeps
 /// its asset (and network) identity. Tunnel > Viewer > Rebuild Viewer Prefab.
 /// </summary>
 static class ViewerPrefabBuilder
@@ -127,9 +128,10 @@ static class ViewerPrefabBuilder
             SetFloat(panel, "m_Width", 1.0f);
             SetFloat(panel, "m_ControlsDrop", 0.085f);
             SetFloat(panel, "m_ControlsSpace", 0.17f);
+            AddContentOnly(root);
 
             var saved = PrefabUtility.SaveAsPrefabAsset(root, k_ViewerPath);
-            return $"Viewer prefab saved ({refs})" + (saved != null ? "" : " FAILED");
+            return $"Viewer prefab saved ({refs}, content only)" + (saved != null ? "" : " FAILED");
         }
         finally
         {
@@ -325,9 +327,14 @@ static class ViewerPrefabBuilder
     }
 
     // Above the bar, right of Unsnap / Snap.
-    static readonly Vector2 k_MicIndicatorPosition = new(-270f, 82f);
-    // Right of the mic indicator.
-    static readonly Vector2 k_MicButtonPosition = new(-10f, 82f);
+    static readonly Vector2 k_ContentOnlyPosition = new(-367f, 82f);
+    static readonly Vector2 k_ContentOnlySize = new(150f, 48.5f);
+    // Right of Content only.
+    static readonly Vector2 k_MicIndicatorPosition = new(-155f, 82f);
+    const float k_MicIndicatorWidth = 258f;
+    // Right of the mic indicator, left of Clear.
+    static readonly Vector2 k_MicButtonPosition = new(67f, 82f);
+    const float k_MicButtonWidth = 170f;
 
     /// <summary>Whether the headset's microphone is being recorded (see <see cref="ViewerMicIndicator"/>), in the
     /// bar buttons' text style.</summary>
@@ -341,12 +348,14 @@ static class ViewerPrefabBuilder
         var rect = (RectTransform)label.transform;
         rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f);
         rect.anchoredPosition3D = new Vector3(k_MicIndicatorPosition.x, k_MicIndicatorPosition.y, 0f);
-        rect.sizeDelta = new Vector2(330f, 48.5f);
+        rect.sizeDelta = new Vector2(k_MicIndicatorWidth, 48.5f);
         rect.localScale = Vector3.one;
         var text = label.GetComponent<TMP_Text>();
         text.text = "";
         text.richText = true;
         text.raycastTarget = false;
+        // Two lines if need be, so the longer messages stay readable in the narrower space.
+        text.textWrappingMode = TextWrappingModes.Normal;
         text.enableAutoSizing = true;
         text.fontSizeMin = 10f;
         text.fontSizeMax = k_ButtonFontSize;
@@ -359,7 +368,7 @@ static class ViewerPrefabBuilder
         if (oldButton != null)
             Object.DestroyImmediate(oldButton.gameObject);
         var template = bar.Find("Paste Button").gameObject;
-        var button = CloneButton(template, bar, "Mic Button", k_MicButtonPosition, new Vector2(180f, 48.5f), 1f, "Mic to recording", k_ButtonFontSize);
+        var button = CloneButton(template, bar, "Mic Button", k_MicButtonPosition, new Vector2(k_MicButtonWidth, 48.5f), 1f, "Mic to recording", k_ButtonFontSize);
         Set(indicator, "m_Button", button);
     }
 
@@ -377,6 +386,118 @@ static class ViewerPrefabBuilder
         {
             PrefabUtility.UnloadPrefabContents(root);
         }
+    }
+
+    [MenuItem("Tunnel/Viewer/Add Content Only")]
+    public static string AddContentOnlyToPrefab()
+    {
+        var root = PrefabUtility.LoadPrefabContents(k_ViewerPath);
+        try
+        {
+            AddContentOnly(root);
+            return PrefabUtility.SaveAsPrefabAsset(root, k_ViewerPath) != null ? "Content only button and show frame button added" : "FAILED";
+        }
+        finally
+        {
+            PrefabUtility.UnloadPrefabContents(root);
+        }
+    }
+
+    // The show frame button's canvas (pixels; at the bars' scale about 4.5 cm square).
+    const float k_ShowFrameSize = 60f;
+
+    /// <summary>
+    /// Content only: a button on the bar's top row (right of Unsnap; the mic indicator and its button move right to
+    /// make room) that hides everything but the media, and a small canvas with a show frame button that brings it all
+    /// back. Replaces any earlier ones, so it can run on a built Viewer prefab or as part of the rebuild.
+    /// </summary>
+    static void AddContentOnly(GameObject root)
+    {
+        var viewer = root.GetComponent<ViewerPanel>();
+        var bar = root.transform.Find("Menu Bar");
+        var menu = bar.GetComponent<ViewerMenu>();
+        var template = bar.Find("Paste Button").gameObject;
+
+        AddMicIndicator(bar, Label(template.GetComponent<Button>()));
+        var oldButton = bar.Find("Content Only Button");
+        if (oldButton != null)
+            Object.DestroyImmediate(oldButton.gameObject);
+        var contentOnly = CloneButton(template, bar, "Content Only Button", k_ContentOnlyPosition, k_ContentOnlySize, 1f, "Content only", k_ButtonFontSize);
+        Set(menu, "m_ContentOnlyButton", contentOnly);
+
+        // The small canvas: a copy of the bar's canvas (so lasers and pokes reach it the same way) with one button.
+        var oldCanvas = root.transform.Find("Show Frame");
+        if (oldCanvas != null)
+            Object.DestroyImmediate(oldCanvas.gameObject);
+        var canvasObject = Object.Instantiate(bar.gameObject, root.transform, false);
+        canvasObject.name = "Show Frame";
+        for (int i = canvasObject.transform.childCount - 1; i >= 0; i--)
+            Object.DestroyImmediate(canvasObject.transform.GetChild(i).gameObject);
+        foreach (var component in canvasObject.GetComponents<MonoBehaviour>().Where(c => c != null && !IsCanvasPart(c)))
+            Object.DestroyImmediate(component);
+        var canvasRect = (RectTransform)canvasObject.transform;
+        canvasRect.anchorMin = canvasRect.anchorMax = canvasRect.pivot = new Vector2(0.5f, 0.5f);
+        canvasRect.sizeDelta = new Vector2(k_ShowFrameSize, k_ShowFrameSize);
+        canvasRect.localScale = Vector3.one * k_BarScale;
+        canvasRect.localRotation = Quaternion.identity;
+        canvasObject.SetActive(false);
+
+        var showFrame = CloneButton(template, canvasObject.transform, "Show Frame Button", Vector2.zero, new Vector2(k_ShowFrameSize, k_ShowFrameSize), 1f, "", k_ButtonFontSize);
+        var label = Label(showFrame);
+        if (label != null)
+            label.gameObject.SetActive(false);
+        AddFrameGlyph(showFrame.transform, label != null ? label.color : Color.white);
+
+        var mode = root.GetComponent<ViewerContentOnly>();
+        if (mode == null)
+            mode = root.AddComponent<ViewerContentOnly>();
+        var chrome = new[] { "Frame Top", "Frame Bottom", "Frame Left", "Frame Right", "Corner Top-Left", "Corner Top-Right", "Corner Bottom-Left", "Corner Bottom-Right", "Menu Bar", "Keyboard" }
+            .Select(name => root.transform.Find(name))
+            .Where(t => t != null)
+            .Select(t => (Object)t.gameObject)
+            .ToArray();
+        Set(mode, "m_Viewer", viewer);
+        Set(mode, "m_ScreenQuad", root.transform.Find("Media"));
+        SetArray(mode, "m_Chrome", chrome);
+        Set(mode, "m_Keyboard", root.transform.Find("Keyboard").GetComponentInChildren<XRKeyboard>(true));
+        Set(mode, "m_ShowFrame", canvasRect);
+        Set(mode, "m_ShowFrameButton", showFrame);
+    }
+
+    /// <summary>The canvas's own parts (canvas scaler, raycasters), kept when the bar's canvas is copied.</summary>
+    static bool IsCanvasPart(MonoBehaviour component)
+    {
+        string ns = component.GetType().Namespace ?? string.Empty;
+        return ns.StartsWith("UnityEngine.UI") || ns.StartsWith("UnityEngine.EventSystems") || ns.StartsWith("UnityEngine.XR.Interaction.Toolkit.UI");
+    }
+
+    /// <summary>A "show frame" glyph: the four corners of a frame, drawn as thin bars in the label's colour.</summary>
+    static void AddFrameGlyph(Transform button, Color color)
+    {
+        const float box = 30f, arm = 11f, thickness = 4f;
+        var glyph = NewUI("Frame Glyph", button);
+        var glyphRect = (RectTransform)glyph.transform;
+        glyphRect.anchorMin = glyphRect.anchorMax = glyphRect.pivot = new Vector2(0.5f, 0.5f);
+        glyphRect.sizeDelta = new Vector2(box, box);
+        glyphRect.anchoredPosition3D = new Vector3(0f, 0f, -1f);
+        foreach (var (sx, sy) in new[] { (-1f, 1f), (1f, 1f), (-1f, -1f), (1f, -1f) })
+        {
+            Vector2 corner = new Vector2(sx, sy) * (box * 0.5f);
+            // Along the top or bottom edge, then down or up the side, both starting at the corner.
+            AddGlyphBar(glyph.transform, corner - new Vector2(sx * arm * 0.5f, sy * thickness * 0.5f), new Vector2(arm, thickness), color);
+            AddGlyphBar(glyph.transform, corner - new Vector2(sx * thickness * 0.5f, sy * arm * 0.5f), new Vector2(thickness, arm), color);
+        }
+    }
+
+    static void AddGlyphBar(Transform parent, Vector2 center, Vector2 size, Color color)
+    {
+        var image = NewUI("Bar", parent).AddComponent<Image>();
+        var rect = image.rectTransform;
+        rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.sizeDelta = size;
+        rect.anchoredPosition = center;
+        image.color = color;
+        image.raycastTarget = false;
     }
 
     static GameObject NewUI(string name, Transform parent)

@@ -92,6 +92,11 @@ What has been built, what is in progress, and where each build is. Updated as wo
 - Copy an address from the browser and paste it into the Viewer. For a web page, the Viewer finds the page's main
   image or video.
 - Images with transparency show what's behind them (cells, DNA, E. coli and viruses images included).
+- Content only (10.11.2026.2): a button on the bar's top row hides the frame, menus, keyboard, video controls and
+  backdrop for everyone, leaving just the media in place; a small button at the media's lower right corner brings them
+  back. Kept when the media changes; video keeps playing. The panel can't be moved or resized until the frame is back.
+- The dark backdrop no longer covers videos and opaque images (it had since the transparency change); it shows only
+  for an empty screen, loading or errors.
 - Microphone:
   - an indicator shows whether the mic is being recorded;
   - Mic to recording frees the mic from voice chat, so Quest recordings capture your voice;
@@ -107,7 +112,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
 | Item | State |
 |---|---|
 | Real marker on a panel or tunnel wall | First headset test of the new design (10.11.2026.1 on 4004X): the points and the disk were nowhere near the cap, and the corner marks weren't found; the headset's log was lost. 10.11.2026.2 adds a step that aligns the camera image with the tracked hand holding the marker (which way the image is read, and the cap's distance), and saves a log and annotated camera snapshots on the headset (files/RealMarker). Next: install, test, pull the folder and fix. |
-| Headset checks still owed | SARS-CoV-2 in the 3D movie (09.11.2026.1); the movie panel's placement on the wall beside a mixed reality box; transparent Viewer images (09.11.2026.2); the virtual marker following the hand instantly (09.11.2026.3). |
+| Headset checks still owed | SARS-CoV-2 in the 3D movie (09.11.2026.1); the movie panel's placement on the wall beside a mixed reality box; transparent Viewer images (09.11.2026.2); Viewer Content only with two players and the backdrop fix (10.11.2026.2); the virtual marker following the hand instantly (09.11.2026.3). |
 | Grab diagnostics | Every grab and release is logged (since 08.11.2026.1), to track down grabs that don't take. Still on. |
 
 ## Builds and headsets
@@ -118,4 +123,4 @@ What has been built, what is in progress, and where each build is. Updated as wo
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 3497C10HC4041K | 09.11.2026.3 |
 | Quest 3S 3497C10HC4004X | 09.11.2026.2 |
-| Quest 3 2G0YC1ZF760BMQ | 08.11.2026.6 |
+| Quest 3 2G0YC1ZF760BMQ | 10.11.2026.2 |
