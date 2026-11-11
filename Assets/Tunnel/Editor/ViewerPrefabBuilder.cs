@@ -16,8 +16,10 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// its bar a Copy button (for the Viewer's Paste) and an Unsnap button (both panels), makes both panels' bars and the
 /// browser's page larger to read from a distance, registers the prefab for spawning and adds a New Viewer button to
 /// the TS Menu. The Viewer gets a Content only button and the small show frame button that undoes it (see
-/// <see cref="ViewerContentOnly"/>). Safe to run again: the prefab keeps
-/// its asset (and network) identity. Tunnel > Viewer > Rebuild Viewer Prefab.
+/// <see cref="ViewerContentOnly"/>). The browser gets the same (<see cref="BrowserContentOnly"/>), its videos kept
+/// playing together on every headset (<see cref="BrowserVideoSync"/>) and a Loop button; the Viewer leaves those out.
+/// Safe to run again: the prefab keeps its asset (and network) identity. Tunnel > Viewer > Rebuild Viewer Prefab
+/// (both panels), or Tunnel > Browser > Update Browser Prefab (the browser only).
 /// </summary>
 static class ViewerPrefabBuilder
 {
@@ -59,7 +61,8 @@ static class ViewerPrefabBuilder
         try
         {
             root.name = "ViewerPanel";
-            foreach (var component in root.GetComponents<MonoBehaviour>().Where(c => c != null && c.GetType().Name is "BrowserManager" or "BrowserSync"))
+            // The browser's own parts: page sharing and its content only (the Viewer gets its own below).
+            foreach (var component in root.GetComponents<MonoBehaviour>().Where(c => c != null && c.GetType().Name is "BrowserManager" or "BrowserSync" or "BrowserContentOnly"))
                 Object.DestroyImmediate(component);
 
             var panel = root.GetComponent<BrowserPanel>();
@@ -94,7 +97,7 @@ static class ViewerPrefabBuilder
             var controls = BuildControls(root.transform, bar, buttonTemplate);
 
             var viewerMenu = BuildMenu(bar, buttonTemplate, out var refs);
-            foreach (string name in new[] { "Back Button", "Favorite Button", "Sync Button", "Saved Button", "Saved Pages", "Copy Button" })
+            foreach (string name in new[] { "Back Button", "Favorite Button", "Sync Button", "Saved Button", "Saved Pages", "Copy Button", "Loop Button", "Content Only Button" })
             {
                 var child = bar.Find(name);
                 if (child != null)
@@ -425,7 +428,27 @@ static class ViewerPrefabBuilder
         var contentOnly = CloneButton(template, bar, "Content Only Button", k_ContentOnlyPosition, k_ContentOnlySize, 1f, "Content only", k_ButtonFontSize);
         Set(menu, "m_ContentOnlyButton", contentOnly);
 
-        // The small canvas: a copy of the bar's canvas (so lasers and pokes reach it the same way) with one button.
+        var (canvasRect, showFrame) = AddShowFrame(root, bar, template);
+
+        var mode = root.GetComponent<ViewerContentOnly>();
+        if (mode == null)
+            mode = root.AddComponent<ViewerContentOnly>();
+        var chrome = Chrome(root, "Menu Bar");
+        Set(mode, "m_Viewer", viewer);
+        Set(mode, "m_ScreenQuad", root.transform.Find("Media"));
+        SetArray(mode, "m_Chrome", chrome);
+        Set(mode, "m_Keyboard", root.transform.Find("Keyboard").GetComponentInChildren<XRKeyboard>(true));
+        Set(mode, "m_ShowFrame", canvasRect);
+        Set(mode, "m_ShowFrameButton", showFrame);
+    }
+
+    /// <summary>
+    /// The small "show frame" canvas that undoes content only (the Viewer's and the browser's): a copy of the bar's
+    /// canvas (so lasers and pokes reach it the same way) with one button showing a frame glyph, hidden until content
+    /// only. Replaces any earlier one.
+    /// </summary>
+    static (RectTransform canvas, Button button) AddShowFrame(GameObject root, Transform bar, GameObject template)
+    {
         var oldCanvas = root.transform.Find("Show Frame");
         if (oldCanvas != null)
             Object.DestroyImmediate(oldCanvas.gameObject);
@@ -447,21 +470,7 @@ static class ViewerPrefabBuilder
         if (label != null)
             label.gameObject.SetActive(false);
         AddFrameGlyph(showFrame.transform, label != null ? label.color : Color.white);
-
-        var mode = root.GetComponent<ViewerContentOnly>();
-        if (mode == null)
-            mode = root.AddComponent<ViewerContentOnly>();
-        var chrome = new[] { "Frame Top", "Frame Bottom", "Frame Left", "Frame Right", "Corner Top-Left", "Corner Top-Right", "Corner Bottom-Left", "Corner Bottom-Right", "Menu Bar", "Keyboard" }
-            .Select(name => root.transform.Find(name))
-            .Where(t => t != null)
-            .Select(t => (Object)t.gameObject)
-            .ToArray();
-        Set(mode, "m_Viewer", viewer);
-        Set(mode, "m_ScreenQuad", root.transform.Find("Media"));
-        SetArray(mode, "m_Chrome", chrome);
-        Set(mode, "m_Keyboard", root.transform.Find("Keyboard").GetComponentInChildren<XRKeyboard>(true));
-        Set(mode, "m_ShowFrame", canvasRect);
-        Set(mode, "m_ShowFrameButton", showFrame);
+        return (canvasRect, showFrame);
     }
 
     /// <summary>The canvas's own parts (canvas scaler, raycasters), kept when the bar's canvas is copied.</summary>
@@ -720,14 +729,80 @@ static class ViewerPrefabBuilder
             Set(copier, "m_Button", copy);
             Set(copier, "m_Label", Label(copy));
 
+            AddBrowserContentOnlyAndVideo(root, bar);
+
             PrefabUtility.SaveAsPrefabAsset(root, k_BrowserPath);
-            return "browser: keyboard handle, Copy and Unsnap buttons, larger bar and page";
+            return "browser: keyboard handle, Copy, Unsnap, Content only and Loop buttons, shared video, larger bar and page";
         }
         finally
         {
             PrefabUtility.UnloadPrefabContents(root);
         }
     }
+
+    /// <summary>
+    /// Updates only the browser prefab (its bar's buttons, Content only, shared video and Loop), leaving the Viewer
+    /// prefab as it is. Tunnel > Browser > Update Browser Prefab.
+    /// </summary>
+    [MenuItem("Tunnel/Browser/Update Browser Prefab")]
+    public static string UpdateBrowserPrefab()
+    {
+        string log = UpdateBrowser();
+        AssetDatabase.SaveAssets();
+        Debug.Log("[Browser] " + log);
+        return log;
+    }
+
+    // On the browser bar's top row: Content only where the Viewer has its own (right of Unsnap), then Loop.
+    static readonly Vector2 k_BrowserLoopPosition = new(-215f, 82f);
+    static readonly Vector2 k_BrowserLoopSize = new(130f, 48.5f);
+
+    /// <summary>
+    /// The browser's Content only button and its show frame button (see <see cref="BrowserContentOnly"/>), and the
+    /// shared video (see <see cref="BrowserVideoSync"/>, on the page's object so the page's script can reach it by
+    /// name) with its Loop button. Replaces any earlier ones.
+    /// </summary>
+    static void AddBrowserContentOnlyAndVideo(GameObject root, Transform bar)
+    {
+        var template = bar.Find("Favorite Button").gameObject;
+        foreach (string name in new[] { "Content Only Button", "Loop Button" })
+        {
+            var old = bar.Find(name);
+            if (old != null)
+                Object.DestroyImmediate(old.gameObject);
+        }
+
+        var contentOnly = CloneButton(template, bar, "Content Only Button", k_ContentOnlyPosition, k_ContentOnlySize, 1f, "Content only", k_ButtonFontSize);
+        var loop = CloneButton(template, bar, "Loop Button", k_BrowserLoopPosition, k_BrowserLoopSize, 1f, "Loop: Off", k_ButtonFontSize);
+        var (canvasRect, showFrame) = AddShowFrame(root, bar, template);
+
+        var mode = root.GetComponent<BrowserContentOnly>();
+        if (mode == null)
+            mode = root.AddComponent<BrowserContentOnly>();
+        Set(mode, "m_Screen", root.transform.Find("Screen"));
+        SetArray(mode, "m_Chrome", Chrome(root, "Address Bar"));
+        Set(mode, "m_Keyboard", root.transform.Find("Keyboard").GetComponentInChildren<SpatialKeyboardAdapter>(true));
+        Set(mode, "m_ContentOnlyButton", contentOnly);
+        Set(mode, "m_ShowFrame", canvasRect);
+        Set(mode, "m_ShowFrameButton", showFrame);
+
+        var page = root.GetComponentInChildren<TLab.WebView.BrowserContainer>(true);
+        var video = page.GetComponent<BrowserVideoSync>();
+        if (video == null)
+            video = page.gameObject.AddComponent<BrowserVideoSync>();
+        Set(video, "m_Container", page);
+        Set(video, "m_Sync", root.GetComponent<BrowserSync>());
+        Set(video, "m_LoopButton", loop);
+        Set(video, "m_LoopLabel", Label(loop));
+    }
+
+    /// <summary>What content only hides: the frame bars, the corner markers, the given bar and the keyboard.</summary>
+    static Object[] Chrome(GameObject root, string barName) =>
+        new[] { "Frame Top", "Frame Bottom", "Frame Left", "Frame Right", "Corner Top-Left", "Corner Top-Right", "Corner Bottom-Left", "Corner Bottom-Right", barName, "Keyboard" }
+            .Select(name => root.transform.Find(name))
+            .Where(t => t != null)
+            .Select(t => (Object)t.gameObject)
+            .ToArray();
 
     #endregion
 

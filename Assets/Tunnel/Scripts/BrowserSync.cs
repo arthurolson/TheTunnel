@@ -9,7 +9,8 @@ using UnityEngine;
 /// everyone else's copy, so all players see the same thing.
 /// The player who last used the panel is its "driver": their headset reports its page address and scroll position,
 /// and the other copies catch up if they drift (a slow page load, a late joiner). The Sync button makes everyone
-/// reload the driver's page straight away. Works locally when not connected.
+/// reload the driver's page straight away. The page's videos are kept playing together by
+/// <see cref="BrowserVideoSync"/>, which follows the same driver. Works locally when not connected.
 /// </summary>
 public class BrowserSync : NetworkBehaviour
 {
@@ -50,12 +51,24 @@ public class BrowserSync : NetworkBehaviour
     float m_UrlMismatchSince = -1f;
     float m_ScrollMismatchSince = -1f;
 
+    float m_LastLocalInteraction = float.NegativeInfinity;
+
     Browser browser => m_Container != null ? m_Container.browser : null;
 
-    /// <summary>Until someone uses the panel, the host's page is the one to follow.</summary>
-    bool isDriver => !IsSpawned || IsDriverId(NetworkManager.LocalClientId);
+    /// <summary>
+    /// This headset's page is the one the others follow: it was the last to use the panel (until someone uses it,
+    /// the host's). Always true when not connected.
+    /// </summary>
+    public bool isDriver => !IsSpawned || IsDriverId(NetworkManager.LocalClientId);
 
-    bool IsDriverId(ulong clientId) =>
+    /// <summary>
+    /// This player used the panel within the last <paramref name="seconds"/>, so they are, or are about to be, the
+    /// driver (their claim may still be on its way to the host).
+    /// </summary>
+    public bool UsedRecently(float seconds) => Time.unscaledTime - m_LastLocalInteraction < seconds;
+
+    /// <summary>Whether the given player is the driver, as the host sees it.</summary>
+    public bool IsDriverId(ulong clientId) =>
         m_Driver.Value == clientId || (m_Driver.Value == k_NoDriver && clientId == NetworkManager.ServerClientId);
 
     #region Local actions (applied here and repeated on the other copies)
@@ -125,6 +138,7 @@ public class BrowserSync : NetworkBehaviour
     /// </summary>
     public void MarkInteraction()
     {
+        m_LastLocalInteraction = Time.unscaledTime;
         if (IsSpawned && m_Driver.Value != NetworkManager.LocalClientId)
             ClaimDriverRpc();
     }
