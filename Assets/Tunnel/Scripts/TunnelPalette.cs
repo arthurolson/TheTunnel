@@ -23,7 +23,9 @@ using XRMultiplayer;
 /// Real marker paints with a real marker, tracked by this headset's camera, on a real panel with marked corners or on
 /// a tunnel wall that lies on a real wall (<see cref="RealMarkerTracker"/>): it uses the marker's colour, and selecting
 /// a disk then gives the marker its colour. Copy to wall puts a copy of the panel's painting on the tunnel wall in
-/// view, for everyone (<see cref="PaintingCopy"/>).
+/// view, for everyone (<see cref="PaintingCopy"/>). AR marker cube places (or removes) a tracking test for everyone: a
+/// wireframe cube that stands on a printed 60 mm marker, tracked by both cameras of every headset
+/// (<see cref="ArMarkerCube"/>); while it runs, the status line shows its state on this headset.
 /// Shared: everyone sees the same disks, choices and messages. Works locally when not connected.
 /// </summary>
 public class TunnelPalette : NetworkBehaviour
@@ -59,6 +61,13 @@ public class TunnelPalette : NetworkBehaviour
     [SerializeField]
     [Tooltip("Tunnel/Paint Brush.")]
     Shader m_BoardBrush;
+
+    [Header("AR marker cube (tracking test)")]
+    [SerializeField] Button m_ArCubeRow;
+
+    [SerializeField]
+    [Tooltip("The networked wireframe cube that follows the printed marker (Tunnel > Paint > Build AR Marker Cube).")]
+    GameObject m_ArCubePrefab;
 
     [Header("Holder and wall")]
     [SerializeField]
@@ -160,6 +169,7 @@ public class TunnelPalette : NetworkBehaviour
         m_ClearRow?.onClick.AddListener(PressClear);
         m_RealRow?.onClick.AddListener(() => RealMarkerTracker.Get().Toggle(this, m_BoardOverlay, m_BoardBrush));
         m_CopyRow?.onClick.AddListener(CopyToWall);
+        m_ArCubeRow?.onClick.AddListener(ToggleArCube);
         SetStatus("Touch a disk with the marker's tip to take its colour. Select a disk here to change its colour.");
     }
 
@@ -190,15 +200,38 @@ public class TunnelPalette : NetworkBehaviour
 
     string m_RealStatusShown;
 
-    // The real marker's progress, on this headset only.
+    // The real marker's progress, on this headset only; otherwise the AR marker cube's, while it runs.
     void ShowRealStatus()
     {
         var tracker = RealMarkerTracker.instance;
-        if (tracker == null || tracker.palette != this || tracker.status == m_RealStatusShown)
+        if (tracker == null || tracker.palette != this || tracker.stage == RealMarkerTracker.Stage.Off)
+        {
+            var cube = ArMarkerCube.instance;
+            if (cube != null && cube.shortStatus != m_RealStatusShown)
+            {
+                m_RealStatusShown = cube.shortStatus;
+                SetStatus(cube.shortStatus);
+            }
+            if (tracker == null || tracker.palette != this)
+                return;
+        }
+        if (tracker.status == m_RealStatusShown)
             return;
         m_RealStatusShown = tracker.status;
         SetStatus(tracker.status);
     }
+
+    // The AR marker cube tracking test: placed for everyone by the host, or removed.
+    void ToggleArCube()
+    {
+        if (IsSpawned)
+            ToggleArCubeRpc();
+        else
+            ArMarkerCube.Toggle(m_ArCubePrefab, false);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void ToggleArCubeRpc() => ArMarkerCube.Toggle(m_ArCubePrefab, true);
 
     #region Showing
 
@@ -231,6 +264,8 @@ public class TunnelPalette : NetworkBehaviour
         SetRow(m_ClearRow, Time.time < m_ClearArmedUntil ? "<color=#F88>Press again to clear every mark</color>" : "Clear all marks", true);
         SetRow(m_RealRow, Check(realOn) + "  Real marker  <color=#AAA>" + (realOn ? "press to stop" : "tracked by camera") + "</color>", true);
         SetRow(m_CopyRow, "Copy to wall  <color=#AAA>the panel's painting</color>", PanelPaint() != null);
+        bool cubeOn = ArMarkerCube.instance != null;
+        SetRow(m_ArCubeRow, Check(cubeOn) + "  AR marker cube  <color=#AAA>" + (cubeOn ? "press to remove" : "test, 60 mm marker") + "</color>", true);
     }
 
     static string Check(bool on) => on ? "■" : "□";

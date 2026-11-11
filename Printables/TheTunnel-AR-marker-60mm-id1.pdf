@@ -1,0 +1,64 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length 1677 >>
+stream
+0 g 220.9606 451.8425 170.0787 170.0787 re f 1 g
+291.8268 565.2283 14.1732 14.1732 re f
+306.0000 565.2283 14.1732 14.1732 re f
+320.1732 565.2283 14.1732 14.1732 re f
+334.3465 565.2283 14.1732 14.1732 re f
+291.8268 551.0551 14.1732 14.1732 re f
+306.0000 551.0551 14.1732 14.1732 re f
+320.1732 551.0551 14.1732 14.1732 re f
+334.3465 551.0551 14.1732 14.1732 re f
+263.4803 536.8819 14.1732 14.1732 re f
+277.6535 536.8819 14.1732 14.1732 re f
+263.4803 522.7087 14.1732 14.1732 re f
+277.6535 522.7087 14.1732 14.1732 re f
+320.1732 508.5354 14.1732 14.1732 re f
+334.3465 508.5354 14.1732 14.1732 re f
+320.1732 494.3622 14.1732 14.1732 re f
+334.3465 494.3622 14.1732 14.1732 re f
+0.6 G 0.4 w [3 3] 0 d 164.268 395.150 283.465 283.465 re S [] 0 d
+0 G 0.8 w 235.134 324.283 m 376.866 324.283 l S
+235.134 320.283 m 235.134 328.283 l S 376.866 320.283 m 376.866 328.283 l S
+0 g
+BT /F1 9 Tf 276.00 308.28 Td (this bar: 50 mm) Tj ET
+BT /F2 14 Tf 56.69 113.39 Td (The Tunnel: AR marker cube \(tracking test\)) Tj ET
+BT /F1 10 Tf 56.69 93.39 Td (artoolkitX 3x3 barcode with Hamming \(6,3\) error correction, barcode ID 1.) Tj ET
+BT /F1 10 Tf 56.69 77.39 Td (The black square is exactly 60 mm wide \(12 cells of 5 mm; the black border is 15 mm\).) Tj ET
+BT /F1 10 Tf 56.69 61.39 Td (Print at 100% / Actual size \(no 'fit to page'\), then check the 50 mm bar with a ruler.) Tj ET
+BT /F1 10 Tf 56.69 45.39 Td (Keep the white margin \(cut on the dashed line, 20 mm out\) and glue it flat on stiff card.) Tj ET
+BT /F1 10 Tf 56.69 29.39 Td (Matte paper avoids glare. Palette > AR marker cube places the cube on it for every player.) Tj ET
+BT /F2 12 Tf 56.69 721.13 Td (AR marker  60 mm  ID 1) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000251 00000 n 
+0000001980 00000 n 
+0000002050 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+2125
+%%EOF

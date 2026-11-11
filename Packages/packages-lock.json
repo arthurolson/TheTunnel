@@ -882,6 +882,12 @@
         "com.unity.modules.jsonserialize": "1.0.0",
         "com.unity.modules.subsystems": "1.0.0"
       }
+    },
+    "org.artoolkitx.artoolkitx-unity": {
+      "version": "file:org.artoolkitx.artoolkitx-unity",
+      "depth": 0,
+      "source": "embedded",
+      "dependencies": {}
     }
   }
 }

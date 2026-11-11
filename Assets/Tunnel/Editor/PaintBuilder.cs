@@ -13,8 +13,10 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// painting copy (<see cref="PaintingCopy"/>) prefabs, each a copy of the 2PLV molecule's toy without its molecule (so
 /// they are grabbed and shared the same way),
 /// the palette's controls (copied from the TS Menu's colour chooser and rows), and in the tunnel segment prefab its
-/// paint (<see cref="TunnelSegmentPaint"/>) and the TS Menu's Paint button (<see cref="TunnelPaintMenu"/>).
-/// Runs from Tunnel > Paint > Build Paint.
+/// paint (<see cref="TunnelSegmentPaint"/>) and the TS Menu's Paint button (<see cref="TunnelPaintMenu"/>); also the
+/// AR marker cube tracking test (<see cref="ArMarkerCube"/>), placed from the palette's AR marker cube row.
+/// Runs from Tunnel > Paint > Build Paint; Tunnel > Paint > Build Paint Prefabs Only remakes the prefabs without
+/// touching the tunnel segment.
 /// </summary>
 static class PaintBuilder
 {
@@ -30,7 +32,12 @@ static class PaintBuilder
     const float k_RowsX = 300f, k_RowWidth = 460f;
 
     [MenuItem("Tunnel/Paint/Build Paint")]
-    public static string Build()
+    public static string Build() => Build(true);
+
+    [MenuItem("Tunnel/Paint/Build Paint Prefabs Only (not the tunnel segment)")]
+    public static string BuildPrefabsOnly() => Build(false);
+
+    static string Build(bool segmentToo)
     {
         if (!AssetDatabase.IsValidFolder(k_Folder))
             AssetDatabase.CreateFolder("Assets/Tunnel", "Paint");
@@ -46,7 +53,8 @@ static class PaintBuilder
         {
             var control = segment.transform.Find("Control Panel");
             var marker = MakeMarker(body, cap);
-            var palette = MakePalette(control, board);
+            var arCube = MakeArCube();
+            var palette = MakePalette(control, board, arCube);
             var copy = MakeCopy(overlay);
             registry.marker = marker;
             registry.palette = palette;
@@ -54,14 +62,18 @@ static class PaintBuilder
             EditorUtility.SetDirty(registry);
 
             var list = AssetDatabase.LoadAssetAtPath<NetworkPrefabsList>(k_NetworkListPath);
-            foreach (var prefab in new[] { marker, palette, copy })
+            foreach (var prefab in new[] { marker, palette, copy, arCube })
                 if (!list.PrefabList.Any(p => p.Prefab == prefab))
                     list.Add(new NetworkPrefab { Prefab = prefab });
             EditorUtility.SetDirty(list);
 
-            BuildSegment(segment, control, registry, overlay);
-            bool saved = PrefabUtility.SaveAsPrefabAsset(segment, k_SegmentPath) != null;
-            log = $"[Paint] built {AssetDatabase.GetAssetPath(marker)}, {AssetDatabase.GetAssetPath(palette)} and {AssetDatabase.GetAssetPath(copy)}; segment {(saved ? "saved" : "NOT saved")}";
+            string segmentState = "left as it was";
+            if (segmentToo)
+            {
+                BuildSegment(segment, control, registry, overlay);
+                segmentState = PrefabUtility.SaveAsPrefabAsset(segment, k_SegmentPath) != null ? "saved" : "NOT saved";
+            }
+            log = $"[Paint] built {AssetDatabase.GetAssetPath(marker)}, {AssetDatabase.GetAssetPath(palette)}, {AssetDatabase.GetAssetPath(copy)} and {AssetDatabase.GetAssetPath(arCube)}; segment {segmentState}";
         }
         finally
         {
@@ -168,7 +180,7 @@ static class PaintBuilder
         return Save(marker);
     }
 
-    static GameObject MakePalette(Transform control, Material boardMaterial)
+    static GameObject MakePalette(Transform control, Material boardMaterial, GameObject arCube)
     {
         var palette = MakeToy("Paint_Palette_Networked");
         var generalSo = new SerializedObject(palette.GetComponent<XRGeneralGrabTransformer>());
@@ -281,15 +293,16 @@ static class PaintBuilder
             label.richText = true;
             return button;
         }
-        var paint = Row("Paint Row", 300f, "■  Paint");
-        var pencil = Row("Pencil Row", 235f, "□  Pencil");
-        var airbrush = Row("Airbrush Row", 170f, "□  Airbrush");
-        var eraser = Row("Eraser Row", 105f, "□  Eraser");
-        var curve = Row("Curve Row", 15f, "□  Curve");
-        var endLine = Row("End Line Row", -50f, "End line");
-        var clear = Row("Clear Row", -120f, "Clear all marks");
-        var real = Row("Real Marker Row", -185f, "□  Real marker");
-        var copyRow = Row("Copy Row", -250f, "Copy to wall");
+        var paint = Row("Paint Row", 310f, "■  Paint");
+        var pencil = Row("Pencil Row", 250f, "□  Pencil");
+        var airbrush = Row("Airbrush Row", 190f, "□  Airbrush");
+        var eraser = Row("Eraser Row", 130f, "□  Eraser");
+        var curve = Row("Curve Row", 55f, "□  Curve");
+        var endLine = Row("End Line Row", -5f, "End line");
+        var clear = Row("Clear Row", -70f, "Clear all marks");
+        var real = Row("Real Marker Row", -130f, "□  Real marker");
+        var copyRow = Row("Copy Row", -190f, "Copy to wall");
+        var arCubeRow = Row("AR Cube Row", -250f, "□  AR marker cube");
         var status = Text(titleTemplate, canvasRect, "Status", "", new Vector2(k_RowsX, -332f), new Vector2(k_RowWidth, 92f));
         status.fontSize = 21f;
         status.alignment = TextAlignmentOptions.TopLeft;
@@ -320,6 +333,8 @@ static class PaintBuilder
         so.FindProperty("m_ClearRow").objectReferenceValue = clear;
         so.FindProperty("m_RealRow").objectReferenceValue = real;
         so.FindProperty("m_CopyRow").objectReferenceValue = copyRow;
+        so.FindProperty("m_ArCubeRow").objectReferenceValue = arCubeRow;
+        so.FindProperty("m_ArCubePrefab").objectReferenceValue = arCube;
         so.FindProperty("m_BoardOverlay").objectReferenceValue = AssetDatabase.LoadAssetAtPath<Material>($"{k_Folder}/PaintOverlay.mat");
         so.FindProperty("m_BoardBrush").objectReferenceValue = Shader.Find("Tunnel/Paint Brush");
         so.FindProperty("m_Status").objectReferenceValue = status;
@@ -327,6 +342,62 @@ static class PaintBuilder
         so.FindProperty("m_HolderGrab").objectReferenceValue = holderGrab;
         so.ApplyModifiedPropertiesWithoutUndo();
         return Save(palette);
+    }
+
+    // The AR marker cube: a networked object whose wireframe cube (60 mm, its base at the object's origin) each
+    // headset moves to the marker's pose; green edges while drawing its own sighting, blue while drawing the shared one.
+    static GameObject MakeArCube()
+    {
+        const float size = 0.06f, thickness = 0.002f;
+        var local = UnlitMaterial("ARMarkerLocal", new Color(0.3f, 1f, 0.35f));
+        var shared = UnlitMaterial("ARMarkerShared", new Color(0.3f, 0.75f, 1f));
+        var cube = new GameObject("ARMarker_Cube_Networked");
+        cube.AddComponent<NetworkObject>();
+        var visual = new GameObject("Visual").transform;
+        visual.SetParent(cube.transform, false);
+        var mesh = Resources.GetBuiltinResource<Mesh>("Cube.fbx");
+        var edges = new System.Collections.Generic.List<Renderer>();
+        float h = size * 0.5f;
+        for (int axis = 0; axis < 3; axis++)
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                float a = (i & 1) == 0 ? -h : h, b = (i & 2) == 0 ? -h : h;
+                Vector3 position = axis switch { 0 => new(0f, a, b), 1 => new(a, 0f, b), _ => new(a, b, 0f) };
+                position.y += h; // the base sits on the marker
+                var scale = Vector3.one * thickness;
+                scale[axis] = size + thickness;
+                edges.Add(Box(visual, $"Edge {axis * 4 + i + 1}", position, scale, mesh, local).GetComponent<Renderer>());
+            }
+        }
+        foreach (var edge in edges)
+            edge.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+
+        var component = cube.AddComponent<ArMarkerCube>();
+        var so = new SerializedObject(component);
+        so.FindProperty("m_Visual").objectReferenceValue = visual;
+        var edgesProperty = so.FindProperty("m_Edges");
+        edgesProperty.arraySize = edges.Count;
+        for (int i = 0; i < edges.Count; i++)
+            edgesProperty.GetArrayElementAtIndex(i).objectReferenceValue = edges[i];
+        so.FindProperty("m_LocalMaterial").objectReferenceValue = local;
+        so.FindProperty("m_SharedMaterial").objectReferenceValue = shared;
+        so.ApplyModifiedPropertiesWithoutUndo();
+        return Save(cube);
+    }
+
+    static Material UnlitMaterial(string name, Color color)
+    {
+        string path = $"{k_Folder}/{name}.mat";
+        var material = AssetDatabase.LoadAssetAtPath<Material>(path);
+        if (material == null)
+        {
+            material = new Material(Shader.Find("Universal Render Pipeline/Unlit")) { name = name };
+            AssetDatabase.CreateAsset(material, path);
+        }
+        material.SetColor("_BaseColor", color);
+        EditorUtility.SetDirty(material);
+        return material;
     }
 
     // A copy of a real panel's painting, put on a tunnel wall: grabbed and shared like the palette, with its own paint.
