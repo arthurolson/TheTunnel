@@ -1,7 +1,7 @@
 # The Tunnel: status
 
 What has been built, what is in progress, and where each build is. Updated as work lands; the plan ahead is in
-[TODO.md](TODO.md). Last updated 12 November 2026 (version 12.11.2026.2).
+[TODO.md](TODO.md). Last updated 12 November 2026 (version 12.11.2026.3).
 
 ## Accomplished
 
@@ -123,7 +123,8 @@ What has been built, what is in progress, and where each build is. Updated as wo
 | Real marker on a panel or tunnel wall | First headset test of the new design (10.11.2026.1 on 4004X): the points and the disk were nowhere near the cap, and the corner marks weren't found; the headset's log was lost. 10.11.2026.2 adds a step that aligns the camera image with the tracked hand holding the marker (which way the image is read, and the cap's distance), and saves a log and annotated camera snapshots on the headset (files/RealMarker). Next: install, test, pull the folder and fix. |
 | AR marker cube | Works on one headset (11.11.2026.3, on both 340YC Quest 3S): artoolkitX finds the marker with both cameras (about 93% of sightings), the outline sits on the printed marker in both camera images, and the cube sits on the marker in the user's view. Not yet tried: two headsets in one session (shared pose, handoff when a player looks away). |
 | Browser content only, shared video, Loop | Built (11.11.2026.2), not yet tried on a headset. Next: two players, a direct .mp4 and YouTube; listen for echo between headsets in one room. |
-| AR canvas | 12.11.2026.1 on 4041K and 4004X: with canvasMarkerRotation=90 in settings.txt (the marker is taped turned) the canvas lines up with the panel, but the marker was found only sporadically with both cameras open. artoolkitX's own stereo fusion needs both views to agree within ~3 px through the lens calibration, and Camera2's is off by ~0.7°, so it often reported nothing. 12.11.2026.2 searches each camera's image on its own (halved, faster) and joins the poses itself, learning the right camera's turn per headset (files/ARMarker/stereo-offset.txt); on 4004X's own snapshots both cameras then find the marker in all 8 clean pairs (before: 1). Next: headset test of the canvas, painting and Copy to wall. |
+| AR canvas | Two-player test of 12.11.2026.2: both cameras tracked; the canvas jittered. 12.11.2026.3 locks it: once the panel is found, the host settles the canvas on a robust average of the first good sightings (about 1 s), shares it, and every headset stops tracking; the palette button then reads Re-find canvas. The canvas is drawn 2 mm in front of the real panel (canvasLift) so the panel doesn't hide the painting. Tested in the Editor; next: headset test. |
+| Co-location (floor QR) | Two-player test: after aligning to the floor QR, the joining headset's AR-marker sighting sat 23–24 cm (briefly 30 cm) from the host's — the floor-QR measurement (one camera, older camera path, unverified image conventions, 7–9 cm scatter) is off. Fix in progress: read the floor QR with both cameras through the AR marker's verified camera path, and fine-tune the alignment with the AR marker when two players see it. |
 | Headset checks still owed | SARS-CoV-2 in the 3D movie (09.11.2026.1); the movie panel's placement on the wall beside a mixed reality box; transparent Viewer images (09.11.2026.2); Viewer Content only with two players and the backdrop fix (10.11.2026.2); the virtual marker following the hand instantly (09.11.2026.3). |
 | Grab diagnostics | Every grab and release is logged (since 08.11.2026.1), to track down grabs that don't take. Still on. |
 
@@ -131,10 +132,10 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 12.11.2026.2 |
+| Latest build (Builds/TheTunnelDev.apk) | 12.11.2026.3 |
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |
-| Quest 3S 3497C10HC4041K | 12.11.2026.2 |
-| Quest 3S 3497C10HC4004X | 12.11.2026.2 |
+| Quest 3S 3497C10HC4041K | 12.11.2026.3 |
+| Quest 3S 3497C10HC4004X | 12.11.2026.3 |
 | Quest 3 2G0YC1ZF760BMQ | 10.11.2026.2 |

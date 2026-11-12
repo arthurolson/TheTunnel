@@ -419,6 +419,50 @@ static class ArMarkerEditorTests
         return result;
     }
 
+    [MenuItem("Tunnel/Paint/Test AR Canvas Lock (jittery sightings)")]
+    public static string TestCanvasLock()
+    {
+        // 30 sightings a second of a still marker: 3 mm and 1.5 deg of jitter, and one in eight wildly off (a flipped
+        // tilt or a bad corner). The locker must settle within about a second, near the truth.
+        var random = new System.Random(11);
+        float Gauss() => (float)(Math.Sqrt(-2.0 * Math.Log(1.0 - random.NextDouble())) * Math.Cos(2.0 * Math.PI * random.NextDouble()));
+        var truth = new Pose(new Vector3(0.3f, 0.82f, 0.45f), Quaternion.Euler(-30f, 20f, 5f));
+        var report = new StringBuilder("[ARMarker] canvas lock test\n");
+        bool allOk = true;
+        foreach (var (jitterMm, jitterDeg, outliers) in new[] { (3f, 1.5f, 8), (1f, 0.5f, 0), (6f, 3f, 5) })
+        {
+            var locker = new ArMarkerCanvasLocker();
+            ArMarkerCanvasLocker.Result result = default;
+            double t = 0;
+            bool locked = false;
+            int fed = 0;
+            for (; fed < 150 && !locked; fed++, t += 1.0 / 30.0)
+            {
+                var position = truth.position + new Vector3(Gauss(), Gauss(), Gauss()) * jitterMm * 0.001f;
+                var rotation = Quaternion.Euler(Gauss() * jitterDeg, Gauss() * jitterDeg, Gauss() * jitterDeg) * truth.rotation;
+                if (outliers > 0 && fed % outliers == 3)
+                {
+                    position += new Vector3(0.03f, -0.02f, 0.05f);
+                    rotation = Quaternion.Euler(25f, 0f, 0f) * rotation;
+                }
+                locker.Add(t, new Pose(position, rotation));
+                locked = locker.TryLock(out result);
+            }
+            float error = Vector3.Distance(result.pose.position, truth.position) * 1000f, turn = Quaternion.Angle(result.pose.rotation, truth.rotation);
+            // At the canvas's far corner (about 55 cm from the marker) a turn error moves the canvas this much.
+            float corner = turn * Mathf.Deg2Rad * 550f;
+            bool ok = locked && error < 2f && turn < 0.8f;
+            allOk &= ok || jitterMm >= 6f; // very noisy sightings may rightly never settle
+            report.AppendLine($"  jitter {jitterMm} mm / {jitterDeg} deg, {(outliers > 0 ? $"1 in {outliers} wild" : "no wild ones")}: " +
+                (locked ? $"locked after {fed} sightings ({fed / 30f:0.0} s): {result}; {error:0.0} mm and {turn:0.00} deg from the truth (far corner ~{corner:0.0} mm)"
+                    : $"not locked after {fed} sightings ({result}), as it should not with this much jitter")
+                + (ok || jitterMm >= 6f ? "" : "  FAIL"));
+        }
+        report.AppendLine(allOk ? "  PASS" : "  FAIL");
+        Debug.Log(report.ToString());
+        return report.ToString();
+    }
+
     [MenuItem("Tunnel/Paint/Test AR Canvas Placement (rendered panel)")]
     public static string TestCanvasPlacement()
     {

@@ -279,7 +279,8 @@ public class TunnelPalette : NetworkBehaviour
         else
         {
             SetRow(m_ArCubeRow, Check(cubeOn) + "  AR cube", true);
-            SetRow(m_ArCanvasRow, Check(canvasOn) + "  AR canvas", true);
+            // Finding the panel, settled (pressing finds it again), or off.
+            SetRow(m_ArCanvasRow, !canvasOn ? "□  AR canvas" : ar.canvasLocked ? "■  Re-find canvas" : "■  Finding canvas", true);
         }
     }
 

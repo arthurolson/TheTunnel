@@ -25,6 +25,10 @@ using XRMultiplayer;
 /// its own shared paint (<see cref="TunnelSegmentPaint"/>) that the virtual marker paints on inside the paint area and
 /// that moves with the panel. Where the marker sits on the panel comes from the host's files/ARMarker/settings.txt
 /// (<see cref="ArMarkerCanvasLayout"/>) and is shared with everyone. Copy to wall copies the paint area.
+/// The canvas doesn't keep following the marker (that made it jitter): the host settles it on a robust average of the
+/// first good sightings (<see cref="ArMarkerCanvasLocker"/>), locks it there for everyone in the shared tabletop frame,
+/// and every headset stops tracking and gives its cameras back. Pressing AR canvas again (it reads "Re-find canvas")
+/// finds the panel again, for instance after it was moved; the paint stays on the canvas.
 /// </summary>
 public class ArMarkerCube : NetworkBehaviour
 {
@@ -59,6 +63,14 @@ public class ArMarkerCube : NetworkBehaviour
     readonly NetworkVariable<ArMarkerSample> m_Shared = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<byte> m_SharedShows = new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<ArMarkerCanvasLayout> m_SharedLayout = new(ArMarkerCanvasLayout.Default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<ArMarkerCanvasLock> m_SharedLock = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    ArMarkerCanvasLock m_LocalLock;
+    readonly ArMarkerCanvasLocker m_Locker = new();
+    double m_FindStart, m_LastLockSample = double.NegativeInfinity;
+    ulong m_LockSource = ulong.MaxValue;
+    bool m_Tracking;
+    ushort m_ShownGeneration = ushort.MaxValue;
+    bool m_ShownLocked;
     Shows m_LocalShows;
     ArMarkerCanvasLayout m_LocalLayout = ArMarkerCanvasLayout.Default;
 
@@ -93,6 +105,15 @@ public class ArMarkerCube : NetworkBehaviour
 
     public ArMarkerCanvasLayout layout => IsSpawned ? m_SharedLayout.Value : m_LocalLayout;
 
+    /// <summary>Where the canvas has settled, once it has.</summary>
+    public ArMarkerCanvasLock canvasLock => IsSpawned ? m_SharedLock.Value : m_LocalLock;
+
+    /// <summary>The canvas is shown and settled (marker tracking is off).</summary>
+    public bool canvasLocked => shows == Shows.Canvas && canvasLock.locked;
+
+    /// <summary>Sightings gathered toward settling the canvas (known on the host).</summary>
+    public int lockProgress => m_Locker.count;
+
     /// <summary>A short status for the palette.</summary>
     public string shortStatus { get; private set; } = "AR marker cube: starting...";
 
@@ -101,8 +122,8 @@ public class ArMarkerCube : NetworkBehaviour
 
     /// <summary>
     /// The palette's AR rows (the host does this when connected): places the tracked marker showing
-    /// <paramref name="what"/> if there's none, switches it to <paramref name="what"/> if it shows the other, or
-    /// removes it if it already shows <paramref name="what"/>.
+    /// <paramref name="what"/> if there's none, switches it to <paramref name="what"/> if it shows the other, finds a
+    /// settled canvas again (Re-find canvas), or else removes it.
     /// </summary>
     public static void Toggle(GameObject prefab, bool networked, Shows what = Shows.Cube)
     {
@@ -112,6 +133,11 @@ public class ArMarkerCube : NetworkBehaviour
             {
                 instance.SetShows(what);
                 Debug.Log($"[ARMarker] now showing the {what}");
+                return;
+            }
+            if (what == Shows.Canvas && instance.canvasLock.locked)
+            {
+                instance.Refind();
                 return;
             }
             if (networked && instance.IsSpawned)
@@ -151,6 +177,79 @@ public class ArMarkerCube : NetworkBehaviour
             m_SharedShows.Value = (byte)what;
         else
             m_LocalShows = what;
+        if (what == Shows.Canvas)
+            Refind();
+    }
+
+    /// <summary>Unlocks the canvas and finds the panel again (on the host, or this headset alone).</summary>
+    void Refind()
+    {
+        var unlocked = new ArMarkerCanvasLock { locked = false, generation = (ushort)(canvasLock.generation + 1) };
+        if (IsSpawned)
+            m_SharedLock.Value = unlocked;
+        else
+            m_LocalLock = unlocked;
+        m_FindStart = Now;
+        m_Locker.Clear();
+        m_LockSource = ulong.MaxValue;
+        ArMarkerTracker.Get().Log($"finding the canvas (search {unlocked.generation})");
+    }
+
+    // Marker tracking runs except while the canvas is locked.
+    void SetTracking(bool on)
+    {
+        if (on == m_Tracking)
+            return;
+        m_Tracking = on;
+        var tracker = ArMarkerTracker.Get();
+        if (on)
+        {
+            m_Display.Reset();
+            tracker.Begin();
+        }
+        else
+        {
+            tracker.Log("canvas locked: tracking off, cameras given back");
+            tracker.End();
+        }
+    }
+
+    // On the host (or alone): gather the shared pose's good sightings since the search began, from one player at a
+    // time, and settle the canvas once they agree.
+    void GatherForLock(ArMarkerSample published)
+    {
+        if (!published.valid || !published.both || published.quality < 0.3f || published.time <= m_FindStart ||
+            published.time <= m_LastLockSample)
+            return;
+        if (published.source != m_LockSource)
+        {
+            m_Locker.Clear(); // players' sightings aren't mixed: each headset's room alignment differs a little
+            m_LockSource = published.source;
+        }
+        m_LastLockSample = published.time;
+        m_Locker.Add(published.time, published.pose);
+        if (!m_Locker.TryLock(out var result))
+            return;
+
+        var panel = layout.CanvasFromMarker(ArMarkerMath.MarkerFromCube(result.pose));
+        var locked = new ArMarkerCanvasLock
+        {
+            locked = true,
+            position = panel.position,
+            rotation = panel.rotation,
+            sightings = (ushort)result.used,
+            spreadMm = result.rmsMm,
+            spreadDeg = result.rmsDeg,
+            generation = canvasLock.generation,
+        };
+        if (IsSpawned)
+            m_SharedLock.Value = locked;
+        else
+            m_LocalLock = locked;
+        m_Locker.Clear();
+        var world = ToWorld(panel);
+        ArMarkerTracker.Get().Log($"canvas locked from {PlayerName(published.source)}'s {result}; panel centre {panel.position:F4} in the table frame " +
+            $"(world {world.position:F4}), facing {(world.rotation * Vector3.back).ToString("F3")}, up {(world.rotation * Vector3.up).ToString("F3")}");
     }
 
     void Awake()
@@ -206,7 +305,8 @@ public class ArMarkerCube : NetworkBehaviour
         m_Table = table != null ? table.transform : null;
         var tracker = ArMarkerTracker.Get();
         tracker.sighted += OnSighted;
-        tracker.Begin();
+        if (shows == Shows.Canvas && !IsSpawned)
+            m_FindStart = Now;
         tracker.Log($"{shows} started on player {self} ({(IsSpawned ? (IsServer ? "host" : "client") : "not connected")})");
         tracker.Log($"canvas layout (from the host's settings.txt): {layout}");
         if (m_Canvas != null)
@@ -226,6 +326,7 @@ public class ArMarkerCube : NetworkBehaviour
             tracker.sighted -= OnSighted;
             tracker.End();
         }
+        m_Tracking = false;
         if (m_Card != null)
             Destroy(m_Card.gameObject);
     }
@@ -274,11 +375,28 @@ public class ArMarkerCube : NetworkBehaviour
         if (!m_Started)
             return;
         double now = Now;
+        bool locked = canvasLocked;
+        SetTracking(!locked);
+        if (canvasLock.generation != m_ShownGeneration || locked != m_ShownLocked)
+        {
+            m_ShownGeneration = canvasLock.generation;
+            m_ShownLocked = locked;
+            if (locked)
+                ArMarkerTracker.Get().Log($"canvas locked (search {canvasLock.generation}): from {canvasLock.sightings} sightings, " +
+                    $"spread {canvasLock.spreadMm:0.0} mm, {canvasLock.spreadDeg:0.00} deg");
+        }
+        if (locked)
+        {
+            ShowLocked(now);
+            return;
+        }
 
         // The host (or this headset alone) picks the shared pose.
         if (!IsSpawned || IsServer)
         {
             var published = m_Arbiter.Choose(now, out string change);
+            if (shows == Shows.Canvas)
+                GatherForLock(published);
             if (change != null)
                 ArMarkerTracker.Get().Log($"shared pose: {change} (handoffs {m_Arbiter.handoffs})");
             if (IsSpawned)
@@ -356,6 +474,24 @@ public class ArMarkerCube : NetworkBehaviour
             m_SightingsSent = 0;
         }
         UpdateCard(mode, sharedNow, now);
+    }
+
+    // The settled canvas: at its locked place, for everyone; no tracking, so no cube.
+    void ShowLocked(double now)
+    {
+        SetActive(m_Visual, false);
+        if (m_Canvas != null)
+        {
+            m_Canvas.PlaceCanvas(ToWorld(canvasLock.pose));
+            m_Canvas.SetMarkerMaterial(m_SharedMaterial);
+            SetActive(m_Canvas.transform, true);
+        }
+        if (Time.unscaledTime >= m_NextLog)
+        {
+            m_NextLog = Time.unscaledTime + 1f;
+            ArMarkerTracker.Get().Log($"cube: canvas locked (search {canvasLock.generation}), tracking off" + CanvasLog());
+        }
+        UpdateCard(ArMarkerRenderChooser.Mode.Hidden, shared, now);
     }
 
     static void SetActive(Transform t, bool on)
@@ -448,13 +584,33 @@ public class ArMarkerCube : NetworkBehaviour
         });
         if (mode != ArMarkerRenderChooser.Mode.Hidden && !m_Chooser.agree)
             text.Append($"  <color=#FA4>local is {m_Chooser.disagreement * 100f:0.0} cm off</color>");
-        if (tracker != null && (!tracker.active || !tracker.status.StartsWith("Tracking:")))
+        if (shows == Shows.Canvas)
+            text.Append('\n').Append(CanvasState());
+        if (tracker != null && !canvasLocked && (!tracker.active || !tracker.status.StartsWith("Tracking:")))
             text.Append("\n<size=80%>").Append(tracker.status).Append("</size>");
         if (m_Card != null)
             m_Card.text = text.ToString();
 
-        shortStatus = $"{(shows == Shows.Canvas ? "AR canvas" : "AR cube")}: sees {cameras}; shared from {(sharedNow.valid ? PlayerName(sharedNow.source) : "nobody")}; drawing {mode}." +
+        if (canvasLocked)
+        {
+            shortStatus = "AR canvas: " + CanvasState().Replace("<b>", "").Replace("</b>", "");
+            if (m_Card != null)
+                m_Card.text = "<b>AR canvas</b>\n" + CanvasState();
+            return;
+        }
+        shortStatus = (shows == Shows.Canvas ? "Finding the canvas... " : "") + $"{(shows == Shows.Canvas ? "AR canvas" : "AR cube")}: sees {cameras}; shared from {(sharedNow.valid ? PlayerName(sharedNow.source) : "nobody")}; drawing {mode}." +
             (tracker != null && (!tracker.active || !tracker.status.StartsWith("Tracking:")) ? " " + tracker.status : "");
+    }
+
+    string CanvasState()
+    {
+        var state = canvasLock;
+        if (state.locked)
+            return $"Canvas <b>locked</b> from {state.sightings} sightings (spread {state.spreadMm:0.0} mm, {state.spreadDeg:0.0} deg); " +
+                "tracking off. If the panel moves, press Re-find canvas.";
+        bool host = !IsSpawned || IsServer;
+        return "<b>Finding the canvas...</b> hold the panel still in view of both cameras" +
+            (host ? $" ({m_Locker.count} of {m_Locker.needed} good sightings)" : "");
     }
 
     string PlayerName(ulong client)
