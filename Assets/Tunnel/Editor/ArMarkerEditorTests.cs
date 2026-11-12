@@ -419,6 +419,149 @@ static class ArMarkerEditorTests
         return result;
     }
 
+    [MenuItem("Tunnel/Paint/Test Floor QR (rendered stereo pairs)")]
+    public static string TestFloorQr()
+    {
+        // The printed floor code (Printables/TheTunnel-floor-QR.png: 25 modules including the quiet zone = 19 cm)
+        // rendered on the floor for both cameras of 4004X's lens rig, decoded with ZXing and placed as the scanner does.
+        var texture = new Texture2D(2, 2);
+        texture.LoadImage(System.IO.File.ReadAllBytes("Printables/TheTunnel-floor-QR.png"));
+        var modules = new bool[25, 25]; // [row from the top, column]
+        for (int row = 0; row < 25; row++)
+            for (int col = 0; col < 25; col++)
+                modules[row, col] = texture.GetPixelBilinear((col + 0.5f) / 25f, 1f - (row + 0.5f) / 25f).grayscale < 0.5f;
+        UnityEngine.Object.DestroyImmediate(texture);
+        const float size = 0.19f, module = size / 25f;
+
+        var headFromLeft = AndroidLens(new[] { -0.0317f, -0.0127f, -0.0738f }, new[] { -0.9984f, -0.0014f, 0.0057f, 0.0566f });
+        var headFromRight = AndroidLens(new[] { 0.0318f, -0.0129f, -0.0734f }, new[] { -0.9987f, 0.0026f, -0.0024f, 0.0518f });
+        var left = new ArMarkerMath.CameraModel(1728, 1728, 1174.3f, 1174.3f, 862.1f, 867.4f);
+        var right = new ArMarkerMath.CameraModel(1728, 1728, 1171.3f, 1171.3f, 862.2f, 864.5f);
+        var report = new StringBuilder("[QR] floor code test (both cameras, Quest 3S 4004X's lenses, 1728x1728)\n");
+        var cases = new (string name, Vector3 head, float headYaw, float pitch, Vector3 code, float codeYaw)[]
+        {
+            ("standing, looking down 55 deg", new Vector3(0f, 1.62f, -0.75f), 0f, 55f, new Vector3(0.05f, 0f, 0.15f), 20f),
+            ("standing beside it, turned", new Vector3(0.6f, 1.55f, 0.4f), -100f, 60f, new Vector3(-0.1f, 0f, 0.2f), 137f),
+            ("further, shallower", new Vector3(-0.3f, 1.7f, -1.1f), 15f, 45f, new Vector3(0f, 0f, 0.2f), -60f),
+        };
+        int passed = 0;
+        foreach (var c in cases)
+        {
+            var head = new Pose(c.head, Quaternion.Euler(c.pitch, c.headYaw, 0f));
+            var forward = Quaternion.Euler(0f, c.codeYaw, 0f) * Vector3.forward;
+            var rightAxis = Vector3.Cross(Vector3.up, forward);
+            byte[] Render(ArMarkerMath.CameraModel model, Pose camera)
+            {
+                var image = new byte[model.width * model.height];
+                for (int y = 0; y < model.height; y++)
+                    for (int x = 0; x < model.width; x++)
+                    {
+                        int sum = 0;
+                        for (int s = 0; s < 4; s++)
+                        {
+                            var ray = camera.rotation * ArMarkerMath.PixelRay(model, new Vector2(x + 0.25f + 0.5f * (s & 1), y + 0.25f + 0.5f * (s >> 1)));
+                            int value = 150; // grey carpet
+                            if (ray.y < -1e-4f)
+                            {
+                                var hit = camera.position + ray * (-camera.position.y / ray.y) - c.code;
+                                float u = Vector3.Dot(hit, rightAxis), v = Vector3.Dot(hit, forward);
+                                int col = Mathf.FloorToInt((u + size * 0.5f) / module), row = Mathf.FloorToInt((size * 0.5f - v) / module);
+                                if (col >= 0 && col < 25 && row >= 0 && row < 25)
+                                    value = modules[row, col] ? 30 : 225;
+                                else if (Mathf.Abs(u) < 0.13f && Mathf.Abs(v) < 0.13f)
+                                    value = 225; // the paper
+                            }
+                            sum += value;
+                        }
+                        image[y * model.width + x] = (byte)(sum / 4);
+                    }
+                return image;
+            }
+
+            var leftWorld = ArMarkerMath.Mul(head, headFromLeft);
+            var rightWorld = ArMarkerMath.Mul(head, headFromRight);
+            var results = new List<string>();
+            var found = new List<(Vector3 position, Vector3 forward, float floor)>();
+            foreach (var (label, model, camera) in new[] { ("left", left, leftWorld), ("right", right, rightWorld) })
+            {
+                var image = Render(model, camera);
+                if (!QrFloorScanner.DecodeImage(image, model.width, model.height, out string text, out var points))
+                {
+                    results.Add($"{label}: not decoded");
+                    continue;
+                }
+                if (!QrFloorScanner.PlaceOnFloor(points, model, camera, 0.1064f, 0.2f, out var position, out var codeForward, out float floorY, out string why))
+                {
+                    results.Add($"{label}: decoded '{text}' but not placed ({why})");
+                    continue;
+                }
+                found.Add((position, codeForward, floorY));
+                results.Add($"{label}: {Vector3.Distance(position, c.code) * 1000f:0.0} mm, {Vector3.SignedAngle(forward, codeForward, Vector3.up):0.00} deg off, floor at {floorY * 1000f:0.0} mm");
+            }
+            // One camera alone is enough (the scanner uses whichever see the code); both are averaged.
+            bool ok = found.Count == 1 && Vector3.Distance(found[0].position, c.code) < 0.01f;
+            if (found.Count == 2)
+            {
+                var mean = (found[0].position + found[1].position) * 0.5f;
+                float error = Vector3.Distance(mean, c.code) * 1000f;
+                float yawError = Vector3.SignedAngle(forward, (found[0].forward + found[1].forward).normalized, Vector3.up);
+                ok = error < 10f && Mathf.Abs(yawError) < 1f;
+                results.Add($"both: {error:0.0} mm, {yawError:0.00} deg off; left and right {Vector3.Distance(found[0].position, found[1].position) * 1000f:0.0} mm apart");
+            }
+            if (ok)
+                passed++;
+            report.AppendLine($"  {c.name}: {(ok ? "ok" : "FAIL")} - " + string.Join("; ", results));
+        }
+        report.AppendLine($"  passed {passed} of {cases.Length}");
+        Debug.Log(report.ToString());
+        return report.ToString();
+    }
+
+    [MenuItem("Tunnel/Paint/Test Room Alignment from the Marker (simulated host and client)")]
+    public static string TestRoomAlignment()
+    {
+        // The client's world is off from the host's by 24 cm and 3 deg (as after the floor QR on 12 Nov). Both see a
+        // still marker; each sighting has a little jitter, and the client's clock pairs are within a frame.
+        var random = new System.Random(4);
+        float Gauss() => (float)(Math.Sqrt(-2.0 * Math.Log(1.0 - random.NextDouble())) * Math.Cos(2.0 * Math.PI * random.NextDouble()));
+        var marker = new Pose(new Vector3(0.4f, 0.78f, 0.3f), Quaternion.Euler(-90f, 35f, 0f));
+        // Client's error: its world is the host's turned 3 deg about (0.2, 0, -0.1) and shifted (0.2, 0, 0.13).
+        var errorTurn = Quaternion.AngleAxis(3f, Vector3.up);
+        var errorPivot = new Vector3(0.2f, 0f, -0.1f);
+        var errorShift = new Vector3(0.2f, 0.01f, 0.13f);
+        Pose ClientSees(Pose truth) => new(errorTurn * (truth.position - errorPivot) + errorPivot + errorShift, errorTurn * truth.rotation);
+        var alignment = new ArMarkerRoomAlignment();
+        var report = new StringBuilder("[QR] room alignment from the marker: client off by 24 cm and 3 deg\n");
+        ArMarkerRoomAlignment.Correction correction = default;
+        bool got = false;
+        double t = 0;
+        int frames = 0;
+        for (; frames < 200 && !got; frames++, t += 1.0 / 30.0)
+        {
+            Pose Jitter(Pose p) => new(p.position + new Vector3(Gauss(), Gauss(), Gauss()) * 0.002f, Quaternion.Euler(Gauss() * 0.7f, Gauss() * 0.7f, Gauss() * 0.7f) * p.rotation);
+            var own = Jitter(ClientSees(marker));
+            alignment.AddOwn(new ArMarkerSample { position = own.position, rotation = own.rotation, time = t + 0.01 * Gauss(), valid = true, quality = 0.9f, cameras = 3 });
+            var host = Jitter(marker);
+            alignment.AddHost(new ArMarkerSample { position = host.position, rotation = host.rotation, time = t, valid = true, quality = 0.9f, cameras = 3 });
+            got = alignment.TryCorrection(out correction, out _);
+        }
+        if (!got)
+            return report.Append("  FAIL: no correction").ToString();
+        // Apply it to points of the client's world: they should land on the host's.
+        float worst = 0f;
+        foreach (var p in new[] { marker.position, new Vector3(-1f, 0f, 2f), new Vector3(2f, 1.5f, -1f) })
+        {
+            var clientPoint = errorTurn * (p - errorPivot) + errorPivot + errorShift;
+            worst = Mathf.Max(worst, Vector3.Distance(correction.Apply(clientPoint), p) * 1000f);
+        }
+        bool ok = Mathf.Abs(correction.turn + 3f) < 0.5f && worst < 40f;
+        report.AppendLine($"  after {frames} frames ({frames / 30f:0.0} s): {correction}");
+        report.AppendLine($"  the client's world corrected: worst point {worst:0.0} mm from the host's (within 2 m of the marker); turn {correction.turn:0.00} deg (true -3)");
+        report.AppendLine(ok ? "  PASS" : "  FAIL");
+        Debug.Log(report.ToString());
+        return report.ToString();
+    }
+
     [MenuItem("Tunnel/Paint/Test AR Canvas Lock (jittery sightings)")]
     public static string TestCanvasLock()
     {

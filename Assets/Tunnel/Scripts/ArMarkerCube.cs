@@ -63,6 +63,8 @@ public class ArMarkerCube : NetworkBehaviour
     readonly NetworkVariable<ArMarkerSample> m_Shared = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<byte> m_SharedShows = new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<ArMarkerCanvasLayout> m_SharedLayout = new(ArMarkerCanvasLayout.Default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    // The host's own latest sighting (not the shared pose), for the joining players' fine alignment (CoLocation).
+    readonly NetworkVariable<ArMarkerSample> m_HostSighting = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<ArMarkerCanvasLock> m_SharedLock = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     ArMarkerCanvasLock m_LocalLock;
     readonly ArMarkerCanvasLocker m_Locker = new();
@@ -88,6 +90,15 @@ public class ArMarkerCube : NetworkBehaviour
     int m_SightingsSent;
 
     public static ArMarkerCube instance { get; private set; }
+
+    /// <summary>This headset's own sightings of the marker (shared tabletop frame, shared clock), as they come.</summary>
+    public static event System.Action<ArMarkerSample> ownSighting;
+
+    /// <summary>On players other than the host: the host's own sightings, as they arrive.</summary>
+    public static event System.Action<ArMarkerSample> hostSighting;
+
+    /// <summary>A line about this headset's room alignment from the marker, for the status card (set by CoLocation).</summary>
+    public static string roomNote;
 
     /// <summary>The shared pose for gameplay (the cube's base centre and turn in the world), and whether it's fresh.</summary>
     public Pose sharedPose => ToWorld(shared.pose);
@@ -277,6 +288,8 @@ public class ArMarkerCube : NetworkBehaviour
         base.OnNetworkSpawn();
         if (IsServer)
             NetworkManager.OnClientDisconnectCallback += OnClientLeft;
+        else
+            m_HostSighting.OnValueChanged += OnHostSighting;
         Begin();
     }
 
@@ -284,6 +297,7 @@ public class ArMarkerCube : NetworkBehaviour
     {
         if (IsServer && NetworkManager != null)
             NetworkManager.OnClientDisconnectCallback -= OnClientLeft;
+        m_HostSighting.OnValueChanged -= OnHostSighting;
         Finish();
         base.OnNetworkDespawn();
     }
@@ -333,6 +347,12 @@ public class ArMarkerCube : NetworkBehaviour
 
     void OnClientLeft(ulong client) => m_Arbiter.Forget(client);
 
+    void OnHostSighting(ArMarkerSample previous, ArMarkerSample current)
+    {
+        if (current.valid)
+            hostSighting?.Invoke(current);
+    }
+
     #region Sightings
 
     void OnSighted(ArMarkerTracker.Sighting sighting)
@@ -348,6 +368,9 @@ public class ArMarkerCube : NetworkBehaviour
             valid = true,
         };
         m_Chooser.AddLocal(sample);
+        ownSighting?.Invoke(sample);
+        if (IsSpawned && IsServer)
+            m_HostSighting.Value = sample;
         if (IsSpawned && !IsServer)
         {
             SightingRpc(sample);
@@ -586,6 +609,8 @@ public class ArMarkerCube : NetworkBehaviour
             text.Append($"  <color=#FA4>local is {m_Chooser.disagreement * 100f:0.0} cm off</color>");
         if (shows == Shows.Canvas)
             text.Append('\n').Append(CanvasState());
+        if (!string.IsNullOrEmpty(roomNote))
+            text.Append("\n<size=80%>").Append(roomNote).Append("</size>");
         if (tracker != null && !canvasLocked && (!tracker.active || !tracker.status.StartsWith("Tracking:")))
             text.Append("\n<size=80%>").Append(tracker.status).Append("</size>");
         if (m_Card != null)

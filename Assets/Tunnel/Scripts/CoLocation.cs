@@ -12,6 +12,10 @@ using XRMultiplayer;
 /// everyone. Once two players are both aligned, each hides the other's avatar (keeping the name tag over their head),
 /// so the other player's real body shows through passthrough, cut out of the tunnel by the headset's depth.
 /// One scene object holds the shared anchor; aligning is started from the TS Menu's "Align to QR" button.
+/// Then the AR marker fine-tunes it: whenever this (joining) headset and the host both see the AR marker, their
+/// sightings at the same moment are compared, and once they have differed steadily for about a second this headset's
+/// XR Origin glides by the turn (about the vertical only) and shift that bring its sighting onto the host's
+/// (<see cref="ArMarkerRoomAlignment"/>). The host never moves; players who haven't aligned can be aligned this way too.
 /// </summary>
 public class CoLocation : NetworkBehaviour
 {
@@ -30,6 +34,12 @@ public class CoLocation : NetworkBehaviour
     QrFloorScanner.Measurement? m_Pending;
     float m_NextAvatarCheck;
 
+    // Fine alignment from the AR marker (joining players only).
+    readonly ArMarkerRoomAlignment m_MarkerAlignment = new();
+    float m_NextMarkerCorrection, m_NextMarkerLog;
+    bool m_Gliding;
+    const float k_MarkerGlide = 0.5f, k_MarkerCooldown = 2f, k_MaxMarkerShiftWhenAligned = 1f;
+
     public static CoLocation instance { get; private set; }
 
     /// <summary>Progress and results, for the menu's status line.</summary>
@@ -47,12 +57,21 @@ public class CoLocation : NetworkBehaviour
     {
         base.OnNetworkSpawn();
         m_Anchor.OnValueChanged += OnAnchorChanged;
+        if (!IsServer)
+        {
+            ArMarkerCube.ownSighting += OnOwnMarker;
+            ArMarkerCube.hostSighting += OnHostMarker;
+        }
     }
 
     public override void OnNetworkDespawn()
     {
         base.OnNetworkDespawn();
         m_Anchor.OnValueChanged -= OnAnchorChanged;
+        ArMarkerCube.ownSighting -= OnOwnMarker;
+        ArMarkerCube.hostSighting -= OnHostMarker;
+        m_MarkerAlignment.Clear();
+        ArMarkerCube.roomNote = null;
         // A new session starts unaligned.
         CoLocationState.isAligned = false;
         m_Pending = null;
@@ -135,6 +154,81 @@ public class CoLocation : NetworkBehaviour
         SetStatus($"Aligned with the shared room ({measured.samples} sightings, within {measured.spread * 100f:0} cm), " +
             $"{NetworkManager.ConnectedClientsIds.Count} players in this session.");
     }
+
+    #region Fine alignment from the AR marker
+
+    void OnOwnMarker(ArMarkerSample sample)
+    {
+        if (!m_Gliding)
+            m_MarkerAlignment.AddOwn(sample);
+    }
+
+    void OnHostMarker(ArMarkerSample sample)
+    {
+        if (m_Gliding || !IsSpawned || IsServer)
+            return;
+        m_MarkerAlignment.AddHost(sample);
+        if (Time.unscaledTime < m_NextMarkerCorrection)
+            return;
+        if (m_MarkerAlignment.TryCorrection(out var correction, out string why))
+        {
+            ApplyMarkerCorrection(correction);
+        }
+        else if (Time.unscaledTime >= m_NextMarkerLog && m_MarkerAlignment.pairs > 0)
+        {
+            m_NextMarkerLog = Time.unscaledTime + 2f;
+            Debug.Log($"[QR] marker alignment: waiting ({why})");
+        }
+    }
+
+    // Moves this headset's XR Origin so its sighting of the marker lands on the host's: a turn about the vertical
+    // through the sighting, then a shift; glided over half a second.
+    void ApplyMarkerCorrection(ArMarkerRoomAlignment.Correction correction)
+    {
+        var origin = FindAnyObjectByType<XROrigin>();
+        if (origin == null)
+            return;
+        var tableTop = FindAnyObjectByType<TableTop>();
+        var table = tableTop != null ? new Pose(tableTop.transform.position, tableTop.transform.rotation) : Pose.identity;
+        var pivot = table.position + table.rotation * correction.pivot;
+        var target = table.position + table.rotation * correction.target;
+        float shift = Vector3.Distance(pivot, target);
+        if (shift > k_MaxMarkerShiftWhenAligned && CoLocationState.isAligned)
+        {
+            Debug.Log($"[QR] marker alignment: ignored a {shift * 100f:0} cm correction (aligned by the QR code already): {correction}");
+            m_MarkerAlignment.Clear();
+            m_NextMarkerCorrection = Time.unscaledTime + k_MarkerCooldown;
+            return;
+        }
+        StartCoroutine(GlideOrigin(origin.transform, Quaternion.AngleAxis(correction.turn, Vector3.up), pivot, target, correction, shift));
+    }
+
+    System.Collections.IEnumerator GlideOrigin(Transform origin, Quaternion turn, Vector3 pivot, Vector3 target,
+        ArMarkerRoomAlignment.Correction correction, float shift)
+    {
+        m_Gliding = true;
+        Vector3 fromPosition = origin.position, toPosition = turn * (origin.position - pivot) + target;
+        Quaternion fromRotation = origin.rotation, toRotation = turn * origin.rotation;
+        for (float t = 0f; t < k_MarkerGlide; t += Time.unscaledDeltaTime)
+        {
+            float k = Mathf.SmoothStep(0f, 1f, t / k_MarkerGlide);
+            origin.SetPositionAndRotation(Vector3.Lerp(fromPosition, toPosition, k), Quaternion.Slerp(fromRotation, toRotation, k));
+            yield return null;
+        }
+        origin.SetPositionAndRotation(toPosition, toRotation);
+        m_Gliding = false;
+        m_MarkerAlignment.Clear(); // earlier sightings are in the old frame
+        m_NextMarkerCorrection = Time.unscaledTime + k_MarkerCooldown;
+        bool wasAligned = CoLocationState.isAligned;
+        MarkAligned();
+        string note = $"Aligned to the host via the marker: moved {shift * 1000f:0} mm, turned {correction.turn:0.0} deg";
+        ArMarkerCube.roomNote = note;
+        Debug.Log($"[QR] {note} ({correction}; {(wasAligned ? "after the QR alignment" : "without a QR alignment")}); origin now {toPosition:F3}, yaw {toRotation.eulerAngles.y:0.0}");
+        ArMarkerTracker.instance?.Log($"room alignment: {note} ({correction})");
+        SetStatus(note + ".");
+    }
+
+    #endregion
 
     void MarkAligned()
     {
