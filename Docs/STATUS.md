@@ -136,5 +136,5 @@ What has been built, what is in progress, and where each build is. Updated as wo
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |
 | Quest 3S 3497C10HC4041K | 12.11.2026.1 |
-| Quest 3S 3497C10HC4004X | 10.11.2026.2 |
+| Quest 3S 3497C10HC4004X | 12.11.2026.1 |
 | Quest 3 2G0YC1ZF760BMQ | 10.11.2026.2 |
