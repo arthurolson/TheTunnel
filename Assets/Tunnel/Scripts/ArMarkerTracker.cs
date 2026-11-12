@@ -40,6 +40,9 @@ public class ArMarkerTracker : MonoBehaviour
     [SerializeField] float m_SnapshotEvery = 15f;
     [SerializeField] int m_MaxSnapshots = 24;
     [SerializeField] bool m_SwapEyes;
+    [SerializeField]
+    [Tooltip("Search each camera's image at half size (four times faster; the marker is still found from about 1.5 m).")]
+    bool m_HalveImages = true;
 
     /// <summary>One sighting, ready to share.</summary>
     public struct Sighting
@@ -104,6 +107,8 @@ public class ArMarkerTracker : MonoBehaviour
         public ArMarkerMath.ImageCheck checkL, checkR;
         public Pose markerInLeft;
         public float processMs;
+        public bool disagreed;
+        public float apart;
     }
     Thread m_Thread;
     readonly object m_Lock = new();
@@ -118,7 +123,7 @@ public class ArMarkerTracker : MonoBehaviour
     volatile string m_SolverError;
 
     // Counts for the once-a-second log line.
-    int m_Pairs, m_Dropped, m_Unpaired, m_Found, m_Both, m_OnlyL, m_OnlyR, m_NoHead, m_NotReady;
+    int m_Pairs, m_Dropped, m_Unpaired, m_Found, m_Both, m_OnlyL, m_OnlyR, m_NoHead, m_NotReady, m_Disagreed;
     float m_SumAge, m_SumProcess, m_SumQuality;
     float m_NextReport;
     float m_NextSnapshot;
@@ -180,7 +185,7 @@ public class ArMarkerTracker : MonoBehaviour
         m_LastPairTime = -1;
         m_Snapshots = 0;
         Log($"starting: artoolkitX {ArMarkerStereoSolver.Version()}, barcode 3x3 Hamming(6,3) id {m_BarcodeId}, " +
-            $"{m_MarkerWidth * 1000f:0} mm, axis turn {m_AxisTurn}, head pose lead {m_HeadPoseLead * 1000f:0} ms, threshold {m_Threshold}, swap eyes {m_SwapEyes}");
+            $"{m_MarkerWidth * 1000f:0} mm, axis turn {m_AxisTurn}, head pose lead {m_HeadPoseLead * 1000f:0} ms, threshold {m_Threshold}, swap eyes {m_SwapEyes}, halve images {m_HalveImages}");
 
         if (RealMarkerTracker.instance != null && RealMarkerTracker.instance.stage != RealMarkerTracker.Stage.Off)
         {
@@ -599,6 +604,8 @@ public class ArMarkerTracker : MonoBehaviour
             if (sighting.cameras == 0)
                 continue; // artoolkitX's pose isn't borne out by either image
             m_Found++;
+            if (done.disagreed)
+                m_Disagreed++;
             m_SumQuality += sighting.quality;
             if (sighting.cameras == 3) m_Both++;
             else if (sighting.cameras == 1) m_OnlyL++;
@@ -613,14 +620,14 @@ public class ArMarkerTracker : MonoBehaviour
         int processed = Mathf.Max(1, m_Pairs - m_Dropped - m_Unpaired - m_NoHead - m_NotReady);
         var head = Camera.main != null ? Camera.main.transform : null;
         Log($"1 s: pairs {m_Pairs} (artoolkitX not ready {m_NotReady}, busy-dropped {m_Dropped}, unsynced {m_Unpaired}, no head pose {m_NoHead}), found {m_Found} " +
-            $"(L+R {m_Both}, L only {m_OnlyL}, R only {m_OnlyR}), quality {(m_Found > 0 ? m_SumQuality / m_Found : 0f):0.00}, " +
+            $"(L+R {m_Both}, L only {m_OnlyL}, R only {m_OnlyR}; both found but disagreed {m_Disagreed}), quality {(m_Found > 0 ? m_SumQuality / m_Found : 0f):0.00}, " +
             $"image age {m_SumAge / processed * 1000f:0} ms, artoolkitX {m_SumProcess / processed:0.0} ms" +
             (head != null ? $", head {head.position:F2} yaw {head.eulerAngles.y:0}" : ""));
         if (m_SolverState == SolverStarting)
             status = "Starting artoolkitX...";
         else if (m_Found > 0 || m_Pairs > 0)
             status = $"Tracking: {m_Pairs} pairs/s, marker in {m_Found} (L+R {m_Both}, L {m_OnlyL}, R {m_OnlyR}), images {m_SumAge / processed * 1000f:0} ms old.";
-        m_Pairs = m_Dropped = m_Unpaired = m_Found = m_Both = m_OnlyL = m_OnlyR = m_NoHead = m_NotReady = 0;
+        m_Pairs = m_Dropped = m_Unpaired = m_Found = m_Both = m_OnlyL = m_OnlyR = m_NoHead = m_NotReady = m_Disagreed = 0;
         m_SumAge = m_SumProcess = m_SumQuality = 0f;
     }
 
@@ -678,9 +685,21 @@ public class ArMarkerTracker : MonoBehaviour
     {
         var solver = new ArMarkerStereoSolver();
         ArMarkerStereoSolver.log += Log;
+        // Each camera's image, halved (2x2 averaged) unless halveImages=false: four times fewer pixels to search, and
+        // the marker is still found from about a metre and a half.
+        bool halve = m_HalveImages;
+        var left = halve ? setup.left.Halved() : setup.left;
+        var right = halve ? setup.right.Halved() : setup.right;
+        var smallL = halve ? new byte[left.width * left.height] : null;
+        var smallR = halve ? new byte[right.width * right.height] : null;
+        var fusion = new ArMarkerFusion();
+        string offsetFile = setup.folder != null ? Path.Combine(setup.folder, "stereo-offset.txt") : null;
+        if (fusion.Load(offsetFile))
+            Log("loaded " + fusion);
+        double nextOffsetLog = 0;
         try
         {
-            if (!solver.Start(setup.left, setup.right, setup.rightFromLeft, setup.id, setup.width, setup.threshold, cacheFolder))
+            if (!solver.Start(left, right, setup.rightFromLeft, setup.id, setup.width, setup.threshold, cacheFolder))
             {
                 Log("artoolkitX: " + solver.error);
                 m_SolverError = solver.error;
@@ -688,7 +707,8 @@ public class ArMarkerTracker : MonoBehaviour
                 return;
             }
             m_SolverState = SolverRunning;
-            Log($"artoolkitX {ArMarkerStereoSolver.Version()} stereo started (cache {cacheFolder})");
+            Log($"artoolkitX {ArMarkerStereoSolver.Version()} started: each camera's {left.width}x{left.height} image searched on its own, " +
+                $"poses joined here (cache {cacheFolder})");
             int snapshots = 0;
             var watch = new System.Diagnostics.Stopwatch();
             while (!m_Stop)
@@ -708,25 +728,48 @@ public class ArMarkerTracker : MonoBehaviour
                 try
                 {
                     watch.Restart();
-                    done.processed = solver.Process(job.left, job.right, out var result);
+                    var imageL = job.left;
+                    var imageR = job.right;
+                    if (halve)
+                    {
+                        ArMarkerStereoSolver.Halve(job.left, setup.left.width, setup.left.height, smallL);
+                        ArMarkerStereoSolver.Halve(job.right, setup.right.width, setup.right.height, smallR);
+                        imageL = smallL;
+                        imageR = smallR;
+                    }
+                    done.processed = solver.ProcessEach(imageL, imageR, out var views);
                     done.processMs = (float)watch.Elapsed.TotalMilliseconds;
                     if (solver.error != null)
                         done.error = solver.error;
-                    if (done.processed && result.visible)
+                    if (done.processed && (views.left || views.right))
                     {
-                        done.visible = true;
-                        done.markerInLeft = result.markerInLeft;
-                        done.checkL = ArMarkerMath.CheckImage(setup.left, job.left, result.markerInLeft, setup.width);
-                        var markerInRight = ArMarkerMath.Mul(setup.rightFromLeft, result.markerInLeft);
-                        done.checkR = ArMarkerMath.CheckImage(setup.right, job.right, markerInRight, setup.width);
-                        byte cameras = (byte)((done.checkL.seen ? ArMarkerSample.LeftCamera : 0) | (done.checkR.seen ? ArMarkerSample.RightCamera : 0));
+                        // Each camera checked against its own image with its own pose.
+                        done.checkL = views.left ? ArMarkerMath.CheckImage(left, imageL, views.leftInLeft, setup.width) : default;
+                        done.checkR = views.right ? ArMarkerMath.CheckImage(right, imageR, views.rightInRight, setup.width) : default;
+                        var fused = fusion.Fuse(views.left, views.leftInLeft, done.checkL.edgePixels * Mathf.Max(done.checkL.edgeMatch, 0.1f),
+                            views.right, views.rightInRight, done.checkR.edgePixels * Mathf.Max(done.checkR.edgeMatch, 0.1f),
+                            setup.rightFromLeft, job.captureClock);
+                        done.visible = fused.visible;
+                        done.markerInLeft = fused.markerInLeft;
+                        done.disagreed = fused.disagreed;
+                        done.apart = fused.apart;
+                        bool l = (fused.cameras & ArMarkerSample.LeftCamera) != 0, r = (fused.cameras & ArMarkerSample.RightCamera) != 0;
+                        float pixels = l && r ? (done.checkL.edgePixels + done.checkR.edgePixels) * 0.5f : l ? done.checkL.edgePixels : done.checkR.edgePixels;
+                        float facing = Mathf.Max(l ? done.checkL.facing : 0f, r ? done.checkR.facing : 0f);
+                        float match = l && r ? (done.checkL.edgeMatch + done.checkR.edgeMatch) * 0.5f : l ? done.checkL.edgeMatch : done.checkR.edgeMatch;
+                        float confidence = Mathf.Max(views.left ? views.confidenceLeft : 0f, views.right ? views.confidenceRight : 0f);
                         done.sighting = new Sighting
                         {
-                            cubeInTable = ArMarkerMath.Mul(job.tableFromLeft, ArMarkerMath.CubeFromMarker(result.markerInLeft)),
-                            quality = ArMarkerMath.Quality(result.confidence, done.checkL, done.checkR),
-                            cameras = cameras,
-                            confidence = result.confidence,
+                            cubeInTable = ArMarkerMath.Mul(job.tableFromLeft, ArMarkerMath.CubeFromMarker(fused.markerInLeft)),
+                            quality = ArMarkerMath.Quality(confidence, l, r, pixels, facing, match),
+                            cameras = fused.cameras,
+                            confidence = confidence,
                         };
+                    }
+                    if (job.captureClock >= nextOffsetLog && fusion.learnt > 0)
+                    {
+                        nextOffsetLog = job.captureClock + 5.0;
+                        Log(fusion.ToString());
                     }
                     if (job.snapshot && setup.folder != null)
                     {
@@ -748,6 +791,7 @@ public class ArMarkerTracker : MonoBehaviour
         }
         finally
         {
+            fusion.Save(offsetFile);
             ArMarkerStereoSolver.log -= Log;
             solver.Dispose();
         }
@@ -1039,6 +1083,7 @@ public class ArMarkerTracker : MonoBehaviour
                 case "headPoseLead" when float.TryParse(value, NumberStyles.Float, culture, out float lead): m_HeadPoseLead = lead; break;
                 case "threshold" when Enum.TryParse(value, true, out ArMarkerStereoSolver.Threshold t): m_Threshold = t; break;
                 case "swapEyes" when bool.TryParse(value, out bool swap): m_SwapEyes = swap; break;
+                case "halveImages" when bool.TryParse(value, out bool halveImages): m_HalveImages = halveImages; break;
                 case "barcodeId" when int.TryParse(value, out int id): m_BarcodeId = id; break;
                 case "markerWidth" when float.TryParse(value, NumberStyles.Float, culture, out float width): m_MarkerWidth = width; break;
                 case "snapshotEvery" when float.TryParse(value, NumberStyles.Float, culture, out float every): m_SnapshotEvery = every; break;

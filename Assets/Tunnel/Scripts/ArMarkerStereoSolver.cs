@@ -90,6 +90,8 @@ public sealed class ArMarkerStereoSolver : IDisposable
             m_Trackable = ARX_pinvoke.arwAddTrackable($"single_barcode;{barcodeId};{markerWidthMeters * 1000f:0.###}");
             if (m_Trackable < 0)
                 return Fail("artoolkitX didn't accept the marker");
+            // From now on warnings and errors only: each camera on its own makes the marker "appear" and "vanish" every pair.
+            ARX_pinvoke.arwSetLogLevel(2);
             return true;
         }
         catch (DllNotFoundException e)
@@ -190,6 +192,75 @@ public sealed class ArMarkerStereoSolver : IDisposable
             bool insideY = y >= inset && y < inset + square;
             for (int x = 0; x < paper; x++)
                 image[row + x] = insideY && x >= inset && x < inset + square ? (byte)20 : (byte)235;
+        }
+    }
+
+    /// <summary>What each camera found on its own (see <see cref="ProcessEach"/>).</summary>
+    public struct Views
+    {
+        public bool left, right;
+        /// <summary>The marker in the left camera's Unity frame, from the left image alone.</summary>
+        public Pose leftInLeft;
+        /// <summary>The marker in the right camera's Unity frame, from the right image alone.</summary>
+        public Pose rightInRight;
+        public float confidenceLeft, confidenceRight;
+    }
+
+    byte[] m_BlankLeft, m_BlankRight;
+
+    /// <summary>
+    /// Finds the marker in each image on its own: the left image with a blank right one, then the right image with a
+    /// blank left one, so each camera's pose depends only on its own image and lens, never on the left-to-right
+    /// calibration. (artoolkitX's own stereo fusion requires the two views to agree to within about 3 pixels through
+    /// that calibration, and otherwise reports nothing or drops a view; on the headset it found the marker in neither
+    /// image even when both showed it clearly.) The caller fuses the two (<see cref="ArMarkerFusion"/>).
+    /// Returns false while artoolkitX is still starting.
+    /// </summary>
+    public bool ProcessEach(byte[] left, byte[] right, out Views views)
+    {
+        views = default;
+        if (m_BlankLeft == null || m_BlankLeft.Length != m_Left.width * m_Left.height)
+            m_BlankLeft = Blank(m_Left.width * m_Left.height);
+        if (m_BlankRight == null || m_BlankRight.Length != m_Right.width * m_Right.height)
+            m_BlankRight = Blank(m_Right.width * m_Right.height);
+
+        if (!Process(left, m_BlankRight, out var fromLeft))
+            return false;
+        if (fromLeft.visible)
+        {
+            views.left = true;
+            views.leftInLeft = fromLeft.markerInLeft;
+            views.confidenceLeft = fromLeft.confidence;
+        }
+        if (!Process(m_BlankLeft, right, out var fromRight))
+            return false;
+        if (fromRight.visible)
+        {
+            views.right = true;
+            // artoolkitX solved it in the right camera and reports it in both frames: the right one is exact.
+            views.rightInRight = ArMarkerMath.MarkerPoseFromGl(m_MatrixR);
+            views.confidenceRight = fromRight.confidence;
+        }
+        return true;
+    }
+
+    static byte[] Blank(int length)
+    {
+        var blank = new byte[length];
+        for (int i = 0; i < length; i++)
+            blank[i] = 128;
+        return blank;
+    }
+
+    /// <summary>Halves an image (8-bit, rows from the top) by averaging 2x2 blocks.</summary>
+    public static void Halve(byte[] source, int width, int height, byte[] into)
+    {
+        int w = width / 2, h = height / 2;
+        for (int y = 0; y < h; y++)
+        {
+            int a = 2 * y * width, b = a + width, o = y * w;
+            for (int x = 0; x < w; x++, a += 2, b += 2)
+                into[o + x] = (byte)((source[a] + source[a + 1] + source[b] + source[b + 1] + 2) >> 2);
         }
     }
 

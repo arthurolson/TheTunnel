@@ -42,6 +42,10 @@ public static class ArMarkerMath
             return new CameraModel(imageWidth, imageHeight, fx / scale, fy / scale, (cx - offsetX) / scale, (cy - offsetY) / scale);
         }
 
+        /// <summary>This lens for the image halved by averaging 2x2 blocks (pixel centres move with the blocks).</summary>
+        public CameraModel Halved() =>
+            new(width / 2, height / 2, fx * 0.5f, fy * 0.5f, (cx + 0.5f) * 0.5f - 0.5f, (cy + 0.5f) * 0.5f - 0.5f);
+
         public override string ToString() => $"{width}x{height} f=({fx:F1},{fy:F1}) c=({cx:F1},{cy:F1})";
     }
 
@@ -249,6 +253,21 @@ public static class ArMarkerMath
             return false;
         value = luminance[y * camera.width + x];
         return true;
+    }
+
+    /// <summary>
+    /// How much to trust one headset's sighting (0-1) from which cameras found the marker on their own: artoolkitX's
+    /// confidence, how large and how squarely the marker appears, how well its outline matches the images, and both
+    /// cameras rather than one.
+    /// </summary>
+    public static float Quality(float confidence, bool left, bool right, float pixels, float facing, float match)
+    {
+        if (!left && !right)
+            return 0f;
+        float size = Mathf.Clamp01((pixels - 20f) / 80f);
+        float angle = Mathf.Clamp01((facing - 0.15f) / 0.55f);
+        float stereo = left && right ? 1f : 0.6f;
+        return Mathf.Clamp01(Mathf.Clamp01(confidence) * Mathf.Sqrt(size) * angle * Mathf.Clamp01(match) * stereo);
     }
 
     /// <summary>

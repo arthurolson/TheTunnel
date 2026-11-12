@@ -222,6 +222,203 @@ static class ArMarkerEditorTests
         return report.ToString();
     }
 
+    // A headset's lens on the head from Android's camera characteristics, as the tracker reads it (Meta's turn).
+    static Pose AndroidLens(float[] t, float[] r)
+    {
+        var lensFromHead = new Quaternion(-r[0], -r[1], r[2], r[3]);
+        return new Pose(new Vector3(t[0], t[1], -t[2]), Quaternion.Inverse(lensFromHead) * Quaternion.Euler(180f, 0f, 0f));
+    }
+
+    /// <summary>
+    /// Replays a headset's snapshots (files/ARMarker/snapshot-*.png: both camera images side by side at half size)
+    /// through artoolkitX's own stereo fusion (old) and through each camera on its own plus our fusion (new), with that
+    /// headset's lens calibration (Quest 3S 3497C10HC4004X's, from its log of 12 Nov 2026).
+    /// </summary>
+    static readonly List<(Pose left, Pose right)> s_ReplayPairs = new();
+
+    public static string ReplaySnapshots(string folder)
+    {
+        var headFromLeft = AndroidLens(new[] { -0.0317f, -0.0127f, -0.0738f }, new[] { -0.9984f, -0.0014f, 0.0057f, 0.0566f });
+        var headFromRight = AndroidLens(new[] { 0.0318f, -0.0129f, -0.0734f }, new[] { -0.9987f, 0.0026f, -0.0024f, 0.0518f });
+        var rightFromLeft = ArMarkerMath.RightFromLeft(headFromLeft, headFromRight);
+        // The snapshots are already half size: the lenses halved.
+        var left = new ArMarkerMath.CameraModel(1728, 1728, 1174.3f, 1174.3f, 862.1f, 867.4f).Halved();
+        var right = new ArMarkerMath.CameraModel(1728, 1728, 1171.3f, 1171.3f, 862.2f, 864.5f).Halved();
+        var report = new StringBuilder($"[ARMarker] snapshot replay ({folder})\n");
+        var solver = new ArMarkerStereoSolver();
+        var fusion = new ArMarkerFusion();
+        s_ReplayPairs.Clear();
+        int oldFound = 0, oldBoth = 0, newFound = 0, newBoth = 0, files = 0;
+        try
+        {
+            if (!solver.Start(left, right, rightFromLeft, 1, k_Width))
+                return report.Append("solver didn't start: ").Append(solver.error).ToString();
+            var paths = System.IO.Directory.GetFiles(folder, "snapshot-*.png");
+            System.Array.Sort(paths);
+            double time = 0;
+            foreach (var path in paths)
+            {
+                var texture = new Texture2D(2, 2);
+                texture.LoadImage(System.IO.File.ReadAllBytes(path));
+                if (texture.width != left.width * 2 || texture.height != left.height)
+                {
+                    UnityEngine.Object.DestroyImmediate(texture);
+                    continue;
+                }
+                files++;
+                var pixels = texture.GetPixels32();
+                UnityEngine.Object.DestroyImmediate(texture);
+                var imageL = new byte[left.width * left.height];
+                var imageR = new byte[right.width * right.height];
+                for (int y = 0; y < left.height; y++)
+                    for (int x = 0; x < left.width; x++)
+                    {
+                        int source = (left.height - 1 - y) * left.width * 2; // the PNG's rows run from the bottom
+                        imageL[y * left.width + x] = pixels[source + x].g;
+                        imageR[y * left.width + x] = pixels[source + left.width + x].g;
+                    }
+
+                // Old: artoolkitX's stereo fusion through the lens calibration.
+                ArMarkerStereoSolver.Result result = default;
+                bool old = false;
+                for (int i = 0; i < 4 && !old; i++)
+                    old = solver.Process((byte[])imageL.Clone(), (byte[])imageR.Clone(), out result) && result.visible;
+                string oldText = "nothing";
+                if (old)
+                {
+                    oldFound++;
+                    var cl = ArMarkerMath.CheckImage(left, imageL, result.markerInLeft, k_Width);
+                    var cr = ArMarkerMath.CheckImage(right, imageR, ArMarkerMath.Mul(rightFromLeft, result.markerInLeft), k_Width);
+                    oldText = cl.seen && cr.seen ? "L+R" : cl.seen ? "L only" : cr.seen ? "R only" : "pose fits neither image";
+                    if (cl.seen && cr.seen)
+                        oldBoth++;
+                }
+
+                // New: each camera on its own, joined here.
+                ArMarkerStereoSolver.Views views = default;
+                bool processed = false;
+                for (int i = 0; i < 4 && !processed; i++)
+                    processed = solver.ProcessEach((byte[])imageL.Clone(), (byte[])imageR.Clone(), out views);
+                var checkL = views.left ? ArMarkerMath.CheckImage(left, imageL, views.leftInLeft, k_Width) : default;
+                var checkR = views.right ? ArMarkerMath.CheckImage(right, imageR, views.rightInRight, k_Width) : default;
+                time += 1.0; // snapshots are seconds apart: no "last pose" carried between them
+                var fused = fusion.Fuse(views.left, views.leftInLeft, checkL.edgePixels, views.right, views.rightInRight, checkR.edgePixels, rightFromLeft, time);
+                string newText = !fused.visible ? "nothing"
+                    : fused.cameras == 3 ? $"L+R ({fused.apart * 1000f:0} mm, {fused.angle:0.0} deg apart)"
+                    : fused.disagreed ? $"both found, disagreed ({fused.apart * 1000f:0} mm, {fused.angle:0.0} deg): took {(fused.cameras == 1 ? "L" : "R")}"
+                    : fused.cameras == 1 ? "L only" : "R only";
+                if (fused.visible)
+                    newFound++;
+                if (views.left && views.right)
+                {
+                    newBoth++;
+                    s_ReplayPairs.Add((views.leftInLeft, views.rightInRight));
+                }
+                report.AppendLine($"  {System.IO.Path.GetFileName(path)}: old {oldText} | new: left {(views.left ? "found" : "-")}, right {(views.right ? "found" : "-")} -> {newText}" +
+                    (fused.visible ? $", {fused.markerInLeft.position.magnitude * 100f:0} cm away" : ""));
+            }
+        }
+        finally
+        {
+            solver.Dispose();
+        }
+        report.AppendLine($"  {files} pairs: old found {oldFound} (L+R {oldBoth}); new found {newFound} (both cameras found it in {newBoth}); {fusion}");
+        // How far apart the two cameras' sightings are once the right camera's turn has been learnt (a second pass).
+        var apart = new List<string>();
+        foreach (var (l, r) in s_ReplayPairs)
+        {
+            var rightInLeft = fusion.RightInLeft(r, rightFromLeft);
+            var raw = ArMarkerMath.Mul(ArMarkerMath.Inverse(rightFromLeft), r);
+            apart.Add($"{Vector3.Distance(raw.position, l.position) * 1000f:0}->{Vector3.Distance(rightInLeft.position, l.position) * 1000f:0} mm");
+        }
+        report.AppendLine("  left and right sightings apart, before -> after the learnt turn: " + string.Join(", ", apart));
+        Debug.Log(report.ToString());
+        return report.ToString();
+    }
+
+    [MenuItem("Tunnel/Paint/Test AR Marker Miscalibrated and Distorted (rendered images)")]
+    public static string TestMiscalibration()
+    {
+        // Rendered with the true rig; artoolkitX is given a calibration that is off by about a degree and a millimetre,
+        // and the images carry a little barrel distortion the calibration doesn't model.
+        var left = new ArMarkerMath.CameraModel(1728, 1728, 1174.3f, 1174.3f, 862.1f, 867.4f).Halved();
+        var right = new ArMarkerMath.CameraModel(1728, 1728, 1171.3f, 1171.3f, 862.2f, 864.5f).Halved();
+        var headFromLeft = new Pose(new Vector3(-0.0317f, -0.0127f, 0.0738f), Quaternion.Euler(6.3f, 0.3f, -0.2f));
+        var headFromRight = new Pose(new Vector3(0.0318f, -0.0129f, 0.0734f), Quaternion.Euler(6.4f, -0.6f, 0.3f));
+        var trueRightFromLeft = ArMarkerMath.RightFromLeft(headFromLeft, headFromRight);
+        var givenRightFromLeft = ArMarkerMath.Mul(new Pose(new Vector3(0.001f, -0.0008f, 0.0005f), Quaternion.Euler(0.3f, -1.0f, 0.2f)), trueRightFromLeft);
+        var head = new Pose(new Vector3(0f, 1.4f, 0f), Quaternion.Euler(20f, 0f, 0f));
+        var report = new StringBuilder("[ARMarker] miscalibration test: calibration off by 1.1 deg (mostly a turn about the vertical, as measured on the headset) and 1.4 mm, barrel distortion k1 = -0.02\n");
+        var solver = new ArMarkerStereoSolver();
+        var fusion = new ArMarkerFusion();
+        int oldFound = 0, newBoth = 0, total = 0;
+        float worst = 0f;
+        try
+        {
+            if (!solver.Start(left, right, givenRightFromLeft, 1, k_Width))
+                return report.Append("solver didn't start: ").Append(solver.error).ToString();
+            var random = new System.Random(3);
+            for (int n = 0; n < 12; n++)
+            {
+                total++;
+                var offset = new Vector3((float)random.NextDouble() * 0.3f - 0.15f, (float)random.NextDouble() * 0.2f - 0.15f, 0.35f + (float)random.NextDouble() * 0.5f);
+                var tilt = Quaternion.Euler((float)random.NextDouble() * 70f - 35f, (float)random.NextDouble() * 60f - 30f, (float)random.NextDouble() * 360f);
+                var markerWorld = ArMarkerMath.Mul(head, new Pose(offset, Quaternion.LookRotation(offset.normalized, Vector3.up) * tilt));
+                var leftWorld = ArMarkerMath.Mul(head, headFromLeft);
+                var rightWorld = ArMarkerMath.Mul(head, headFromRight);
+                var imageL = Distort(Render(left, ArMarkerMath.Mul(ArMarkerMath.Inverse(leftWorld), markerWorld)), left, -0.02f);
+                var imageR = Distort(Render(right, ArMarkerMath.Mul(ArMarkerMath.Inverse(rightWorld), markerWorld)), right, -0.02f);
+
+                ArMarkerStereoSolver.Result result = default;
+                bool old = false;
+                for (int i = 0; i < 6 && !old; i++)
+                    old = solver.Process((byte[])imageL.Clone(), (byte[])imageR.Clone(), out result) && result.visible;
+                if (old)
+                    oldFound++;
+
+                ArMarkerStereoSolver.Views views = default;
+                bool processed = false;
+                for (int i = 0; i < 6 && !processed; i++)
+                    processed = solver.ProcessEach((byte[])imageL.Clone(), (byte[])imageR.Clone(), out views);
+                var cl = views.left ? ArMarkerMath.CheckImage(left, imageL, views.leftInLeft, k_Width) : default;
+                var cr = views.right ? ArMarkerMath.CheckImage(right, imageR, views.rightInRight, k_Width) : default;
+                var fused = fusion.Fuse(views.left, views.leftInLeft, cl.edgePixels, views.right, views.rightInRight, cr.edgePixels, givenRightFromLeft, n * 0.033);
+                float error = fused.visible ? Vector3.Distance(ArMarkerMath.Apply(leftWorld, fused.markerInLeft.position), markerWorld.position) * 1000f : float.NaN;
+                if (fused.cameras == 3)
+                    newBoth++;
+                if (fused.visible)
+                    worst = Mathf.Max(worst, error);
+                report.AppendLine($"  {offset.z * 100f:0} cm: old {(old ? "found" : "NOTHING")} | new {(fused.cameras == 3 ? "L+R" : fused.cameras == 1 ? "L only" : fused.cameras == 2 ? "R only" : "nothing")}" +
+                    (fused.visible ? $", {error:0.0} mm from the truth, views {fused.apart * 1000f:0} mm apart" : ""));
+            }
+        }
+        finally
+        {
+            solver.Dispose();
+        }
+        bool ok = newBoth == total && worst < 20f; // the distortion isn't modelled, so a few mm of error remain
+        report.AppendLine($"  old (artoolkitX's stereo fusion) found {oldFound} of {total}; new found L+R in {newBoth} of {total}, worst {worst:0.0} mm; {fusion}; {(ok ? "PASS" : "FAIL")}");
+        Debug.Log(report.ToString());
+        return report.ToString();
+    }
+
+    // Barrel (k1 < 0) or pincushion distortion about the principal point, by resampling.
+    static byte[] Distort(byte[] image, ArMarkerMath.CameraModel camera, float k1)
+    {
+        var result = new byte[image.Length];
+        for (int y = 0; y < camera.height; y++)
+            for (int x = 0; x < camera.width; x++)
+            {
+                float nx = (x - camera.cx) / camera.fx, ny = (y - camera.cy) / camera.fy;
+                float r2 = nx * nx + ny * ny;
+                // Where this distorted pixel's light comes from in the ideal image (one fixed-point step of the inverse).
+                float scale = 1f / (1f + k1 * r2);
+                int sx = Mathf.RoundToInt(nx * scale * camera.fx + camera.cx), sy = Mathf.RoundToInt(ny * scale * camera.fy + camera.cy);
+                result[y * camera.width + x] = sx >= 0 && sy >= 0 && sx < camera.width && sy < camera.height ? image[sy * camera.width + sx] : (byte)120;
+            }
+        return result;
+    }
+
     [MenuItem("Tunnel/Paint/Test AR Canvas Placement (rendered panel)")]
     public static string TestCanvasPlacement()
     {
