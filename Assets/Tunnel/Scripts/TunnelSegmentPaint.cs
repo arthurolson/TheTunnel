@@ -49,6 +49,10 @@ public class TunnelSegmentPaint : NetworkBehaviour
     [Tooltip("The host keeps at most this many stamps for players who join later (the oldest go first).")]
     int m_MaxHistoryStamps = 500000;
 
+    [SerializeField]
+    [Tooltip("Every headset keeps the record of the marks, not just the host, so any player can copy them (Copy to wall).")]
+    bool m_HistoryOnEveryHeadset;
+
     /// <summary>Every segment's paint.</summary>
     public static readonly List<TunnelSegmentPaint> all = new();
 
@@ -231,7 +235,10 @@ public class TunnelSegmentPaint : NetworkBehaviour
             ClearPreviewRpc(marker);
     }
 
-    /// <summary>Whether anything has been painted here (and not cleared). Known on the host, or when not shared.</summary>
+    /// <summary>
+    /// Whether anything has been painted here (and not cleared). Known on the host, when not shared, or everywhere
+    /// when every headset keeps the record.
+    /// </summary>
     public bool hasMarks => m_History.Exists(op => op.kind == OpKind.Stamps && op.style.mode != PaintMode.Eraser);
 
     /// <summary>
@@ -364,7 +371,7 @@ public class TunnelSegmentPaint : NetworkBehaviour
             m_HistoryStamps = 0;
         }
         m_Pending.Add((kind, style, uvs));
-        if (!IsSpawned || IsServer)
+        if (!IsSpawned || IsServer || m_HistoryOnEveryHeadset)
             Remember(kind, style, uvs);
     }
 

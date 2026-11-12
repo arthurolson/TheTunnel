@@ -25,7 +25,9 @@ using XRMultiplayer;
 /// a disk then gives the marker its colour. Copy to wall puts a copy of the panel's painting on the tunnel wall in
 /// view, for everyone (<see cref="PaintingCopy"/>). AR marker cube places (or removes) a tracking test for everyone: a
 /// wireframe cube that stands on a printed 60 mm marker, tracked by both cameras of every headset
-/// (<see cref="ArMarkerCube"/>); while it runs, the status line shows its state on this headset.
+/// (<see cref="ArMarkerCube"/>); AR canvas instead lays a virtual canvas on the physical panel the marker is taped to,
+/// which the marker paints on, and Copy to wall then copies its painting. While either runs, the status line shows
+/// its state on this headset.
 /// Shared: everyone sees the same disks, choices and messages. Works locally when not connected.
 /// </summary>
 public class TunnelPalette : NetworkBehaviour
@@ -62,8 +64,9 @@ public class TunnelPalette : NetworkBehaviour
     [Tooltip("Tunnel/Paint Brush.")]
     Shader m_BoardBrush;
 
-    [Header("AR marker cube (tracking test)")]
+    [Header("AR marker cube (tracking test) and AR canvas")]
     [SerializeField] Button m_ArCubeRow;
+    [SerializeField] Button m_ArCanvasRow;
 
     [SerializeField]
     [Tooltip("The networked wireframe cube that follows the printed marker (Tunnel > Paint > Build AR Marker Cube).")]
@@ -169,7 +172,8 @@ public class TunnelPalette : NetworkBehaviour
         m_ClearRow?.onClick.AddListener(PressClear);
         m_RealRow?.onClick.AddListener(() => RealMarkerTracker.Get().Toggle(this, m_BoardOverlay, m_BoardBrush));
         m_CopyRow?.onClick.AddListener(CopyToWall);
-        m_ArCubeRow?.onClick.AddListener(ToggleArCube);
+        m_ArCubeRow?.onClick.AddListener(() => ToggleArCube(ArMarkerCube.Shows.Cube));
+        m_ArCanvasRow?.onClick.AddListener(() => ToggleArCube(ArMarkerCube.Shows.Canvas));
         SetStatus("Touch a disk with the marker's tip to take its colour. Select a disk here to change its colour.");
     }
 
@@ -221,17 +225,17 @@ public class TunnelPalette : NetworkBehaviour
         SetStatus(tracker.status);
     }
 
-    // The AR marker cube tracking test: placed for everyone by the host, or removed.
-    void ToggleArCube()
+    // The AR marker cube tracking test or the AR canvas: placed for everyone by the host, switched, or removed.
+    void ToggleArCube(ArMarkerCube.Shows what)
     {
         if (IsSpawned)
-            ToggleArCubeRpc();
+            ToggleArCubeRpc((byte)what);
         else
-            ArMarkerCube.Toggle(m_ArCubePrefab, false);
+            ArMarkerCube.Toggle(m_ArCubePrefab, false, what);
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    void ToggleArCubeRpc() => ArMarkerCube.Toggle(m_ArCubePrefab, true);
+    void ToggleArCubeRpc(byte what) => ArMarkerCube.Toggle(m_ArCubePrefab, true, (ArMarkerCube.Shows)what);
 
     #region Showing
 
@@ -263,9 +267,20 @@ public class TunnelPalette : NetworkBehaviour
         SetRow(m_EndLineRow, "End line  <color=#AAA>" + (pencil ? "or touch the last point again" : "(pencil)") + "</color>", pencil);
         SetRow(m_ClearRow, Time.time < m_ClearArmedUntil ? "<color=#F88>Press again to clear every mark</color>" : "Clear all marks", true);
         SetRow(m_RealRow, Check(realOn) + "  Real marker  <color=#AAA>" + (realOn ? "press to stop" : "tracked by camera") + "</color>", true);
-        SetRow(m_CopyRow, "Copy to wall  <color=#AAA>the panel's painting</color>", PanelPaint() != null);
-        bool cubeOn = ArMarkerCube.instance != null;
-        SetRow(m_ArCubeRow, Check(cubeOn) + "  AR marker cube  <color=#AAA>" + (cubeOn ? "press to remove" : "test, 60 mm marker") + "</color>", true);
+        bool arCanvas = ArCanvasPaint() != null;
+        SetRow(m_CopyRow, "Copy to wall  <color=#AAA>" + (arCanvas ? "the AR canvas's painting" : "the panel's painting") + "</color>",
+            arCanvas || PanelPaint() != null);
+        var ar = ArMarkerCube.instance;
+        bool cubeOn = ar != null && ar.shows == ArMarkerCube.Shows.Cube, canvasOn = ar != null && ar.shows == ArMarkerCube.Shows.Canvas;
+        if (m_ArCanvasRow == null)
+        {
+            SetRow(m_ArCubeRow, Check(cubeOn) + "  AR marker cube  <color=#AAA>" + (cubeOn ? "press to remove" : "test, 60 mm marker") + "</color>", true);
+        }
+        else
+        {
+            SetRow(m_ArCubeRow, Check(cubeOn) + "  AR cube", true);
+            SetRow(m_ArCanvasRow, Check(canvasOn) + "  AR canvas", true);
+        }
     }
 
     static string Check(bool on) => on ? "■" : "□";
@@ -418,13 +433,18 @@ public class TunnelPalette : NetworkBehaviour
         return tracker != null && tracker.board != null && tracker.panelPaint != null ? tracker.panelPaint : null;
     }
 
-    // A copy of the panel's painting on the tunnel wall in view (or in front of the head), for everyone.
+    // The AR canvas's paint, while the tracked marker shows the canvas.
+    static TunnelSegmentPaint ArCanvasPaint() => ArMarkerCube.instance != null ? ArMarkerCube.instance.canvasPaint : null;
+
+    // A copy of the AR canvas's painting (its paint area), or else of the real panel's, on the tunnel wall in view
+    // (or in front of the head), for everyone.
     void CopyToWall()
     {
-        var source = PanelPaint();
+        var arCanvas = ArCanvasPaint();
+        var source = arCanvas != null ? arCanvas : PanelPaint();
         if (source == null || !source.hasMarks)
         {
-            PlayerHudNotification.Instance?.ShowText("Nothing painted on the panel yet", 2f);
+            PlayerHudNotification.Instance?.ShowText(arCanvas != null ? "Nothing painted on the AR canvas yet" : "Nothing painted on the panel yet", 2f);
             return;
         }
 
@@ -438,10 +458,10 @@ public class TunnelPalette : NetworkBehaviour
             pose = new Pose(head.position + forward * 1.2f, Quaternion.LookRotation(forward, Vector3.up));
         }
 
-        var size = RealMarkerTracker.instance.board.size;
+        var size = arCanvas != null ? ArMarkerCube.instance.canvasPaintMeters : RealMarkerTracker.instance.board.size;
         menu.CopyPainting(source, size, pose);
         PlayerHudNotification.Instance?.ShowText("Painting copied: grab a corner to size and turn it", 2.5f);
-        Debug.Log($"[Paint] copied the panel's painting ({size.x * 100f:0} x {size.y * 100f:0} cm) to {pose.position:F2}");
+        Debug.Log($"[Paint] copied {(arCanvas != null ? "the AR canvas's" : "the panel's")} painting ({size.x * 100f:0} x {size.y * 100f:0} cm) to {pose.position:F2}");
     }
 
     /// <summary>

@@ -222,6 +222,125 @@ static class ArMarkerEditorTests
         return report.ToString();
     }
 
+    [MenuItem("Tunnel/Paint/Test AR Canvas Placement (rendered panel)")]
+    public static string TestCanvasPlacement()
+    {
+        // The whole path: a white panel with the marker taped on it as the layout says, rendered for both cameras,
+        // artoolkitX's stereo pose, then the canvas laid from that pose; its corners are compared with the panel's.
+        var left = new ArMarkerMath.CameraModel(1280, 1280, 854.6f, 854.6f, 639.4f, 642.9f);
+        var right = new ArMarkerMath.CameraModel(1280, 1280, 852.6f, 852.6f, 640.3f, 640.0f);
+        var headFromLeft = new Pose(new Vector3(-0.0331f, -0.0122f, 0.0751f), Quaternion.Euler(6.3f, 0.4f, -0.2f));
+        var headFromRight = new Pose(new Vector3(0.0313f, -0.0125f, 0.0753f), Quaternion.Euler(6.3f, -0.4f, 0.5f));
+        var rightFromLeft = ArMarkerMath.RightFromLeft(headFromLeft, headFromRight);
+        var head = new Pose(new Vector3(0f, 1.4f, 0f), Quaternion.Euler(20f, 0f, 0f));
+
+        var layouts = new List<(string name, ArMarkerCanvasLayout layout, Pose canvasInHead)>();
+        var standard = ArMarkerCanvasLayout.Default;
+        // The panel 60 cm ahead, tilted back like an easel, the marker (top left) roughly in view.
+        layouts.Add(("default: top left, 2 cm, upright; easel", standard,
+            new Pose(new Vector3(0.2f, -0.12f, 0.6f), Quaternion.Euler(-25f, 8f, 0f))));
+        var topRight = standard;
+        topRight.corner = 1;
+        topRight.offsetX = 0.0254f;
+        topRight.offsetY = 0.0254f;
+        layouts.Add(("top right, 1 in, upright; on a table", topRight,
+            new Pose(new Vector3(-0.2f, -0.35f, 0.45f), Quaternion.Euler(70f, -10f, 0f))));
+        var turned = standard;
+        turned.rotation = 90f;
+        layouts.Add(("top left, 2 cm, marker turned 90 deg", turned,
+            new Pose(new Vector3(0.22f, -0.12f, 0.6f), Quaternion.Euler(-20f, 0f, 5f))));
+
+        var report = new StringBuilder("[ARMarker] AR canvas placement test\n");
+        var solver = new ArMarkerStereoSolver();
+        int passed = 0;
+        try
+        {
+            if (!solver.Start(left, right, rightFromLeft, 1, k_Width))
+                return report.Append("solver didn't start: ").Append(solver.error).ToString();
+            foreach (var (name, layout, canvasInHead) in layouts)
+            {
+                var canvasWorld = ArMarkerMath.Mul(head, canvasInHead);
+                var leftWorld = ArMarkerMath.Mul(head, headFromLeft);
+                var rightWorld = ArMarkerMath.Mul(head, headFromRight);
+                var imageL = RenderPanel(left, ArMarkerMath.Mul(ArMarkerMath.Inverse(leftWorld), canvasWorld), layout);
+                var imageR = RenderPanel(right, ArMarkerMath.Mul(ArMarkerMath.Inverse(rightWorld), canvasWorld), layout);
+                ArMarkerStereoSolver.Result result = default;
+                bool got = false;
+                for (int i = 0; i < 60 && !got; i++)
+                {
+                    got = solver.Process((byte[])imageL.Clone(), (byte[])imageR.Clone(), out result) && result.visible;
+                    if (!got)
+                        Thread.Sleep(10);
+                }
+                if (!got)
+                {
+                    report.AppendLine($"  {name}: marker NOT FOUND");
+                    continue;
+                }
+                // As the headset does: the cube's pose, then the marker's back from it, then the canvas.
+                var cube = ArMarkerMath.Mul(leftWorld, ArMarkerMath.CubeFromMarker(result.markerInLeft));
+                var canvas = layout.CanvasFromMarker(ArMarkerMath.MarkerFromCube(cube));
+                float worst = 0f;
+                var half = layout.size * 0.5f;
+                foreach (var corner in new[] { new Vector3(-half.x, half.y), new Vector3(half.x, half.y), new Vector3(half.x, -half.y), new Vector3(-half.x, -half.y) })
+                    worst = Mathf.Max(worst, Vector3.Distance(ArMarkerMath.Apply(canvas, corner), ArMarkerMath.Apply(canvasWorld, corner)) * 1000f);
+                // Where the tracked marker's black square sits on the real panel: its edges' distances from the panel's edges.
+                var markerOnLaid = ArMarkerMath.Mul(ArMarkerMath.Inverse(canvasWorld), ArMarkerMath.Mul(leftWorld, result.markerInLeft));
+                float w = layout.markerWidth * 0.5f;
+                float fromSide = layout.right ? half.x - (markerOnLaid.position.x + w) : (markerOnLaid.position.x - w) + half.x;
+                float fromTop = half.y - (markerOnLaid.position.y + w);
+                var markerUp = markerOnLaid.rotation * Vector3.up;
+                float turn = Mathf.Atan2(-markerUp.x, markerUp.y) * Mathf.Rad2Deg; // counter-clockwise seen from the front
+                bool ok = worst < 12f && Mathf.Abs(Mathf.DeltaAngle(turn, layout.rotation)) < 2f;
+                if (ok)
+                    passed++;
+                report.AppendLine($"  {name}: {(ok ? "ok" : "FAIL")} canvas corners within {worst:0.0} mm of the panel's; marker square " +
+                    $"{fromSide * 100f:0.00} cm from the {(layout.right ? "right" : "left")} edge, {fromTop * 100f:0.00} cm from the top, " +
+                    $"marker up turned {turn:0.0} deg on the panel (layout {layout.rotation:0}); paint area {layout.paintArea.x * 100f:0.0} x {layout.paintArea.y * 100f:0.0} cm");
+            }
+        }
+        finally
+        {
+            solver.Dispose();
+        }
+        report.AppendLine($"  passed {passed} of {layouts.Count}");
+        Debug.Log(report.ToString());
+        return report.ToString();
+    }
+
+    // A white panel with the marker on it where the layout puts it, over a mid-grey background.
+    static byte[] RenderPanel(ArMarkerMath.CameraModel camera, Pose canvasInCamera, ArMarkerCanvasLayout layout)
+    {
+        var image = new byte[camera.width * camera.height];
+        var inverse = Quaternion.Inverse(canvasInCamera.rotation);
+        var normal = canvasInCamera.rotation * Vector3.forward;
+        float planeDistance = Vector3.Dot(normal, canvasInCamera.position);
+        var canvasToMarker = ArMarkerMath.Inverse(layout.markerOnCanvas);
+        var half = layout.size * 0.5f;
+        for (int y = 0; y < camera.height; y++)
+        {
+            for (int x = 0; x < camera.width; x++)
+            {
+                int sum = 0;
+                for (int s = 0; s < 4; s++)
+                {
+                    var ray = ArMarkerMath.PixelRay(camera, new Vector2(x + 0.25f + 0.5f * (s & 1), y + 0.25f + 0.5f * (s >> 1)));
+                    float along = Vector3.Dot(normal, ray);
+                    int value = 110 + ((x / 40 + y / 40) % 2) * 25;
+                    if (Mathf.Abs(along) > 1e-6f && planeDistance / along > 0f)
+                    {
+                        var onCanvas = inverse * (ray * (planeDistance / along) - canvasInCamera.position);
+                        if (Mathf.Abs(onCanvas.x) <= half.x && Mathf.Abs(onCanvas.y) <= half.y)
+                            value = Shade(ArMarkerMath.Apply(canvasToMarker, onCanvas), 215);
+                    }
+                    sum += value;
+                }
+                image[y * camera.width + x] = (byte)(sum / 4);
+            }
+        }
+        return image;
+    }
+
     // The camera's view of the marker on white paper (10 cm square) over a mid-grey background, 2x2 samples a pixel.
     static byte[] Render(ArMarkerMath.CameraModel camera, Pose markerInCamera)
     {

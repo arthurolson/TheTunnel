@@ -190,6 +190,7 @@ GameObject:
   m_Component:
   - component: {fileID: 3819626032197804102}
   - component: {fileID: 7488220162210519251}
+  - component: {fileID: 2926747455290532548}
   - component: {fileID: 1554727510117940362}
   m_Layer: 0
   m_Name: ARMarker_Cube_Networked
@@ -212,6 +213,7 @@ Transform:
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 3393198144774789624}
+  - {fileID: 8661242614871162692}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &7488220162210519251
@@ -226,7 +228,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Unity.Netcode.Runtime::Unity.Netcode.NetworkObject
-  GlobalObjectIdHash: 1586548188
+  GlobalObjectIdHash: 1185721787
   InScenePlacedSourceGlobalObjectIdHash: 0
   m_InScenePlacedDisabledByDefault: 0
   DeferredDespawnTick: 0
@@ -241,6 +243,27 @@ MonoBehaviour:
   AutoObjectParentSync: 1
   SyncOwnerTransformWhenParented: 1
   AllowOwnerToParent: 0
+--- !u!114 &2926747455290532548
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1534801118021609775}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 45a7bf32df29640a49fc03071aa9f5bb, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::TunnelSegmentPaint
+  ShowTopMostFoldoutHeaderGroup: 1
+  m_Geometry: {fileID: 0}
+  m_OverlayMaterial: {fileID: 0}
+  m_BrushShader: {fileID: 0}
+  m_Texel: 0.003
+  m_MaxCanvasSize: 4096
+  m_Inset: 0.003
+  m_MaxHistoryStamps: 500000
+  m_HistoryOnEveryHeadset: 1
 --- !u!114 &1554727510117940362
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -271,6 +294,11 @@ MonoBehaviour:
   m_LocalMaterial: {fileID: 2100000, guid: 0d2c4829aa9604c679e850235d626d13, type: 2}
   m_SharedMaterial: {fileID: 2100000, guid: 2c31c455407fd46bfac6a6b4affabb9f, type: 2}
   m_ShowCard: 1
+  m_Canvas: {fileID: 5931192014973376420}
+  m_Paint: {fileID: 2926747455290532548}
+  m_PaintOverlay: {fileID: 2100000, guid: b9db96398163141e3bd6bdaa764a81fb, type: 2}
+  m_PaintBrush: {fileID: 4800000, guid: 124cf2d43f80043a494eb01f063c1c29, type: 3}
+  m_PaintTexel: 0.0012
 --- !u!1 &1610780663224785621
 GameObject:
   m_ObjectHideFlags: 0
@@ -811,6 +839,54 @@ MeshRenderer:
   m_SortingOrder: 0
   m_MaskInteraction: 0
   m_AdditionalVertexStreams: {fileID: 0}
+--- !u!1 &4871101225984247676
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 8661242614871162692}
+  - component: {fileID: 5931192014973376420}
+  m_Layer: 0
+  m_Name: Canvas
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &8661242614871162692
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4871101225984247676}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 3819626032197804102}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &5931192014973376420
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4871101225984247676}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 25d53bd1c5f91457d80a3b4f2404940b, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::ArMarkerCanvas
+  m_LineColor: {r: 0.55, g: 0.55, b: 0.58, a: 1}
+  m_LineWidth: 0.003
+  m_Dash: 0.012
+  m_Gap: 0.008
 --- !u!1 &5189751301014994586
 GameObject:
   m_ObjectHideFlags: 0

@@ -19,9 +19,18 @@ using XRMultiplayer;
 /// The edges are green while this headset draws its own sighting and blue while it draws the shared pose. A card
 /// below the view says which cameras see the marker, which player supplies the shared pose, and which pose is drawn.
 /// Works on its own (one headset) when not connected.
+///
+/// Canvas mode (the palette's "AR canvas"): the same tracked object shows, instead of the cube, the virtual canvas
+/// (<see cref="ArMarkerCanvas"/>) lying on the physical panel the marker is taped to, at the panel's real size, with
+/// its own shared paint (<see cref="TunnelSegmentPaint"/>) that the virtual marker paints on inside the paint area and
+/// that moves with the panel. Where the marker sits on the panel comes from the host's files/ARMarker/settings.txt
+/// (<see cref="ArMarkerCanvasLayout"/>) and is shared with everyone. Copy to wall copies the paint area.
 /// </summary>
 public class ArMarkerCube : NetworkBehaviour
 {
+    /// <summary>What the tracked marker carries.</summary>
+    public enum Shows : byte { Cube = 0, Canvas = 1 }
+
     [SerializeField]
     [Tooltip("Moved to the drawn pose: the cube's base is centred on the marker, its up out of the marker.")]
     Transform m_Visual;
@@ -34,7 +43,24 @@ public class ArMarkerCube : NetworkBehaviour
     [Tooltip("Show the status card below the view.")]
     bool m_ShowCard = true;
 
+    [Header("Canvas")]
+    [SerializeField] ArMarkerCanvas m_Canvas;
+    [SerializeField] TunnelSegmentPaint m_Paint;
+    [SerializeField]
+    [Tooltip("Tunnel/Paint Overlay.")]
+    Material m_PaintOverlay;
+    [SerializeField]
+    [Tooltip("Tunnel/Paint Brush.")]
+    Shader m_PaintBrush;
+    [SerializeField]
+    [Tooltip("Size of a canvas texel (meters).")]
+    float m_PaintTexel = 0.0012f;
+
     readonly NetworkVariable<ArMarkerSample> m_Shared = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<byte> m_SharedShows = new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<ArMarkerCanvasLayout> m_SharedLayout = new(ArMarkerCanvasLayout.Default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    Shows m_LocalShows;
+    ArMarkerCanvasLayout m_LocalLayout = ArMarkerCanvasLayout.Default;
 
     readonly ArMarkerArbiter m_Arbiter = new();
     readonly ArMarkerRenderChooser m_Chooser = new();
@@ -56,22 +82,43 @@ public class ArMarkerCube : NetworkBehaviour
     public bool sharedValid => shared.valid && Now - shared.time <= m_Chooser.sharedFreshFor;
     public ArMarkerSample shared => IsSpawned ? m_Shared.Value : m_LocalShared;
 
+    /// <summary>Whether it shows the cube or the canvas.</summary>
+    public Shows shows => IsSpawned ? (Shows)m_SharedShows.Value : m_LocalShows;
+
+    /// <summary>The canvas's shared paint (painted inside the paint area), or null in cube mode.</summary>
+    public TunnelSegmentPaint canvasPaint => shows == Shows.Canvas ? m_Paint : null;
+
+    /// <summary>The canvas's paint area in meters (the size a copy of its painting should have).</summary>
+    public Vector2 canvasPaintMeters => layout.paintArea;
+
+    public ArMarkerCanvasLayout layout => IsSpawned ? m_SharedLayout.Value : m_LocalLayout;
+
     /// <summary>A short status for the palette.</summary>
     public string shortStatus { get; private set; } = "AR marker cube: starting...";
 
     ulong self => IsSpawned ? NetworkManager.LocalClientId : 0;
     double Now => IsSpawned && NetworkManager != null ? NetworkManager.ServerTime.Time : Time.realtimeSinceStartupAsDouble;
 
-    /// <summary>Places the cube if there's none, or removes it (the host does both when connected).</summary>
-    public static void Toggle(GameObject prefab, bool networked)
+    /// <summary>
+    /// The palette's AR rows (the host does this when connected): places the tracked marker showing
+    /// <paramref name="what"/> if there's none, switches it to <paramref name="what"/> if it shows the other, or
+    /// removes it if it already shows <paramref name="what"/>.
+    /// </summary>
+    public static void Toggle(GameObject prefab, bool networked, Shows what = Shows.Cube)
     {
         if (instance != null)
         {
+            if (instance.shows != what)
+            {
+                instance.SetShows(what);
+                Debug.Log($"[ARMarker] now showing the {what}");
+                return;
+            }
             if (networked && instance.IsSpawned)
                 instance.NetworkObject.Despawn(true);
             else
                 Destroy(instance.gameObject);
-            Debug.Log("[ARMarker] cube removed");
+            Debug.Log($"[ARMarker] {what} removed");
             return;
         }
         if (prefab == null)
@@ -79,10 +126,31 @@ public class ArMarkerCube : NetworkBehaviour
             Debug.LogWarning("[ARMarker] can't place the cube: its prefab is missing");
             return;
         }
-        var cube = Instantiate(prefab);
-        if (networked && cube.TryGetComponent(out NetworkObject networkObject))
+        // Set up before it wakes, as the palette is.
+        var holder = new GameObject("AR Marker Holder");
+        holder.SetActive(false);
+        var placed = Instantiate(prefab, holder.transform);
+        var component = placed.GetComponent<ArMarkerCube>();
+        var layout = ArMarkerCanvasLayout.Load(SettingsFile, line => Debug.Log("[ARMarker] " + line));
+        component.m_LocalShows = what;
+        component.m_LocalLayout = layout;
+        component.m_SharedShows.Value = (byte)what;
+        component.m_SharedLayout.Value = layout;
+        placed.transform.SetParent(null, false);
+        Destroy(holder);
+        if (networked && placed.TryGetComponent(out NetworkObject networkObject))
             networkObject.Spawn(true);
-        Debug.Log("[ARMarker] cube placed");
+        Debug.Log($"[ARMarker] {what} placed; canvas layout: {layout}");
+    }
+
+    static string SettingsFile => System.IO.Path.Combine(Application.persistentDataPath, "ARMarker", "settings.txt");
+
+    void SetShows(Shows what)
+    {
+        if (IsSpawned)
+            m_SharedShows.Value = (byte)what;
+        else
+            m_LocalShows = what;
     }
 
     void Awake()
@@ -90,6 +158,12 @@ public class ArMarkerCube : NetworkBehaviour
         instance = this;
         if (m_Visual != null)
             m_Visual.gameObject.SetActive(false);
+        if (m_Canvas != null)
+        {
+            m_Canvas.gameObject.SetActive(false);
+            if (m_Paint != null)
+                m_Paint.UseSurface(m_Canvas, m_PaintOverlay, m_PaintBrush, m_PaintTexel);
+        }
     }
 
     void Start()
@@ -133,7 +207,10 @@ public class ArMarkerCube : NetworkBehaviour
         var tracker = ArMarkerTracker.Get();
         tracker.sighted += OnSighted;
         tracker.Begin();
-        tracker.Log($"cube started on player {self} ({(IsSpawned ? (IsServer ? "host" : "client") : "not connected")})");
+        tracker.Log($"{shows} started on player {self} ({(IsSpawned ? (IsServer ? "host" : "client") : "not connected")})");
+        tracker.Log($"canvas layout (from the host's settings.txt): {layout}");
+        if (m_Canvas != null)
+            m_Canvas.Configure(layout);
         if (m_ShowCard)
             MakeCard();
     }
@@ -233,24 +310,38 @@ public class ArMarkerCube : NetworkBehaviour
             m_LastMode = mode;
         }
 
+        bool canvasMode = shows == Shows.Canvas && m_Canvas != null;
         if (mode == ArMarkerRenderChooser.Mode.Hidden)
         {
-            if (m_Visual != null && m_Visual.gameObject.activeSelf)
-                m_Visual.gameObject.SetActive(false);
+            SetActive(m_Visual, false);
+            SetActive(m_Canvas != null ? m_Canvas.transform : null, false);
             m_Display.Reset();
         }
-        else if (m_Visual != null)
+        else
         {
             string key = mode == ArMarkerRenderChooser.Mode.Local ? "local" : "shared " + sharedNow.source;
+            // The canvas reaches half a metre from the marker, so a small turn moves its far side a lot: steadier.
+            m_Display.minCutoff = canvasMode ? 1f : 2f;
             var drawn = m_Display.Step(target, key, Time.deltaTime);
             var world = ToWorld(drawn);
-            m_Visual.SetPositionAndRotation(world.position, world.rotation);
-            if (!m_Visual.gameObject.activeSelf)
-                m_Visual.gameObject.SetActive(true);
             var material = mode == ArMarkerRenderChooser.Mode.Local ? m_LocalMaterial : m_SharedMaterial;
-            foreach (var edge in m_Edges)
-                if (edge != null && edge.sharedMaterial != material)
-                    edge.sharedMaterial = material;
+            if (m_Visual != null)
+            {
+                m_Visual.SetPositionAndRotation(world.position, world.rotation);
+                SetActive(m_Visual, !canvasMode);
+                foreach (var edge in m_Edges)
+                    if (edge != null && edge.sharedMaterial != material)
+                        edge.sharedMaterial = material;
+            }
+            if (m_Canvas != null)
+            {
+                if (canvasMode)
+                {
+                    m_Canvas.Place(ArMarkerMath.MarkerFromCube(world));
+                    m_Canvas.SetMarkerMaterial(material);
+                }
+                SetActive(m_Canvas.transform, canvasMode);
+            }
         }
 
         if (Time.unscaledTime >= m_NextLog)
@@ -261,10 +352,35 @@ public class ArMarkerCube : NetworkBehaviour
             tracker.Log($"cube: drawing {mode}, local {(m_Chooser.localFresh ? $"{local.CamerasText()} q {local.quality:0.00} {(now - local.time) * 1000:0} ms old at {local.position:F3}" : "stale")}, " +
                 $"shared {(sharedNow.valid ? $"from {PlayerName(sharedNow.source)} q {sharedNow.quality:0.00} {(now - sharedNow.time) * 1000:0} ms old at {sharedNow.position:F3}" : "none")}, " +
                 $"apart {m_Chooser.disagreement * 1000f:0} mm, sent {m_SightingsSent}" +
-                (m_Visual != null && m_Visual.gameObject.activeSelf ? $", drawn at world {m_Visual.position:F3}" : ""));
+                (m_Visual != null && m_Visual.gameObject.activeSelf ? $", drawn at world {m_Visual.position:F3}" : "") + CanvasLog());
             m_SightingsSent = 0;
         }
         UpdateCard(mode, sharedNow, now);
+    }
+
+    static void SetActive(Transform t, bool on)
+    {
+        if (t != null && t.gameObject.activeSelf != on)
+            t.gameObject.SetActive(on);
+    }
+
+    // The canvas's pose, and whether each virtual marker's tip is touching it, for the log.
+    string CanvasLog()
+    {
+        if (shows != Shows.Canvas || m_Canvas == null)
+            return "";
+        if (!m_Canvas.gameObject.activeInHierarchy)
+            return "; canvas hidden";
+        var t = m_Canvas.transform;
+        var text = new StringBuilder($"; canvas centre {t.position:F3}, facing {(-t.forward).ToString("F2")}, up {t.up.ToString("F2")}");
+        foreach (var marker in TunnelMarker.all)
+        {
+            if (marker == null || marker.docked)
+                continue;
+            bool touching = m_Canvas.Touching(marker.tip, marker.diameter * 0.5f, out float distance, out bool over);
+            text.Append($"; marker tip {distance * 1000f:0} mm from the canvas, {(over ? "over the paint area" : "outside the paint area")}, touching {(touching ? "YES" : "no")}");
+        }
+        return text.ToString();
     }
 
     Pose ToWorld(Pose inTable) =>
@@ -309,7 +425,7 @@ public class ArMarkerCube : NetworkBehaviour
 
         var tracker = ArMarkerTracker.instance;
         var text = new StringBuilder();
-        text.Append("<b>AR marker cube</b>  <size=80%>(60 mm marker, barcode 1)</size>\n");
+        text.Append(shows == Shows.Canvas ? "<b>AR canvas</b>" : "<b>AR marker cube</b>").Append("  <size=80%>(60 mm marker, barcode 1)</size>\n");
         string cameras = m_Chooser.localFresh ? m_Chooser.local.CamerasText() : "none";
         text.Append("This headset sees it with: <b>").Append(cameras).Append("</b>");
         if (m_Chooser.localFresh)
@@ -337,7 +453,7 @@ public class ArMarkerCube : NetworkBehaviour
         if (m_Card != null)
             m_Card.text = text.ToString();
 
-        shortStatus = $"AR cube: sees {cameras}; shared from {(sharedNow.valid ? PlayerName(sharedNow.source) : "nobody")}; drawing {mode}." +
+        shortStatus = $"{(shows == Shows.Canvas ? "AR canvas" : "AR cube")}: sees {cameras}; shared from {(sharedNow.valid ? PlayerName(sharedNow.source) : "nobody")}; drawing {mode}." +
             (tracker != null && (!tracker.active || !tracker.status.StartsWith("Tracking:")) ? " " + tracker.status : "");
     }
 

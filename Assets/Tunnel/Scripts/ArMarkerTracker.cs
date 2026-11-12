@@ -1016,6 +1016,8 @@ public class ArMarkerTracker : MonoBehaviour
 
     // key=value lines in files/ARMarker/settings.txt: axisTurn (Meta180X, None, Turn180Z), headPoseLead (seconds),
     // threshold (Manual, Median, Otsu, Adaptive, Bracketing), swapEyes, barcodeId, markerWidth (metres), snapshotEvery.
+    // The AR canvas's keys (canvasCorner, canvasOffsetX/Y, canvasWidth/Height, canvasMarkerRotation, canvasPaintInset,
+    // canvasTouchAllowance) are read by ArMarkerCanvasLayout on the host.
     void LoadSettings()
     {
         if (m_Folder == null)
@@ -1040,6 +1042,7 @@ public class ArMarkerTracker : MonoBehaviour
                 case "barcodeId" when int.TryParse(value, out int id): m_BarcodeId = id; break;
                 case "markerWidth" when float.TryParse(value, NumberStyles.Float, culture, out float width): m_MarkerWidth = width; break;
                 case "snapshotEvery" when float.TryParse(value, NumberStyles.Float, culture, out float every): m_SnapshotEvery = every; break;
+                case var canvas when canvas.StartsWith("canvas"): break; // read by ArMarkerCanvasLayout (the host's apply)
                 default: Log($"settings.txt: ignored '{line}'"); continue;
             }
             Log($"settings.txt: {key} = {value}");

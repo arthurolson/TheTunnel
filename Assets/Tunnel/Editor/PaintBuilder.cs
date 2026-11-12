@@ -302,7 +302,14 @@ static class PaintBuilder
         var clear = Row("Clear Row", -70f, "Clear all marks");
         var real = Row("Real Marker Row", -130f, "□  Real marker");
         var copyRow = Row("Copy Row", -190f, "Copy to wall");
-        var arCubeRow = Row("AR Cube Row", -250f, "□  AR marker cube");
+        // The AR marker's two uses, side by side in one row.
+        var arCubeRow = Row("AR Cube Row", -250f, "□  AR cube");
+        var arCanvasRow = Row("AR Canvas Row", -250f, "□  AR canvas");
+        const float halfRow = (k_RowWidth - 10f) * 0.5f;
+        ((RectTransform)arCubeRow.transform).sizeDelta = new Vector2(halfRow, 56f);
+        ((RectTransform)arCubeRow.transform).anchoredPosition = new Vector2(k_RowsX - (halfRow + 10f) * 0.5f, -250f);
+        ((RectTransform)arCanvasRow.transform).sizeDelta = new Vector2(halfRow, 56f);
+        ((RectTransform)arCanvasRow.transform).anchoredPosition = new Vector2(k_RowsX + (halfRow + 10f) * 0.5f, -250f);
         var status = Text(titleTemplate, canvasRect, "Status", "", new Vector2(k_RowsX, -332f), new Vector2(k_RowWidth, 92f));
         status.fontSize = 21f;
         status.alignment = TextAlignmentOptions.TopLeft;
@@ -334,6 +341,7 @@ static class PaintBuilder
         so.FindProperty("m_RealRow").objectReferenceValue = real;
         so.FindProperty("m_CopyRow").objectReferenceValue = copyRow;
         so.FindProperty("m_ArCubeRow").objectReferenceValue = arCubeRow;
+        so.FindProperty("m_ArCanvasRow").objectReferenceValue = arCanvasRow;
         so.FindProperty("m_ArCubePrefab").objectReferenceValue = arCube;
         so.FindProperty("m_BoardOverlay").objectReferenceValue = AssetDatabase.LoadAssetAtPath<Material>($"{k_Folder}/PaintOverlay.mat");
         so.FindProperty("m_BoardBrush").objectReferenceValue = Shader.Find("Tunnel/Paint Brush");
@@ -373,9 +381,23 @@ static class PaintBuilder
         foreach (var edge in edges)
             edge.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
 
+        // The AR canvas: its lines are made when it wakes; its shared paint sits on the networked object, and every
+        // headset keeps the marks' record so any player can copy them to the wall.
+        var canvas = new GameObject("Canvas");
+        canvas.transform.SetParent(cube.transform, false);
+        var canvasComponent = canvas.AddComponent<ArMarkerCanvas>();
+        var paint = cube.AddComponent<TunnelSegmentPaint>();
+        var paintSo = new SerializedObject(paint);
+        paintSo.FindProperty("m_HistoryOnEveryHeadset").boolValue = true;
+        paintSo.ApplyModifiedPropertiesWithoutUndo();
+
         var component = cube.AddComponent<ArMarkerCube>();
         var so = new SerializedObject(component);
         so.FindProperty("m_Visual").objectReferenceValue = visual;
+        so.FindProperty("m_Canvas").objectReferenceValue = canvasComponent;
+        so.FindProperty("m_Paint").objectReferenceValue = paint;
+        so.FindProperty("m_PaintOverlay").objectReferenceValue = AssetDatabase.LoadAssetAtPath<Material>($"{k_Folder}/PaintOverlay.mat");
+        so.FindProperty("m_PaintBrush").objectReferenceValue = Shader.Find("Tunnel/Paint Brush");
         var edgesProperty = so.FindProperty("m_Edges");
         edgesProperty.arraySize = edges.Count;
         for (int i = 0; i < edges.Count; i++)

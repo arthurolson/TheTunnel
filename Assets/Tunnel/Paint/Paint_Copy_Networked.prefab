@@ -386,6 +386,7 @@ MonoBehaviour:
   m_MaxCanvasSize: 4096
   m_Inset: 0.003
   m_MaxHistoryStamps: 500000
+  m_HistoryOnEveryHeadset: 0
 --- !u!114 &459487490538066854
 MonoBehaviour:
   m_ObjectHideFlags: 0
