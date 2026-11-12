@@ -1,7 +1,7 @@
 # The Tunnel: status
 
 What has been built, what is in progress, and where each build is. Updated as work lands; the plan ahead is in
-[TODO.md](TODO.md). Last updated 10 November 2026 (version 10.11.2026.2).
+[TODO.md](TODO.md). Last updated 11 November 2026 (version 11.11.2026.2).
 
 ## Accomplished
 
@@ -83,6 +83,12 @@ What has been built, what is in progress, and where each build is. Updated as wo
   - Copy to wall puts the panel's painting (see-through where unpainted) on the tunnel wall in view, for everyone;
     its corners size and turn it.
 
+- AR marker cube (11.11.2026.2, tracking test; the real-marker code is left in place, unused): the palette's AR
+  marker cube row places, for everyone, a 60 mm wireframe cube on a printed 60 mm artoolkitX marker
+  (Printables/TheTunnel-AR-marker-60mm-id1.pdf). Every headset tracks it with both passthrough cameras (artoolkitX
+  stereo) and shares its sightings; the host publishes the best, each headset draws its own pose (green) or the
+  shared one (blue). Log and snapshots in files/ARMarker on the headset.
+
 ### Viewer
 - Shared panel for images, videos and spatial (stereo) photos and videos. Quest stereo captures and screenshots are
   recognized as spatial.
@@ -104,6 +110,9 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 ### Browser
 - Shared web browser panels.
+- Content only (11.11.2026.2): hides the frame, address bar and keyboard for everyone; a small button brings them back.
+- Videos on a shared page play together on every headset (play, pause, seek, speed; late joiners catch up), except
+  inside another site's embedded player or DRM video; a Loop button repeats them for everyone (11.11.2026.2).
 - Close, Unsnap/Snap, copy, bookmarks, a shared search bar and address bar, and on-panel keyboards.
 - Menus and keyboards can be moved.
 
@@ -112,6 +121,8 @@ What has been built, what is in progress, and where each build is. Updated as wo
 | Item | State |
 |---|---|
 | Real marker on a panel or tunnel wall | First headset test of the new design (10.11.2026.1 on 4004X): the points and the disk were nowhere near the cap, and the corner marks weren't found; the headset's log was lost. 10.11.2026.2 adds a step that aligns the camera image with the tracked hand holding the marker (which way the image is read, and the cap's distance), and saves a log and annotated camera snapshots on the headset (files/RealMarker). Next: install, test, pull the folder and fix. |
+| AR marker cube | Built and tested in the Editor (rendered stereo images: within 3 mm / 0.5°; simulated two-headset handoff with no visible jump). Next: two-headset test; pull files/ARMarker (snapshots show whether the outline sits on the marker in both cameras). |
+| Browser content only, shared video, Loop | Built (11.11.2026.2), not yet tried on a headset. Next: two players, a direct .mp4 and YouTube; listen for echo between headsets in one room. |
 | Headset checks still owed | SARS-CoV-2 in the 3D movie (09.11.2026.1); the movie panel's placement on the wall beside a mixed reality box; transparent Viewer images (09.11.2026.2); Viewer Content only with two players and the backdrop fix (10.11.2026.2); the virtual marker following the hand instantly (09.11.2026.3). |
 | Grab diagnostics | Every grab and release is logged (since 08.11.2026.1), to track down grabs that don't take. Still on. |
 
@@ -119,7 +130,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 10.11.2026.2 |
+| Latest build (Builds/TheTunnelDev.apk) | 11.11.2026.2 |
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 3497C10HC4041K | 09.11.2026.3 |
 | Quest 3S 3497C10HC4004X | 09.11.2026.2 |
