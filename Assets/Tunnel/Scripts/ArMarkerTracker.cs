@@ -113,9 +113,12 @@ public class ArMarkerTracker : MonoBehaviour
     readonly Stack<byte[]> m_Buffers = new();
     volatile bool m_Stop;
     bool m_Busy;
+    const int SolverStarting = 0, SolverRunning = 1, SolverFailed = 2;
+    volatile int m_SolverState;
+    volatile string m_SolverError;
 
     // Counts for the once-a-second log line.
-    int m_Pairs, m_Dropped, m_Unpaired, m_Found, m_Both, m_OnlyL, m_OnlyR, m_NoHead;
+    int m_Pairs, m_Dropped, m_Unpaired, m_Found, m_Both, m_OnlyL, m_OnlyR, m_NoHead, m_NotReady;
     float m_SumAge, m_SumProcess, m_SumQuality;
     float m_NextReport;
     float m_NextSnapshot;
@@ -409,6 +412,11 @@ public class ArMarkerTracker : MonoBehaviour
     {
         if (!active || m_Subsystem == null || m_Thread == null)
             return;
+        if (m_SolverState == SolverFailed)
+        {
+            Stop("artoolkitX didn't start: " + m_SolverError + " (press AR marker cube twice to retry)");
+            return;
+        }
         AcquirePair();
         DrainResults();
         if (Time.unscaledTime >= m_NextReport)
@@ -425,7 +433,8 @@ public class ArMarkerTracker : MonoBehaviour
             return;
         m_LastPairTime = left.timestamp;
         m_Pairs++;
-        if (Math.Abs(left.timestamp - right.timestamp) > 0.004)
+        double leftTime = Seconds(left.timestamp), rightTime = Seconds(right.timestamp);
+        if (Math.Abs(leftTime - rightTime) > 0.004)
         {
             m_Unpaired++;
             return;
@@ -433,7 +442,7 @@ public class ArMarkerTracker : MonoBehaviour
 
         // The images' clock: whichever of the two system clocks puts them a little in the past.
         double mono = Clock.Monotonic(), boot = Clock.Boot();
-        double ageMono = mono - left.timestamp, ageBoot = boot - left.timestamp;
+        double ageMono = mono - leftTime, ageBoot = boot - leftTime;
         if (m_ClockChoice < 0)
         {
             if (ageMono >= 0 && ageMono < 1.0) m_ClockVotesMono++;
@@ -441,23 +450,28 @@ public class ArMarkerTracker : MonoBehaviour
             if (++m_ClockChecks >= 30 && m_ClockVotesMono + m_ClockVotesBoot < 10)
             {
                 m_ClockChoice = 2;
-                Log($"image clock: neither system clock fits (image t={left.timestamp:F4}, monotonic {mono:F4}, boot {boot:F4}); " +
+                Log($"image clock: neither system clock fits (image t={leftTime:F4} s, monotonic {mono:F4}, boot {boot:F4}); " +
                     $"taking images as {k_AssumedAge * 1000:0} ms old");
             }
             else if (m_ClockVotesMono + m_ClockVotesBoot >= 10)
             {
                 m_ClockChoice = m_ClockVotesBoot > m_ClockVotesMono ? 1 : 0;
                 Log($"image clock: {(m_ClockChoice == 1 ? "boot time" : "monotonic")} (votes mono {m_ClockVotesMono}, boot {m_ClockVotesBoot}; " +
-                    $"image t={left.timestamp:F4}, monotonic {mono:F4}, boot {boot:F4})");
+                    $"image t={leftTime:F4} s, monotonic {mono:F4}, boot {boot:F4})");
             }
             else if (m_Pairs <= 3)
             {
-                Log($"clock check: image t={left.timestamp:F4}, monotonic {mono:F4} (age {ageMono * 1000:0} ms), boot {boot:F4} (age {ageBoot * 1000:0} ms)");
+                Log($"clock check: image t={leftTime:F4} s (raw {left.timestamp:F0}), monotonic {mono:F4} (age {ageMono * 1000:0} ms), boot {boot:F4} (age {ageBoot * 1000:0} ms)");
             }
             if (m_ClockChoice < 0)
                 return;
         }
 
+        if (m_SolverState != SolverRunning)
+        {
+            m_NotReady++; // artoolkitX is still starting (or failed: Update stops tracking)
+            return;
+        }
         lock (m_Lock)
         {
             if (m_Busy || m_Pending != null)
@@ -467,7 +481,7 @@ public class ArMarkerTracker : MonoBehaviour
             }
         }
 
-        double capture = m_ClockChoice == 2 ? Clock.Monotonic() - k_AssumedAge : left.timestamp;
+        double capture = m_ClockChoice == 2 ? Clock.Monotonic() - k_AssumedAge : leftTime;
         if (!HeadAt(capture, out var headTracking))
         {
             m_NoHead++;
@@ -596,15 +610,17 @@ public class ArMarkerTracker : MonoBehaviour
     void Report()
     {
         m_NextReport = Time.unscaledTime + 1f;
-        int processed = Mathf.Max(1, m_Pairs - m_Dropped - m_Unpaired - m_NoHead);
+        int processed = Mathf.Max(1, m_Pairs - m_Dropped - m_Unpaired - m_NoHead - m_NotReady);
         var head = Camera.main != null ? Camera.main.transform : null;
-        Log($"1 s: pairs {m_Pairs} (busy-dropped {m_Dropped}, unsynced {m_Unpaired}, no head pose {m_NoHead}), found {m_Found} " +
+        Log($"1 s: pairs {m_Pairs} (artoolkitX not ready {m_NotReady}, busy-dropped {m_Dropped}, unsynced {m_Unpaired}, no head pose {m_NoHead}), found {m_Found} " +
             $"(L+R {m_Both}, L only {m_OnlyL}, R only {m_OnlyR}), quality {(m_Found > 0 ? m_SumQuality / m_Found : 0f):0.00}, " +
             $"image age {m_SumAge / processed * 1000f:0} ms, artoolkitX {m_SumProcess / processed:0.0} ms" +
             (head != null ? $", head {head.position:F2} yaw {head.eulerAngles.y:0}" : ""));
-        if (m_Found > 0 || m_Pairs > 0)
+        if (m_SolverState == SolverStarting)
+            status = "Starting artoolkitX...";
+        else if (m_Found > 0 || m_Pairs > 0)
             status = $"Tracking: {m_Pairs} pairs/s, marker in {m_Found} (L+R {m_Both}, L {m_OnlyL}, R {m_OnlyR}), images {m_SumAge / processed * 1000f:0} ms old.";
-        m_Pairs = m_Dropped = m_Unpaired = m_Found = m_Both = m_OnlyL = m_OnlyR = m_NoHead = 0;
+        m_Pairs = m_Dropped = m_Unpaired = m_Found = m_Both = m_OnlyL = m_OnlyR = m_NoHead = m_NotReady = 0;
         m_SumAge = m_SumProcess = m_SumQuality = 0f;
     }
 
@@ -617,8 +633,11 @@ public class ArMarkerTracker : MonoBehaviour
         StopWorker();
         m_Stop = false;
         m_Buffers.Clear();
+        m_SolverState = SolverStarting;
+        m_SolverError = null;
         var models = (m_LeftModel, m_RightModel, m_RightFromLeft, m_BarcodeId, m_MarkerWidth, m_Threshold, m_Folder);
-        m_Thread = new Thread(() => Work(models)) { IsBackground = true, Name = "AR marker" };
+        string cache = CacheFolder();
+        m_Thread = new Thread(() => Work(models, cache)) { IsBackground = true, Name = "AR marker" };
         m_Thread.Start();
     }
 
@@ -655,19 +674,21 @@ public class ArMarkerTracker : MonoBehaviour
     }
 
     void Work((ArMarkerMath.CameraModel left, ArMarkerMath.CameraModel right, Pose rightFromLeft, int id, float width,
-        ArMarkerStereoSolver.Threshold threshold, string folder) setup)
+        ArMarkerStereoSolver.Threshold threshold, string folder) setup, string cacheFolder)
     {
         var solver = new ArMarkerStereoSolver();
         ArMarkerStereoSolver.log += Log;
         try
         {
-            if (!solver.Start(setup.left, setup.right, setup.rightFromLeft, setup.id, setup.width, setup.threshold))
+            if (!solver.Start(setup.left, setup.right, setup.rightFromLeft, setup.id, setup.width, setup.threshold, cacheFolder))
             {
-                lock (m_Lock)
-                    m_Done.Enqueue(new Done { error = solver.error });
+                Log("artoolkitX: " + solver.error);
+                m_SolverError = solver.error;
+                m_SolverState = SolverFailed;
                 return;
             }
-            Log("artoolkitX stereo started");
+            m_SolverState = SolverRunning;
+            Log($"artoolkitX {ArMarkerStereoSolver.Version()} stereo started (cache {cacheFolder})");
             int snapshots = 0;
             var watch = new System.Diagnostics.Stopwatch();
             while (!m_Stop)
@@ -927,6 +948,26 @@ public class ArMarkerTracker : MonoBehaviour
     #region Log, status and settings
 
     void SetStatus(string text) => status = text;
+
+    // A folder artoolkitX may write its camera-calibration cache to (its default on Android is the read-only working
+    // directory, which stops its video input from opening).
+    static string CacheFolder()
+    {
+        try
+        {
+            string folder = Path.Combine(Application.temporaryCachePath, "artoolkitX");
+            Directory.CreateDirectory(folder);
+            return folder;
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[ARMarker] no cache folder for artoolkitX: " + e.Message);
+            return null;
+        }
+    }
+
+    /// <summary>Image timestamps arrive in nanoseconds (the Android camera's clock); older code paths may give seconds.</summary>
+    static double Seconds(double timestamp) => timestamp > 1e7 ? timestamp * 1e-9 : timestamp;
 
     void OpenLog()
     {

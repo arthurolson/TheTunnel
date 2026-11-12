@@ -148,6 +148,80 @@ static class ArMarkerEditorTests
         return report.ToString();
     }
 
+    [MenuItem("Tunnel/Paint/Test AR Marker Start Sequence (as on Android)")]
+    public static string TestStartSequence()
+    {
+        // The headset's start, on a worker thread as there: artoolkitX's external video input needs a writable cache
+        // folder. Android's default is read-only, which this reproduces with an unwritable folder; then a writable
+        // one (the headset uses temporaryCachePath), then a stop and a second start.
+        var left = new ArMarkerMath.CameraModel(1280, 1280, 854.6f, 854.6f, 639.4f, 642.9f);
+        var right = new ArMarkerMath.CameraModel(1280, 1280, 852.6f, 852.6f, 640.3f, 640.0f);
+        var headFromLeft = new Pose(new Vector3(-0.0331f, -0.0122f, 0.0751f), Quaternion.Euler(6.3f, 0.4f, -0.2f));
+        var headFromRight = new Pose(new Vector3(0.0313f, -0.0125f, 0.0753f), Quaternion.Euler(6.3f, -0.4f, 0.5f));
+        var rightFromLeft = ArMarkerMath.RightFromLeft(headFromLeft, headFromRight);
+        var markerInHead = new Pose(new Vector3(0.02f, -0.08f, 0.45f), Quaternion.LookRotation(new Vector3(0.02f, -0.08f, 0.45f).normalized, Vector3.up) * Quaternion.Euler(-30f, 0f, 15f));
+        var imageL = Render(left, ArMarkerMath.Mul(ArMarkerMath.Inverse(headFromLeft), markerInHead));
+        var imageR = Render(right, ArMarkerMath.Mul(ArMarkerMath.Inverse(headFromRight), markerInHead));
+        string writable = System.IO.Path.Combine(Application.temporaryCachePath, "artoolkitX");
+        System.IO.Directory.CreateDirectory(writable);
+
+        var report = new StringBuilder("[ARMarker] start sequence test (Quest 3S lenses, 1280x1280)\n");
+        report.AppendLine($"  vconf: {ArMarkerStereoSolver.VideoConfiguration(writable)}");
+        string Attempt(string label, string cache, bool expectStart)
+        {
+            string line = null;
+            var log = new List<string>();
+            var thread = new Thread(() =>
+            {
+                void OnLog(string l) { lock (log) log.Add(l); }
+                ArMarkerStereoSolver.log += OnLog;
+                var solver = new ArMarkerStereoSolver();
+                try
+                {
+                    // Copies: the solver stamps its decoy square into the images it is given.
+                    if (!solver.Start(left, right, rightFromLeft, 1, k_Width, ArMarkerStereoSolver.Threshold.Otsu, cache))
+                    {
+                        line = $"start failed: {solver.error}";
+                        return;
+                    }
+                    for (int i = 0; i < 100; i++)
+                    {
+                        if (solver.Process((byte[])imageL.Clone(), (byte[])imageR.Clone(), out var result) && result.visible)
+                        {
+                            var truth = ArMarkerMath.Mul(ArMarkerMath.Inverse(headFromLeft), markerInHead);
+                            line = $"started; found after {i + 1} pairs, {Vector3.Distance(result.markerInLeft.position, truth.position) * 1000f:0.0} mm from the truth";
+                            return;
+                        }
+                        Thread.Sleep(10);
+                    }
+                    line = "started but never found the marker";
+                }
+                finally
+                {
+                    solver.Dispose();
+                    ArMarkerStereoSolver.log -= OnLog;
+                }
+            });
+            thread.Start();
+            thread.Join(20000);
+            bool started = line != null && line.StartsWith("started;");
+            var keyLines = new List<string>();
+            lock (log)
+                foreach (var l in log)
+                    if (l.Contains("[error]"))
+                        keyLines.Add(l.Replace("\n", " "));
+            return $"  {label}: {(started == expectStart ? "as expected" : "UNEXPECTED")} - {line}" +
+                (keyLines.Count > 0 ? "\n      artoolkitX: " + string.Join("\n      artoolkitX: ", keyLines) : "");
+        }
+
+        report.AppendLine(Attempt("1. writable cache folder", writable, true));
+        report.AppendLine(Attempt("2. after a stop, started again", writable, true));
+        report.AppendLine(Attempt("3. unwritable cache folder (Android's case)", "/System/ARMarkerReadOnlyTest", false));
+        report.AppendLine(Attempt("4. after that failed start, started again", writable, true));
+        Debug.Log(report.ToString());
+        return report.ToString();
+    }
+
     // The camera's view of the marker on white paper (10 cm square) over a mid-grey background, 2x2 samples a pixel.
     static byte[] Render(ArMarkerMath.CameraModel camera, Pose markerInCamera)
     {

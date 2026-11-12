@@ -44,8 +44,13 @@ public sealed class ArMarkerStereoSolver : IDisposable
     /// Starts artoolkitX with two external video sources (8-bit luminance images of the given sizes), each camera's
     /// lens and the transform from the left camera to the right one, and the barcode marker to look for.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="cacheFolder"/> must be writable: artoolkitX's external video input opens a camera-calibration
+    /// cache there, and on Android its default (a folder in the read-only working directory) makes the video input
+    /// fail to open ("module External requires ar2VideoOpenAsync").
+    /// </remarks>
     public bool Start(ArMarkerMath.CameraModel left, ArMarkerMath.CameraModel right, Pose rightFromLeft,
-        int barcodeId, float markerWidthMeters, Threshold threshold = Threshold.Otsu)
+        int barcodeId, float markerWidthMeters, Threshold threshold = Threshold.Otsu, string cacheFolder = null)
     {
         error = null;
         if (s_Running != null && s_Running != this)
@@ -53,12 +58,12 @@ public sealed class ArMarkerStereoSolver : IDisposable
 
         try
         {
-            if (s_LogCallback == null)
-            {
-                s_LogCallback = OnNativeLog;
-                ARX_pinvoke.arwRegisterLogCallback(s_LogCallback);
-                ARX_pinvoke.arwSetLogLevel(1); // info and up
-            }
+            // artoolkitX passes its log only to the thread that registered (others' lines wait until that thread logs),
+            // so register from this thread every time.
+            s_LogCallback ??= OnNativeLog;
+            ARX_pinvoke.arwRegisterLogCallback(null);
+            ARX_pinvoke.arwRegisterLogCallback(s_LogCallback);
+            ARX_pinvoke.arwSetLogLevel(1); // info and up
             if (!arwIsInited() && !ARX_pinvoke.arwInitialiseAR())
                 return Fail("artoolkitX didn't initialise");
 
@@ -68,9 +73,9 @@ public sealed class ArMarkerStereoSolver : IDisposable
             var paramL = ArMarkerMath.CameraParamFile(left);
             var paramR = ArMarkerMath.CameraParamFile(right);
             var l2r = ArMarkerMath.TransL2RFile(rightFromLeft);
-            const string vconf = "-module=External";
+            string vconf = VideoConfiguration(cacheFolder);
             if (!ARX_pinvoke.arwStartRunningStereoB(vconf, paramL, paramL.Length, vconf, paramR, paramR.Length, l2r, l2r.Length))
-                return Fail($"artoolkitX didn't start the stereo video (error {ARX_pinvoke.arwGetError()})");
+                return Fail($"artoolkitX couldn't open the two video inputs (error {ARX_pinvoke.arwGetError()}; its log lines above say why)");
             m_Started = true;
             s_Running = this;
 
@@ -96,6 +101,12 @@ public sealed class ArMarkerStereoSolver : IDisposable
             return Fail("artoolkitX's library is missing a function: " + e.Message);
         }
     }
+
+    /// <summary>The video configuration for each camera: external (pushed) frames, with a writable cache folder.</summary>
+    public static string VideoConfiguration(string cacheFolder) =>
+        string.IsNullOrEmpty(cacheFolder)
+            ? "-module=External"
+            : $"-module=External -cachedir=\"{cacheFolder}\" -cacheinitdir=\"{cacheFolder}\"";
 
     bool Fail(string message)
     {
