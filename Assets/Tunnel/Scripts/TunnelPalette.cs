@@ -440,8 +440,20 @@ public class TunnelPalette : NetworkBehaviour
 
     // A copy of the AR canvas's painting (its paint area), or else of the real panel's, on the tunnel wall in view
     // (or in front of the head), for everyone.
+    /// <summary>
+    /// Puts every pencil line still being drawn on this headset onto its surface. A line in progress shows on the
+    /// canvas but isn't a mark yet, so a copy made then would leave it out.
+    /// </summary>
+    public static void FinishPencilLines()
+    {
+        foreach (var marker in TunnelMarker.all)
+            if (marker != null)
+                marker.FinishPencilLine();
+    }
+
     void CopyToWall()
     {
+        FinishPencilLines();
         var arCanvas = ArCanvasPaint();
         var source = arCanvas != null ? arCanvas : PanelPaint();
         if (source == null || !source.hasMarks)

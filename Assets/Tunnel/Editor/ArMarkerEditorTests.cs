@@ -562,6 +562,281 @@ static class ArMarkerEditorTests
         return report.ToString();
     }
 
+    [MenuItem("Tunnel/Paint/Test Copy to Wall Matches the Canvas (in Play mode)")]
+    public static string TestCopyMatches()
+    {
+        if (!Application.isPlaying)
+        {
+            Debug.LogWarning("[Paint] enter Play mode (any scene) first, then run Tunnel > Paint > Test Copy to Wall Matches the Canvas");
+            return "needs Play mode";
+        }
+        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        void Call(object target, string method, params object[] args) =>
+            target.GetType().GetMethod(method, flags).Invoke(target, args.Length == 0 ? null : args);
+
+        // The AR canvas, locked (sightings pushed in), a palette away from it, and its marker, held.
+        var cubePrefab = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Tunnel/Paint/ARMarker_Cube_Networked.prefab");
+        if (ArMarkerCube.instance != null)
+            UnityEngine.Object.DestroyImmediate(ArMarkerCube.instance.gameObject);
+        ArMarkerCube.Toggle(cubePrefab, false, ArMarkerCube.Shows.Canvas);
+        var cube = ArMarkerCube.instance;
+        Call(cube, "Start");
+        var panel = new Pose(new Vector3(0f, 1.1f, 0.6f), Quaternion.Euler(30f, 0f, 0f));
+        var cubePose = ArMarkerMath.CubeFromMarker(ArMarkerMath.Mul(panel, cube.layout.markerOnCanvas));
+        for (int i = 0; i < 40 && !cube.canvasLocked; i++)
+        {
+            Call(cube, "OnSighted", new ArMarkerTracker.Sighting { cubeInTable = cubePose, quality = 0.9f, cameras = 3, confidence = 1f, age = -1000.0 - i * 0.033 });
+            Call(cube, "Update");
+        }
+        Call(cube, "Update");
+        var canvas = cube.GetComponentInChildren<ArMarkerCanvas>(true);
+        var source = cube.canvasPaint;
+        var palette = UnityEngine.Object.Instantiate(AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Tunnel/Paint/Paint_Palette_Networked.prefab"),
+            new Vector3(2f, 1.2f, 0f), Quaternion.LookRotation(Vector3.left)).GetComponent<TunnelPalette>();
+        var marker = UnityEngine.Object.Instantiate(AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Tunnel/Paint/Paint_Marker_Networked.prefab")).GetComponent<TunnelMarker>();
+        marker.SetPalette(palette);
+        typeof(TunnelMarker).GetField("m_LocalDocked", flags).SetValue(marker, false);
+        marker.heldForTests = true;
+        var report = new StringBuilder("[Paint] copy-to-wall test: the AR canvas painted through the virtual marker, copied, compared\n");
+
+        // One frame of painting: the marker's tip at a point of the canvas (u, v over the paint area; lift above the
+        // real panel's surface), pointing into it.
+        var area = canvas.layout.paintArea;
+        Vector3 OnCanvas(float u, float v, float above) => canvas.transform.TransformPoint((u - 0.5f) * area.x, (v - 0.5f) * area.y, canvas.layout.lift - above);
+        void Frame(Vector3 tip)
+        {
+            marker.transform.rotation = canvas.transform.rotation; // its tip (+Z) into the panel
+            marker.transform.position = tip - marker.transform.forward * (marker.transform.lossyScale.z * 0.5f);
+            Call(marker, "Update");
+            Call(source, "LateUpdate");
+        }
+        void Lift() => Frame(OnCanvas(0.5f, 0.5f, 0.2f));
+        void Stroke(float u0, float v0, float u1, float v1, int frames = 30, float above = 0f)
+        {
+            for (int i = 0; i <= frames; i++)
+                Frame(OnCanvas(Mathf.Lerp(u0, u1, i / (float)frames), Mathf.Lerp(v0, v1, i / (float)frames), above));
+            Lift();
+        }
+        void Mode(PaintMode mode) => Call(palette, "SetMode", mode);
+        void Size(float diameter) => marker.transform.localScale = new Vector3(diameter, diameter, marker.transform.localScale.z);
+        void Disk(int index)
+        {
+            // Touch a palette disk with the tip, as a painter does to change colour.
+            var disks = (UnityEngine.UI.Button[])typeof(TunnelPalette).GetField("m_Disks", flags).GetValue(palette);
+            Frame(disks[index].transform.position);
+            Lift();
+        }
+
+        var scenarios = new (string name, Action paint)[]
+        {
+            ("colours (touching disks) crossing each other", () =>
+            {
+                Mode(PaintMode.Paint); Size(0.01f);
+                Disk(0); Stroke(0.1f, 0.2f, 0.9f, 0.8f);
+                Disk(2); Stroke(0.1f, 0.8f, 0.9f, 0.2f);
+                Disk(3); Stroke(0.5f, 0.05f, 0.5f, 0.95f);
+            }),
+            ("sizes", () =>
+            {
+                Mode(PaintMode.Paint); Disk(1);
+                Size(0.004f); Stroke(0.1f, 0.3f, 0.9f, 0.3f);
+                Size(0.02f); Stroke(0.1f, 0.6f, 0.9f, 0.6f);
+                Size(0.01f);
+            }),
+            ("pencil: straight and curve", () =>
+            {
+                Mode(PaintMode.Pencil); Disk(4);
+                foreach (var p in new[] { new Vector2(0.1f, 0.1f), new Vector2(0.4f, 0.5f), new Vector2(0.2f, 0.8f) }) { Frame(OnCanvas(p.x, p.y, 0f)); Lift(); }
+                Frame(OnCanvas(0.2f, 0.8f, 0f)); Lift(); // the last point again finishes it
+                Call(palette, "SetCurve", true);
+                foreach (var p in new[] { new Vector2(0.5f, 0.2f), new Vector2(0.7f, 0.9f), new Vector2(0.9f, 0.3f) }) { Frame(OnCanvas(p.x, p.y, 0f)); Lift(); }
+                Call(palette, "RequestEndLine"); Lift();
+                Call(palette, "SetCurve", false);
+            }),
+            ("airbrush", () =>
+            {
+                Mode(PaintMode.Airbrush); Disk(2);
+                Stroke(0.1f, 0.5f, 0.9f, 0.5f, 40, 0.05f);
+                Stroke(0.3f, 0.2f, 0.3f, 0.8f, 20, 0f);
+            }),
+            ("paint, erase, paint again", () =>
+            {
+                Mode(PaintMode.Paint); Size(0.012f); Disk(0);
+                Stroke(0.1f, 0.5f, 0.9f, 0.5f);
+                Mode(PaintMode.Eraser); Size(0.02f); Stroke(0.5f, 0.2f, 0.5f, 0.8f);
+                Mode(PaintMode.Paint); Size(0.008f); Disk(3); Stroke(0.4f, 0.3f, 0.6f, 0.7f);
+            }),
+            ("across the dashed edge", () =>
+            {
+                Mode(PaintMode.Paint); Size(0.012f); Disk(1);
+                Stroke(-0.1f, 0.4f, 0.3f, 0.6f);
+                Stroke(0.8f, 1.1f, 0.95f, 0.5f);
+            }),
+            ("Re-find between strokes", () =>
+            {
+                Mode(PaintMode.Paint); Size(0.01f); Disk(2);
+                Stroke(0.2f, 0.2f, 0.8f, 0.3f);
+                ArMarkerCube.Toggle(cubePrefab, false, ArMarkerCube.Shows.Canvas); // Re-find canvas
+                Relock();
+                Disk(0); Stroke(0.2f, 0.7f, 0.8f, 0.6f);
+            }),
+            ("pencil lines with a colour change (a disk) between them", () =>
+            {
+                Mode(PaintMode.Pencil); Disk(0);
+                foreach (var p in new[] { new Vector2(0.1f, 0.6f), new Vector2(0.45f, 0.9f) }) { Frame(OnCanvas(p.x, p.y, 0f)); Lift(); }
+                Disk(2); // the red line goes on the canvas; the next touches start a green one
+                foreach (var p in new[] { new Vector2(0.55f, 0.9f), new Vector2(0.9f, 0.6f) }) { Frame(OnCanvas(p.x, p.y, 0f)); Lift(); }
+                Call(palette, "RequestEndLine"); Lift();
+            }),
+            ("a pencil line still being drawn when copied", () =>
+            {
+                Mode(PaintMode.Pencil); Disk(3);
+                foreach (var p in new[] { new Vector2(0.15f, 0.15f), new Vector2(0.85f, 0.2f), new Vector2(0.6f, 0.85f) }) { Frame(OnCanvas(p.x, p.y, 0f)); Lift(); }
+                // not finished: it shows on the canvas (as a preview) while the painter goes to Copy to wall
+            }),
+        };
+
+        void Relock()
+        {
+            for (int i = 0; i < 40 && !cube.canvasLocked; i++)
+            {
+                Call(cube, "OnSighted", new ArMarkerTracker.Sighting { cubeInTable = cubePose, quality = 0.9f, cameras = 3, confidence = 1f, age = -2000.0 - s_Sightings++ * 0.033 });
+                Call(cube, "Update");
+            }
+            Call(cube, "Update");
+        }
+
+        int ok = 0;
+        foreach (var (name, paint) in scenarios)
+        {
+            source.Clear();
+            Call(source, "LateUpdate");
+            paint();
+            Call(source, "LateUpdate");
+            report.AppendLine($"  {name}: {Compare(source, Copy(source, cube.canvasPaintMeters), out bool same)}");
+            if (same)
+                ok++;
+        }
+
+        // Everything at once, without clearing in between.
+        source.Clear();
+        Call(source, "LateUpdate");
+        foreach (var (_, paint) in scenarios)
+            paint();
+        Call(source, "LateUpdate");
+        string all = Compare(source, Copy(source, cube.canvasPaintMeters), out bool allSame);
+        report.AppendLine($"  all of it on one canvas: {all}");
+        if (allSame)
+            ok++;
+        report.AppendLine(ok == scenarios.Length + 1 ? "  PASS" : $"  FAIL ({ok} of {scenarios.Length + 1} match)");
+
+        UnityEngine.Object.Destroy(marker.gameObject);
+        UnityEngine.Object.Destroy(palette.gameObject);
+        UnityEngine.Object.Destroy(cube.gameObject);
+        Debug.Log(report.ToString());
+        return report.ToString();
+
+        // A copy as Copy to wall makes it (the canvas's record replayed into it), drawn.
+        TunnelSegmentPaint Copy(TunnelSegmentPaint from, Vector2 meters)
+        {
+            TunnelPalette.FinishPencilLines(); // as Copy to wall does first
+            Call(from, "LateUpdate");
+            var holder = new GameObject("Copy Holder");
+            holder.SetActive(false);
+            var copy = UnityEngine.Object.Instantiate(AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Tunnel/Paint/Paint_Copy_Networked.prefab"),
+                new Vector3(-2f, 1.2f, 0f), Quaternion.identity, holder.transform);
+            copy.GetComponent<PaintingCopy>().Setup(meters, 0, 0);
+            copy.transform.SetParent(null, true);
+            UnityEngine.Object.Destroy(holder);
+            var paint = copy.GetComponent<TunnelSegmentPaint>();
+            var replay = from.ReplayInto(paint);
+            while (replay.MoveNext())
+                Call(paint, "LateUpdate");
+            Call(paint, "LateUpdate");
+            return paint;
+        }
+    }
+
+    // The most painted of a cell's neighbourhood (by alpha).
+    static Color Darkest(Texture2D t, float u, float v, float du, float dv)
+    {
+        var best = new Color(0, 0, 0, 0);
+        for (int j = -1; j <= 1; j++)
+            for (int i = -1; i <= 1; i++)
+            {
+                var c = t.GetPixelBilinear(u + i * du, v + j * dv);
+                if (c.a > best.a) best = c;
+            }
+        return best;
+    }
+
+    // Whether a colour is found in a cell's neighbourhood (two cells round: crossings and airbrush grain fall on
+    // different pixels at the two texel sizes).
+    static bool Near(Texture2D t, Color colour, float u, float v, float du, float dv)
+    {
+        for (int j = -2; j <= 2; j++)
+            for (int i = -2; i <= 2; i++)
+            {
+                var c = t.GetPixelBilinear(u + i * du, v + j * dv);
+                if (Mathf.Abs(c.r - colour.r) + Mathf.Abs(c.g - colour.g) + Mathf.Abs(c.b - colour.b) + Mathf.Abs(c.a - colour.a) < 0.2f)
+                    return true;
+            }
+        return false;
+    }
+
+    static int s_Sightings;
+
+    /// <summary>When set, Compare saves both pictures there (for looking at differences).</summary>
+    public static string dumpFolder;
+    static int s_Dumps;
+
+    // Both canvases resampled to the same grid: cells painted on the canvas but not on the copy (or the other way),
+    // and colours that differ.
+    static string Compare(TunnelSegmentPaint source, TunnelSegmentPaint copy, out bool same)
+    {
+        var a = source.ReadCanvas();
+        var b = copy.ReadCanvas();
+        same = false;
+        if (a == null || b == null)
+        {
+            if (b != null) UnityEngine.Object.Destroy(b);
+            if (a != null) UnityEngine.Object.Destroy(a);
+            UnityEngine.Object.Destroy(copy.gameObject);
+            return $"nothing to compare (canvas {(a != null)}, copy {(b != null)})";
+        }
+        if (dumpFolder != null)
+        {
+            System.IO.File.WriteAllBytes(System.IO.Path.Combine(dumpFolder, $"compare-{++s_Dumps}-canvas.png"), a.EncodeToPNG());
+            System.IO.File.WriteAllBytes(System.IO.Path.Combine(dumpFolder, $"compare-{s_Dumps}-copy.png"), b.EncodeToPNG());
+        }
+        int w = 200, h = Mathf.RoundToInt(200f * a.height / a.width);
+        int painted = 0, missing = 0, extra = 0, colour = 0;
+        var where = new List<string>();
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                float u = (x + 0.5f) / w, v = (y + 0.5f) / h;
+                var ca = a.GetPixelBilinear(u, v);
+                var cb = b.GetPixelBilinear(u, v);
+                if (ca.a > 0.3f) painted++;
+                // The two canvases have different texel sizes, so a stroke's edge falls on different pixels: a cell
+                // counts as missing (or extra, or another colour) only where the other picture has nothing like it
+                // anywhere within a cell around.
+                // (The cheap test first: the neighbourhood is looked at only where the cell itself differs.)
+                if (ca.a > 0.5f && cb.a < 0.1f && Darkest(b, u, v, 1f / w, 1f / h).a < 0.1f) { missing++; if (where.Count < 4) where.Add($"({u:0.00}, {v:0.00})"); }
+                else if (cb.a > 0.5f && ca.a < 0.1f && Darkest(a, u, v, 1f / w, 1f / h).a < 0.1f) extra++;
+                else if (ca.a > 0.9f && cb.a > 0.9f && Mathf.Abs(ca.r - cb.r) + Mathf.Abs(ca.g - cb.g) + Mathf.Abs(ca.b - cb.b) + Mathf.Abs(ca.a - cb.a) >= 0.2f &&
+                    !Near(b, ca, u, v, 1f / w, 1f / h)) colour++;
+            }
+        UnityEngine.Object.Destroy(a);
+        UnityEngine.Object.Destroy(b);
+        UnityEngine.Object.Destroy(copy.gameObject);
+        float total = Mathf.Max(painted, 1);
+        same = painted > 0 && (missing + extra + colour) / total < 0.01f;
+        return $"{(same ? "match" : "DIFFER")}: painted {painted} cells; missing on the copy {missing} ({missing / total * 100f:0.0}%){(where.Count > 0 ? " e.g. at " + string.Join(" ", where) : "")}, " +
+            $"extra {extra}, other colour {colour}";
+    }
+
     [MenuItem("Tunnel/Paint/Test AR Canvas Lock (jittery sightings)")]
     public static string TestCanvasLock()
     {

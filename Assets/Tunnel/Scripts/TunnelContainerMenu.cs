@@ -5,7 +5,7 @@ using UnityEngine.UI;
 using UnityEngine.XR.Templates.MRTTabletopAssets;
 
 /// <summary>
-/// The TS Menu's "Containers" list: check a shape (Box or Sphere), then Place Container puts one for everyone inside
+/// The TS Menu's "Containers" list: check a shape (Box, Splat-box or Sphere), then Place Container puts one for everyone inside
 /// the tunnel, beside the list like a new molecule (see <see cref="TunnelContainer"/>); its walls always hold molecules
 /// in. For the container placed or held last: the Viscosity slider
 /// (0 to 1 in steps of 0.1) shows and sets how thick the medium inside it is
@@ -15,6 +15,8 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// Random motion / Ballistic motion and the thermometer (absolute zero to 100 °C, continuous, read in °C) show and set
 /// the heat inside it (see <see cref="TunnelContainer.temperature"/>); 3D movie controls shows or hides its movie's
 /// controls on the container (see <see cref="TunnelMovie"/>).
+/// A splat-box (see <see cref="SplatBox"/>) is only a frame for a 3D portrait, chosen on its own menu beside it: it can
+/// be a mixed reality box, but the medium, heat and movie rows don't apply to it.
 /// In a session everyone sees the same menu: the shape checked, the container it shows (the one placed or held last by
 /// anyone) and its messages.
 /// Works locally when not connected.
@@ -35,6 +37,13 @@ public class TunnelContainerMenu : NetworkBehaviour
 
     [SerializeField]
     Button m_SphereRow;
+
+    [SerializeField]
+    Button m_SplatBoxRow;
+
+    [SerializeField]
+    [Tooltip("The splat-box (made by Tunnel > Containers > Build Containers).")]
+    GameObject m_SplatBoxPrefab;
 
     [SerializeField]
     Button m_PlaceButton;
@@ -94,6 +103,8 @@ public class TunnelContainerMenu : NetworkBehaviour
             m_BoxRow.onClick.AddListener(() => Check(TunnelContainer.Shape.Box));
         if (m_SphereRow != null)
             m_SphereRow.onClick.AddListener(() => Check(TunnelContainer.Shape.Sphere));
+        if (m_SplatBoxRow != null)
+            m_SplatBoxRow.onClick.AddListener(() => Check(TunnelContainer.Shape.SplatBox));
         if (m_PlaceButton != null)
             m_PlaceButton.onClick.AddListener(Place);
         if (m_MixedRealityRow != null)
@@ -147,7 +158,7 @@ public class TunnelContainerMenu : NetworkBehaviour
             return;
         m_ListPanel.SetActive(show);
         if (show)
-            SetStatus("Check a shape, then Place Container. Put molecules in by hand: its walls hold them in.\nThe settings below are for the container placed or held last.");
+            SetStatus("Check a shape, then Place Container. Put molecules in by hand: its walls hold them in. A splat-box shows a 3D portrait, picked on its own menu.\nThe settings below are for the container placed or held last.");
     }
 
     void Update()
@@ -164,7 +175,9 @@ public class TunnelContainerMenu : NetworkBehaviour
     void ShowMovie(TunnelContainer container)
     {
         var movie = container != null ? container.movie : null;
-        if (movie == null)
+        if (container != null && !container.hasMedium)
+            SetRow(m_MovieRow, "□  3D movie controls  <color=#AAA>(not for a splat-box)</color>", false);
+        else if (movie == null)
             SetRow(m_MovieRow, "□  3D movie controls  <color=#AAA>(place a container first)</color>", false);
         else
             SetRow(m_MovieRow, (movie.controlsShown ? "■" : "□") + "  3D movie controls  <color=#AAA>on the container</color>", true);
@@ -181,7 +194,7 @@ public class TunnelContainerMenu : NetworkBehaviour
     {
         if (container == null)
             SetRow(m_MixedRealityRow, "□  Mixed reality box  <color=#AAA>(place a box first)</color>", false);
-        else if (container.shape != TunnelContainer.Shape.Box)
+        else if (!container.isBox)
             SetRow(m_MixedRealityRow, "□  Mixed reality box  <color=#AAA>(boxes only)</color>", false);
         else
             SetRow(m_MixedRealityRow, container.isMixedReality
@@ -206,14 +219,17 @@ public class TunnelContainerMenu : NetworkBehaviour
     void ToggleMixedReality()
     {
         var container = TunnelContainer.current;
-        if (container == null || container.shape != TunnelContainer.Shape.Box)
-            ShareStatus("Place a box first: only boxes can be mixed reality boxes.");
+        if (container == null || !container.isBox)
+            ShareStatus("Place a box first: only boxes (and splat-boxes) can be mixed reality boxes.");
         else
             container.SetMixedReality(!container.isMixedReality);
     }
 
     void ShowHeat(TunnelContainer container)
     {
+        // A splat-box has no medium: its heat rows are off.
+        if (container != null && !container.hasMedium)
+            container = null;
         var motion = container != null ? container.motion : TunnelContainer.Motion.Random;
         SetRow(m_RandomRow, (motion == TunnelContainer.Motion.Random ? "■" : "□") + "  Random motion  <color=#AAA>Brownian</color>", container != null);
         SetRow(m_BallisticRow, (motion == TunnelContainer.Motion.Ballistic ? "■" : "□") + "  Ballistic motion  <color=#AAA>like a gas</color>", container != null);
@@ -251,7 +267,7 @@ public class TunnelContainerMenu : NetworkBehaviour
     void OnTemperatureMoved(float value)
     {
         var container = TunnelContainer.current;
-        if (container == null)
+        if (container == null || !container.hasMedium)
             return;
         m_TemperatureFor = container;
         m_TemperatureShown = Mathf.Round(value * 20f) / 20f;
@@ -262,6 +278,9 @@ public class TunnelContainerMenu : NetworkBehaviour
     {
         if (m_ViscositySlider == null)
             return;
+        bool splatBox = container != null && !container.hasMedium;
+        if (splatBox)
+            container = null;
         m_ViscositySlider.interactable = container != null;
         float value = container == null ? 1f : container.viscosity;
         if (container != m_ViscosityFor || !Mathf.Approximately(value, m_ViscosityShown))
@@ -273,7 +292,9 @@ public class TunnelContainerMenu : NetworkBehaviour
 
         if (m_ViscosityText == null)
             return;
-        string text = container == null
+        string text = splatBox
+            ? "Viscosity  <color=#AAA>(a splat-box has no medium)</color>"
+            : container == null
             ? "Viscosity  <color=#AAA>(place a container first)</color>"
             : $"Viscosity: {m_ViscositySlider.value / 10f:0.0}  <color=#AAA>{container.shape.ToString().ToLowerInvariant()} held or placed last</color>";
         if (m_ViscosityText.text != text)
@@ -283,7 +304,7 @@ public class TunnelContainerMenu : NetworkBehaviour
     void OnViscosityMoved(float tenths)
     {
         var container = TunnelContainer.current;
-        if (container == null)
+        if (container == null || !container.hasMedium)
             return;
         float value = tenths / 10f;
         m_ViscosityFor = container;
@@ -312,11 +333,13 @@ public class TunnelContainerMenu : NetworkBehaviour
             m_BoxRow.GetComponentInChildren<TMP_Text>(true).text = (m_Chosen == TunnelContainer.Shape.Box ? "■" : "□") + "  Box";
         if (m_SphereRow != null)
             m_SphereRow.GetComponentInChildren<TMP_Text>(true).text = (m_Chosen == TunnelContainer.Shape.Sphere ? "■" : "□") + "  Sphere";
+        if (m_SplatBoxRow != null)
+            m_SplatBoxRow.GetComponentInChildren<TMP_Text>(true).text = (m_Chosen == TunnelContainer.Shape.SplatBox ? "■" : "□") + "  Splat-box";
     }
 
     void Place()
     {
-        ShareStatus($"Placing a {m_Chosen.ToString().ToLowerInvariant()}...");
+        ShareStatus($"Placing a {ShapeName(m_Chosen)}...");
         if (IsSpawned)
             SpawnContainerRpc(m_Chosen);
         else
@@ -328,9 +351,13 @@ public class TunnelContainerMenu : NetworkBehaviour
 
     void SpawnContainer(TunnelContainer.Shape shape)
     {
-        var prefab = m_Prefabs == null ? null : shape == TunnelContainer.Shape.Box ? m_Prefabs.containerBox : m_Prefabs.containerSphere;
+        var prefab = shape == TunnelContainer.Shape.SplatBox ? m_SplatBoxPrefab
+            : m_Prefabs == null ? null : shape == TunnelContainer.Shape.Box ? m_Prefabs.containerBox : m_Prefabs.containerSphere;
         if (prefab == null || m_Geometry == null)
+        {
+            Debug.LogWarning($"[Containers] no {ShapeName(shape)} to place (run Tunnel > Containers > Build Containers)");
             return;
+        }
 
         // Placed before it wakes up, as the molecules are (its network transform takes its pose when it's created).
         var holder = new GameObject("Container Holder");
@@ -338,8 +365,17 @@ public class TunnelContainerMenu : NetworkBehaviour
         var container = Instantiate(prefab, holder.transform);
         container.transform.rotation = m_Geometry.transform.rotation;
         var size = prefab.transform.localScale;
-        float radius = shape == TunnelContainer.Shape.Box ? size.magnitude * 0.5f : Mathf.Max(size.x, Mathf.Max(size.y, size.z)) * 0.5f;
+        float radius = shape != TunnelContainer.Shape.Sphere ? size.magnitude * 0.5f : Mathf.Max(size.x, Mathf.Max(size.y, size.z)) * 0.5f;
         container.transform.position = TunnelMoleculeMenu.PlaceBesideList(m_Geometry, (RectTransform)m_ListPanel.transform, container, radius, m_GapFromList, m_GapFromWall);
+        if (shape == TunnelContainer.Shape.SplatBox)
+        {
+            // Its splat's side (+Z) toward the middle of the tunnel, upright.
+            var geometry = m_Geometry.transform;
+            var local = geometry.InverseTransformPoint(container.transform.position);
+            var toMiddle = geometry.TransformDirection(new Vector3(-local.x, 0f, 0f));
+            if (toMiddle.sqrMagnitude > 1e-4f)
+                container.transform.rotation = Quaternion.LookRotation(toMiddle.normalized, geometry.up);
+        }
         container.transform.SetParent(null, true);
         Destroy(holder);
         Debug.Log($"[Containers] placed a {shape} at {container.transform.position:F2}");
@@ -347,6 +383,8 @@ public class TunnelContainerMenu : NetworkBehaviour
         if (IsSpawned && container.TryGetComponent(out NetworkObject networkObject))
             networkObject.Spawn(true);
     }
+
+    static string ShapeName(TunnelContainer.Shape shape) => shape == TunnelContainer.Shape.SplatBox ? "splat-box" : shape.ToString().ToLowerInvariant();
 
     /// <summary>A message on everyone's copy of the menu.</summary>
     void ShareStatus(string text)

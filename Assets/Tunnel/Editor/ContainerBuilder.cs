@@ -7,9 +7,11 @@ using UnityEngine.XR.Interaction.Toolkit.Interactables;
 using UnityEngine.XR.Interaction.Toolkit.Transformers;
 
 /// <summary>
-/// Makes the TS Menu's Containers (see <see cref="TunnelContainer"/>): a box and a sphere prefab, each a copy of the
-/// 2PLV molecule's toy without its molecule (so they are grabbed, scaled and shared the same way), and the menu's
-/// Containers button and list in the tunnel segment prefab. Runs from Tunnel > Containers > Build Containers.
+/// Makes the TS Menu's Containers (see <see cref="TunnelContainer"/>): a box, a sphere and a splat-box prefab, each a
+/// copy of the 2PLV molecule's toy without its molecule (so they are grabbed, scaled and shared the same way), and the
+/// menu's Containers button and list in the tunnel segment prefab. The splat-box (see <see cref="SplatBox"/>) gets the
+/// splats, their library and its menu from <see cref="SplatBuilder"/>, made first. Runs from
+/// Tunnel > Containers > Build Containers.
 /// </summary>
 static class ContainerBuilder
 {
@@ -26,11 +28,14 @@ static class ContainerBuilder
     const string k_NetworkListPath = "Assets/MRTabletopAssets/Prefabs/GameModes/Sandbox/NetworkedPrefabs/_SandboxPrefabList.asset";
     const string k_MoviePanelPath = "Assets/Tunnel/Movie/Movie_Panel.prefab";
 
-    // A new container is 30 cm across.
+    // A new container is 30 cm across; a new splat-box 60 cm on its longest side.
     const float k_Size = 0.3f;
+    const float k_SplatBoxSize = 0.6f;
 
     [MenuItem("Tunnel/Containers/Build Containers")]
-    public static string Build()
+    public static string Build() => BuilderScratchScene.Run(BuildAll);
+
+    static string BuildAll()
     {
         if (!AssetDatabase.IsValidFolder(k_Folder))
             AssetDatabase.CreateFolder("Assets/Tunnel", "Containers");
@@ -46,6 +51,9 @@ static class ContainerBuilder
         }
         var box = MakePrefab(TunnelContainer.Shape.Box, material, wall, window, glass);
         var sphere = MakePrefab(TunnelContainer.Shape.Sphere, material, wall, window, glass);
+        var library = SplatBuilder.BuildLibrary();
+        var splatMenu = SplatBuilder.BuildPanel();
+        var splatBox = MakePrefab(TunnelContainer.Shape.SplatBox, material, wall, window, glass, library, splatMenu);
 
         var registry = AssetDatabase.LoadAssetAtPath<TunnelPrefabRegistry>(k_RegistryPath);
         registry.containerBox = box;
@@ -55,14 +63,14 @@ static class ContainerBuilder
         var list = AssetDatabase.LoadAssetAtPath<NetworkPrefabsList>(k_NetworkListPath);
         foreach (var entry in list.PrefabList.Where(p => p.Prefab == null).ToList())
             list.Remove(entry);
-        foreach (var prefab in new[] { box, sphere })
+        foreach (var prefab in new[] { box, sphere, splatBox })
             if (!list.PrefabList.Any(p => p.Prefab == prefab))
                 list.Add(new NetworkPrefab { Prefab = prefab });
         EditorUtility.SetDirty(list);
 
-        string menu = BuildMenu(registry);
+        string menu = BuildMenu(registry, splatBox);
         AssetDatabase.SaveAssets();
-        string log = $"[Containers] built {AssetDatabase.GetAssetPath(box)} and {AssetDatabase.GetAssetPath(sphere)}; {menu}";
+        string log = $"[Containers] built {AssetDatabase.GetAssetPath(box)}, {AssetDatabase.GetAssetPath(sphere)} and {AssetDatabase.GetAssetPath(splatBox)} ({splatBox.transform.localScale.x:F2} x {splatBox.transform.localScale.y:F2} x {splatBox.transform.localScale.z:F2} m, {library.count} splat(s)); {menu}";
         Debug.Log(log);
         return log;
     }
@@ -126,64 +134,85 @@ static class ContainerBuilder
         return material;
     }
 
-    static GameObject MakePrefab(TunnelContainer.Shape shape, Material material, Material wall, Material window, Material glass)
+    static GameObject MakePrefab(TunnelContainer.Shape shape, Material material, Material wall, Material window, Material glass,
+        SplatLibrary library = null, SplatBoxPanel splatMenu = null)
     {
         var template = AssetDatabase.LoadAssetAtPath<GameObject>(k_TemplatePath);
-        var container = Object.Instantiate(template);
-        container.name = $"Container_{shape}_Networked";
+        // Made in a preview scene, so the open scene is left as it was.
+        var scene = UnityEditor.SceneManagement.EditorSceneManager.NewPreviewScene();
+        try
+        {
+            var container = (GameObject)PrefabUtility.InstantiatePrefab(template, scene);
+            PrefabUtility.UnpackPrefabInstance(container, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
+            container.name = $"Container_{shape}_Networked";
 
-        // Only the toy's workings: no molecule, its colour feedback or its collider.
-        for (int i = container.transform.childCount - 1; i >= 0; i--)
-            Object.DestroyImmediate(container.transform.GetChild(i).gameObject);
-        Object.DestroyImmediate(container.GetComponent<MoleculeGravity>());
-        if (container.TryGetComponent(out CapsidSites sites)) // 2PLV's binding sites (Tunnel > Movie)
-            Object.DestroyImmediate(sites);
-        container.transform.localScale = Vector3.one * k_Size;
+            // Only the toy's workings: no molecule, its colour feedback or its collider.
+            for (int i = container.transform.childCount - 1; i >= 0; i--)
+                Object.DestroyImmediate(container.transform.GetChild(i).gameObject);
+            Object.DestroyImmediate(container.GetComponent<MoleculeGravity>());
+            if (container.TryGetComponent(out CapsidSites sites)) // 2PLV's binding sites (Tunnel > Movie)
+                Object.DestroyImmediate(sites);
+            container.transform.localScale = Vector3.one * k_Size;
 
-        // It stays where it's left and pushes what's inside when moved, but isn't pushed itself.
-        var body = container.GetComponent<Rigidbody>();
-        body.isKinematic = true;
-        body.useGravity = false;
-        body.interpolation = RigidbodyInterpolation.Interpolate;
-        var grab = container.GetComponent<XRGrabInteractable>();
-        grab.throwOnDetach = false;
-        // Not frozen when it appears (a frozen kinematic box turns in the hand but doesn't move).
-        if (container.TryGetComponent(out XRMultiplayer.NetworkPhysicsInteractable networkPhysics))
-            networkPhysics.spawnLocked = false;
-        var grabSo = new SerializedObject(grab);
-        grabSo.FindProperty("m_Colliders").ClearArray(); // collected when it wakes, after it builds them
-        grabSo.ApplyModifiedPropertiesWithoutUndo();
+            // It stays where it's left and pushes what's inside when moved, but isn't pushed itself.
+            var body = container.GetComponent<Rigidbody>();
+            body.isKinematic = true;
+            body.useGravity = false;
+            body.interpolation = RigidbodyInterpolation.Interpolate;
+            var grab = container.GetComponent<XRGrabInteractable>();
+            grab.throwOnDetach = false;
+            // Not frozen when it appears (a frozen kinematic box turns in the hand but doesn't move).
+            if (container.TryGetComponent(out XRMultiplayer.NetworkPhysicsInteractable networkPhysics))
+                networkPhysics.spawnLocked = false;
+            var grabSo = new SerializedObject(grab);
+            grabSo.FindProperty("m_Colliders").ClearArray(); // collected when it wakes, after it builds them
+            grabSo.ApplyModifiedPropertiesWithoutUndo();
 
-        var general = container.GetComponent<XRGeneralGrabTransformer>();
-        var generalSo = new SerializedObject(general);
-        generalSo.FindProperty("m_MinimumScaleRatio").floatValue = 0.15f;
-        generalSo.FindProperty("m_MaximumScaleRatio").floatValue = 15f;
-        generalSo.ApplyModifiedPropertiesWithoutUndo();
+            var general = container.GetComponent<XRGeneralGrabTransformer>();
+            var generalSo = new SerializedObject(general);
+            generalSo.FindProperty("m_MinimumScaleRatio").floatValue = 0.15f;
+            generalSo.FindProperty("m_MaximumScaleRatio").floatValue = 15f;
+            generalSo.ApplyModifiedPropertiesWithoutUndo();
 
-        var component = container.AddComponent<TunnelContainer>();
-        var so = new SerializedObject(component);
-        so.FindProperty("m_Shape").enumValueIndex = (int)shape;
-        so.FindProperty("m_EdgeMaterial").objectReferenceValue = material;
-        so.FindProperty("m_WallMaterial").objectReferenceValue = wall;
-        so.FindProperty("m_WindowMaterial").objectReferenceValue = window;
-        so.FindProperty("m_GlassMaterial").objectReferenceValue = glass;
-        so.ApplyModifiedPropertiesWithoutUndo();
-        if (shape == TunnelContainer.Shape.Box)
-            container.AddComponent<ContainerStretchTransformer>(); // the sphere scales evenly
+            var component = container.AddComponent<TunnelContainer>();
+            var so = new SerializedObject(component);
+            so.FindProperty("m_Shape").enumValueIndex = (int)shape;
+            so.FindProperty("m_EdgeMaterial").objectReferenceValue = material;
+            so.FindProperty("m_WallMaterial").objectReferenceValue = wall;
+            so.FindProperty("m_WindowMaterial").objectReferenceValue = window;
+            so.FindProperty("m_GlassMaterial").objectReferenceValue = glass;
+            so.ApplyModifiedPropertiesWithoutUndo();
+            if (shape == TunnelContainer.Shape.Box)
+                container.AddComponent<ContainerStretchTransformer>(); // the sphere and the splat-box scale evenly
 
-        // Its 3D movie, and the controls shown on it (made by Tunnel > Movie > Build 3D Movie).
-        var movie = container.AddComponent<TunnelMovie>();
-        var movieSo = new SerializedObject(movie);
-        movieSo.FindProperty("m_PanelPrefab").objectReferenceValue = AssetDatabase.LoadAssetAtPath<TunnelMoviePanel>(k_MoviePanelPath);
-        movieSo.ApplyModifiedPropertiesWithoutUndo();
+            if (shape == TunnelContainer.Shape.SplatBox)
+            {
+                // Only a frame for a splat: no movie; sized to its first splat, which it scales evenly with.
+                var splat = container.AddComponent<SplatBox>();
+                splat.Configure(library, splatMenu);
+                container.transform.localScale = SplatBuilder.BoxSize(library, splat.margin, k_SplatBoxSize);
+            }
+            else
+            {
+                // Its 3D movie, and the controls shown on it (made by Tunnel > Movie > Build 3D Movie).
+                var movie = container.AddComponent<TunnelMovie>();
+                var movieSo = new SerializedObject(movie);
+                movieSo.FindProperty("m_PanelPrefab").objectReferenceValue = AssetDatabase.LoadAssetAtPath<TunnelMoviePanel>(k_MoviePanelPath);
+                movieSo.ApplyModifiedPropertiesWithoutUndo();
+            }
 
-        string path = $"{k_Folder}/{container.name}.prefab";
-        var prefab = PrefabUtility.SaveAsPrefabAsset(container, path);
-        Object.DestroyImmediate(container);
-        return prefab;
+            string path = $"{k_Folder}/{container.name}.prefab";
+            var prefab = PrefabUtility.SaveAsPrefabAsset(container, path);
+            Object.DestroyImmediate(container);
+            return prefab;
+        }
+        finally
+        {
+            UnityEditor.SceneManagement.EditorSceneManager.ClosePreviewScene(scene);
+        }
     }
 
-    static string BuildMenu(TunnelPrefabRegistry registry)
+    static string BuildMenu(TunnelPrefabRegistry registry, GameObject splatBox)
     {
         var root = PrefabUtility.LoadPrefabContents(k_SegmentPath);
         try
@@ -243,15 +272,15 @@ static class ContainerBuilder
             status.sizeDelta = new Vector2(620f, 100f);
 
             var template = list.transform.Find("Row Template");
-            Button Row(string name, float y, string text)
+            Button Row(string name, float y, string text, float x = rowsX, float width = rowsWidth)
             {
                 var row = Object.Instantiate(template.gameObject, list.transform, false);
                 row.name = name;
                 row.SetActive(true);
                 var rect = (RectTransform)row.transform;
                 rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f);
-                rect.sizeDelta = new Vector2(rowsWidth, 56f);
-                rect.anchoredPosition = new Vector2(rowsX, y);
+                rect.sizeDelta = new Vector2(width, 56f);
+                rect.anchoredPosition = new Vector2(x, y);
                 var b = row.GetComponent<Button>();
                 b.onClick = new Button.ButtonClickedEvent();
                 var rowLabel = row.GetComponentInChildren<TMPro.TMP_Text>(true);
@@ -259,7 +288,10 @@ static class ContainerBuilder
                 rowLabel.richText = true;
                 return b;
             }
-            var boxRow = Row("Box Row", 250f, "■  Box");
+            // Box and Splat-box side by side.
+            const float halfRow = rowsWidth / 2f - 6f;
+            var boxRow = Row("Box Row", 250f, "■  Box", rowsX - rowsWidth / 4f - 3f, halfRow);
+            var splatBoxRow = Row("Splat-box Row", 250f, "□  Splat-box", rowsX + rowsWidth / 4f + 3f, halfRow);
             var sphereRow = Row("Sphere Row", 185f, "□  Sphere");
             var place = Row("Place Button", 120f, "Place Container");
             var placeLabel = place.GetComponentInChildren<TMPro.TMP_Text>(true);
@@ -314,6 +346,8 @@ static class ContainerBuilder
             so.FindProperty("m_ListPanel").objectReferenceValue = list;
             so.FindProperty("m_BoxRow").objectReferenceValue = boxRow;
             so.FindProperty("m_SphereRow").objectReferenceValue = sphereRow;
+            so.FindProperty("m_SplatBoxRow").objectReferenceValue = splatBoxRow;
+            so.FindProperty("m_SplatBoxPrefab").objectReferenceValue = splatBox;
             so.FindProperty("m_PlaceButton").objectReferenceValue = place;
             so.FindProperty("m_MixedRealityRow").objectReferenceValue = mixedRealityRow;
             so.FindProperty("m_UnsnapRow").objectReferenceValue = unsnapRow;

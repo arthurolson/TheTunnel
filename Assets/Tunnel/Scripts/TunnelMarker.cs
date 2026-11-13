@@ -70,6 +70,9 @@ public class TunnelMarker : NetworkBehaviour
     /// <summary>Every marker.</summary>
     public static readonly List<TunnelMarker> all = new();
 
+    /// <summary>For the Editor tests: paints as if held in a hand (wherever the test puts it), without a hand.</summary>
+    [System.NonSerialized] public bool heldForTests;
+
     readonly NetworkVariable<Color32> m_SharedColor = new(TunnelPalette.k_DefaultDisks[0], NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<NetworkObjectReference> m_SharedPalette = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<bool> m_SharedDocked = new(true, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
@@ -438,7 +441,8 @@ public class TunnelMarker : NetworkBehaviour
             ShowPencil();
 
         bool real = m_Real && m_RealSeen;
-        if (!real && (m_Grab == null || !m_Grab.isSelected || m_Real))
+        bool held = heldForTests || (m_Grab != null && m_Grab.isSelected);
+        if (!real && (!held || m_Real))
         {
             if (m_Touching)
                 EndStroke();
@@ -455,6 +459,10 @@ public class TunnelMarker : NetworkBehaviour
             int disk = holder.DiskAt(tipPoint, radius + 0.02f);
             if (disk >= 0 && disk != m_LastDisk)
             {
+                // A pencil line in progress keeps the colour it was drawn in: it goes on the surface first, and the
+                // next touches start a new line in the new colour.
+                if (m_PencilPoints.Count > 0)
+                    FinishPencil(true);
                 SetColor(holder.DiskColor(disk));
                 PlayerHudNotification.Instance?.ShowText($"Marker: colour of disk {disk + 1}", 1.5f);
             }
@@ -722,6 +730,13 @@ public class TunnelMarker : NetworkBehaviour
         }
         m_PencilPoints.Add(point);
         ShowPencil();
+    }
+
+    /// <summary>Puts a pencil line still being drawn onto its surface (Copy to wall does this first).</summary>
+    public void FinishPencilLine()
+    {
+        if (m_PencilPoints.Count > 0)
+            FinishPencil(true);
     }
 
     void OnEndLineRequested()

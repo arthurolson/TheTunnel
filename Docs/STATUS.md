@@ -46,6 +46,13 @@ What has been built, what is in progress, and where each build is. Updated as wo
   - let go against a tunnel wall, a box sets itself into the wall, which opens there;
   - Unsnap from wall pulls the box back out, with the molecules inside;
   - balls on the front corners stretch the front.
+- Splat-box (next to Box in the Containers list): a box that only frames a 3D portrait, a Gaussian splat baked to a
+  vertex-coloured mesh. It has no walls, medium, heat or movie. The box fits the splat with a small margin and scales
+  evenly with it. Its +Z side shows the splat, so it is placed facing the middle of the tunnel, and as a mixed reality
+  box it always sets into a wall with that side facing in. A menu beside it lists the splats (for now "David
+  Goodsell") and shows the one picked for everyone. Splats are listed in Assets/Tunnel/Splats/SplatLibrary.asset and
+  made by Tunnel > Containers > Build Splats (also run by Build Containers). Log tag [Splat].
+- The container, splat and movie builders work in a scratch scene, so running them leaves the open scene unchanged.
 
 ### 3D movie (in a container)
 - Capsids carry invisible antibody binding sites, found from each capsid's surface: TBSV on its 2-folds, poliovirus
@@ -124,7 +131,8 @@ What has been built, what is in progress, and where each build is. Updated as wo
 | AR marker cube | Works on one headset (11.11.2026.3, on both 340YC Quest 3S): artoolkitX finds the marker with both cameras (about 93% of sightings), the outline sits on the printed marker in both camera images, and the cube sits on the marker in the user's view. Not yet tried: two headsets in one session (shared pose, handoff when a player looks away). |
 | Browser content only, shared video, Loop | Built (11.11.2026.2), not yet tried on a headset. Next: two players, a direct .mp4 and YouTube; listen for echo between headsets in one room. |
 | AR canvas | Two-player test of 12.11.2026.2: both cameras tracked; the canvas jittered. 12.11.2026.3 locks it: once the panel is found, the host settles the canvas on a robust average of the first good sightings (about 1 s), shares it, and every headset stops tracking; the palette button then reads Re-find canvas. The canvas is drawn 2 mm in front of the real panel (canvasLift) so the panel doesn't hide the painting. Tested in the Editor; next: headset test. |
-| Copy to wall | One-headset test of 12.11.2026.4: painting on the locked AR canvas works well (the real panel's surface helps); the copy floated where the gaze missed a wall, and Clear all marks wiped it. 12.11.2026.5: the copy lands flat on the placed tunnel's wall (looked at, else nearest; eye height; off the palette); Clear all marks no longer clears copies; under each copy a bar with Save to Viewer (every headset saves 'painting yyyy-MM-dd HH-mm', transparent where unpainted, to the Viewer's Images) and Content only (a small Frame button brings the frame back). Tested in the Editor; next: headset. |
+| Copy to wall | One-headset test of 12.11.2026.4: painting on the locked AR canvas works well (the real panel's surface helps); the copy floated where the gaze missed a wall, and Clear all marks wiped it. 12.11.2026.5: the copy lands flat on the placed tunnel's wall (looked at, else nearest; eye height; off the palette); Clear all marks no longer clears copies; under each copy a bar with Save to Viewer (every headset saves 'painting yyyy-MM-dd HH-mm', transparent where unpainted, to the Viewer's Images) and Content only (a small Frame button brings the frame back). 13.11.2026.1: marks drawn with the pencil and not yet finished are finished before copying, and touching a colour disk finishes a pencil line in its own colour (the copy left out unfinished lines); Save to Viewer keeps see-through paint's transparency right. Editor test (Tunnel > Paint > Test Copy to Wall Matches the Canvas) passes. Next: headset. |
+| Splat-box | Built (13.11.2026.1): tested in the Editor, not connected (placing, even scaling, mixed reality, setting into a wall, unsnapping, the menu). Next: headset (colours, frame rate with 250k triangles on Quest 3S, grabbing and scaling by hand, the menu by ray and poke) and two players (same splat, size and pose; late joiner). The source model is mostly room around the figure, so Goodsell is small in the box. |
 | Co-location (floor QR) | Two-player test: after aligning to the floor QR, the joining headset's AR-marker sighting sat 23–24 cm (briefly 30 cm) from the host's. 12.11.2026.4: the floor QR is read by both cameras through the AR marker's verified camera path (corner squares refined, floor height measured from the code; Editor: under 1 mm and 0.05°), and whenever a joining player and the host both see the AR marker held still, the player's view glides onto the host's (Editor: a 24 cm / 3° error corrected to within 3 mm). Next: two-player headset test. |
 | Headset checks still owed | SARS-CoV-2 in the 3D movie (09.11.2026.1); the movie panel's placement on the wall beside a mixed reality box; transparent Viewer images (09.11.2026.2); Viewer Content only with two players and the backdrop fix (10.11.2026.2); the virtual marker following the hand instantly (09.11.2026.3). |
 | Grab diagnostics | Every grab and release is logged (since 08.11.2026.1), to track down grabs that don't take. Still on. |
@@ -133,10 +141,10 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 12.11.2026.5 |
+| Latest build (Builds/TheTunnelDev.apk) | 13.11.2026.1 |
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |
-| Quest 3S 3497C10HC4041K | 12.11.2026.5 |
-| Quest 3S 3497C10HC4004X | 12.11.2026.3 |
+| Quest 3S 3497C10HC4041K | 13.11.2026.1 |
+| Quest 3S 3497C10HC4004X | 13.11.2026.1 |
 | Quest 3 2G0YC1ZF760BMQ | 10.11.2026.2 |

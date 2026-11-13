@@ -193,6 +193,16 @@ public class PaintingCopy : NetworkBehaviour, IPaintSurface
             string folder = System.IO.Path.Combine(ViewerLibrary.HeadsetRoot, ViewerLibrary.KindFolders[(int)ViewerMediaKind.Image]);
             System.IO.Directory.CreateDirectory(folder);
             string path = System.IO.Path.Combine(folder, pictureName + ".png");
+            // The canvas holds premultiplied colour; a PNG holds it straight.
+            var pixels = picture.GetPixels32();
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                var c = pixels[i];
+                if (c.a == 0 || c.a == 255)
+                    continue;
+                pixels[i] = new Color32((byte)Mathf.Min(255, c.r * 255 / c.a), (byte)Mathf.Min(255, c.g * 255 / c.a), (byte)Mathf.Min(255, c.b * 255 / c.a), c.a);
+            }
+            picture.SetPixels32(pixels);
             System.IO.File.WriteAllBytes(path, picture.EncodeToPNG());
             Debug.Log($"[Paint] saved the copy's painting to the Viewer: {path} ({picture.width} x {picture.height})");
             PlayerHudNotification.Instance?.ShowText($"Saved to the Viewer's Images as \"{pictureName}\"", 2.5f);

@@ -29,6 +29,9 @@ using XRMultiplayer;
 /// Molecules inside a mixed reality box never collide with the tunnel's walls, wherever it is. Unsnap from wall in the
 /// menu, or grabbing it by its front edges and pulling, brings it back into the tunnel.
 /// Shared over the network like the molecules: size and pose by its network transform.
+/// A splat-box is a box that is only a frame for a 3D portrait (a Gaussian splat, see <see cref="SplatBox"/>): it has
+/// the box's edges, grab, scale and mixed reality box (set into a wall) but no walls, medium, heat or movie, so
+/// molecules pay it no attention.
 /// </summary>
 [DefaultExecutionOrder(-1000)] // builds its colliders before the grab interactable collects them
 public class TunnelContainer : NetworkBehaviour
@@ -37,6 +40,8 @@ public class TunnelContainer : NetworkBehaviour
     {
         Box,
         Sphere,
+        /// <summary>A box that only frames a splat (see <see cref="SplatBox"/>): no walls, medium, heat or movie.</summary>
+        SplatBox,
     }
 
     [SerializeField]
@@ -138,9 +143,18 @@ public class TunnelContainer : NetworkBehaviour
     /// Whether this is a mixed reality box: opaque walls, an open front, and it sets itself into a tunnel wall when
     /// let go against one.
     /// </summary>
-    public bool isMixedReality => m_Shape == Shape.Box && (IsSpawned ? m_MixedReality.Value : m_LocalMixedReality);
+    public bool isMixedReality => isBox && (IsSpawned ? m_MixedReality.Value : m_LocalMixedReality);
 
     public Shape shape => m_Shape;
+
+    /// <summary>Whether it is box-shaped (a box or a splat-box): it has edges and can be a mixed reality box.</summary>
+    public bool isBox => m_Shape != Shape.Sphere;
+
+    /// <summary>
+    /// Whether it holds a medium for molecules: walls that keep them in, viscosity and heat. A splat-box doesn't; it is
+    /// only a frame.
+    /// </summary>
+    public bool hasMedium => m_Shape != Shape.SplatBox;
 
     /// <summary>Its 3D movie: the controls that direct what happens inside it (see <see cref="TunnelMovie"/>).</summary>
     public TunnelMovie movie { get; private set; }
@@ -153,6 +167,7 @@ public class TunnelContainer : NetworkBehaviour
     bool m_LocalMixedReality;
     int m_LocalFront = k_DefaultFront;
     const byte k_DefaultFront = 5; // +Z
+    const int k_SplatBoxTop = 3;   // +Y
 
     Transform m_MixedRealityRoot;
     MeshFilter m_WallFilter, m_WindowFilter;
@@ -310,7 +325,7 @@ public class TunnelContainer : NetworkBehaviour
     public void SetViscosity(float value)
     {
         value = Mathf.Clamp01(Mathf.Round(value * 10f) / 10f);
-        if (Mathf.Approximately(value, viscosity))
+        if (!hasMedium || Mathf.Approximately(value, viscosity))
             return;
         Debug.Log($"[Containers] {m_Shape} viscosity {value:0.0}");
         if (IsSpawned)
@@ -326,7 +341,7 @@ public class TunnelContainer : NetworkBehaviour
     public void SetTemperature(float value)
     {
         value = Mathf.Clamp(Mathf.Round(value * 20f) / 20f, 0f, k_MaxTemperature);
-        if (Mathf.Approximately(value, temperature))
+        if (!hasMedium || Mathf.Approximately(value, temperature))
             return;
         if (IsSpawned)
             SetTemperatureRpc(value);
@@ -340,7 +355,7 @@ public class TunnelContainer : NetworkBehaviour
     /// <summary>Sets how the heat inside moves molecules, for everyone.</summary>
     public void SetMotion(Motion value)
     {
-        if (value == motion)
+        if (!hasMedium || value == motion)
             return;
         Debug.Log($"[Containers] {m_Shape} motion {value}");
         if (IsSpawned)
@@ -358,12 +373,12 @@ public class TunnelContainer : NetworkBehaviour
     /// </summary>
     public void SetMixedReality(bool on)
     {
-        if (m_Shape != Shape.Box || on == isMixedReality)
+        if (!isBox || on == isMixedReality)
             return;
         int front = frontFace;
         var head = Camera.main;
         if (on && head != null)
-            front = NearestFace(head.transform.position - transform.position);
+            front = m_Shape == Shape.SplatBox ? k_DefaultFront : NearestFace(head.transform.position - transform.position);
         Debug.Log($"[Containers] box mixed reality {(on ? "on" : "off")}, front face {front}");
         PlayerHudNotification.Instance?.ShowText(on ? "Mixed reality box: let go of it against a tunnel wall to set it into the wall" : "Free-standing box", 3f);
         if (IsSpawned)
@@ -411,12 +426,14 @@ public class TunnelContainer : NetworkBehaviour
         SetOcclusionBoxes();
     }
 
-    /// <summary>Whether a point is inside the container's volume.</summary>
+    /// <summary>Whether a point is inside the container's medium (never, for a splat-box, which has none).</summary>
     public bool Contains(Vector3 world)
     {
+        if (!hasMedium)
+            return false;
         // In its own coordinates the box spans ±0.5 and the sphere has radius 0.5.
         var p = transform.InverseTransformPoint(world);
-        return m_Shape == Shape.Box
+        return isBox
             ? Mathf.Abs(p.x) <= 0.5f && Mathf.Abs(p.y) <= 0.5f && Mathf.Abs(p.z) <= 0.5f
             : p.sqrMagnitude <= 0.25f;
     }
@@ -675,8 +692,9 @@ public class TunnelContainer : NetworkBehaviour
         var wallTransform = wall.transform;
         var into = wallTransform.TransformDirection(Vector3.right * -wallSide);
         var up = wallTransform.up;
-        int front = NearestFace(into);
-        int top = NearestFace(up, front / 2);
+        // A splat-box always shows its splat's side (+Z) into the tunnel, upright: its splat reads from that side only.
+        int front = m_Shape == Shape.SplatBox ? k_DefaultFront : NearestFace(into);
+        int top = m_Shape == Shape.SplatBox ? k_SplatBoxTop : NearestFace(up, front / 2);
         var rotation = Quaternion.LookRotation(into, up) * Quaternion.Inverse(Quaternion.LookRotation(FaceNormal(front), FaceNormal(top)));
 
         var size = Abs(transform.lossyScale);
@@ -709,6 +727,28 @@ public class TunnelContainer : NetworkBehaviour
 
     /// <summary>Whether this mixed reality box is set into a tunnel wall (its front opens one).</summary>
     public bool isSetInWall => m_OpenIn.Count > 0;
+
+    /// <summary>
+    /// Gives it a new size (its local scale, meters along each of its axes) where it is. A mixed reality box set into a
+    /// wall keeps its front where it is, on the wall, and grows or shrinks behind it. Only the player who moves it
+    /// (its owner, or anyone when not connected) should call this; the network transform shares the result.
+    /// </summary>
+    public void Resize(Vector3 size)
+    {
+        var position = m_Body != null ? m_Body.position : transform.position;
+        if (isSetInWall)
+        {
+            int axis = frontFace / 2;
+            float depth = Abs(transform.lossyScale)[axis], newDepth = Mathf.Abs(size[axis]);
+            position -= frontNormal * ((newDepth - depth) * 0.5f);
+        }
+        transform.localScale = size;
+        transform.position = position;
+        if (m_Body != null)
+            m_Body.position = position;
+        FitToScale();
+        Debug.Log($"[Containers] {m_Shape} resized to {size:F2}{(isSetInWall ? ", front kept on the wall" : "")}");
+    }
 
     /// <summary>
     /// Frees a mixed reality box set into a wall, for everyone: it glides straight out into the tunnel, far enough
@@ -952,7 +992,7 @@ public class TunnelContainer : NetworkBehaviour
     // longitude as tubes of the same thickness, one mesh (made in FitToScale, the tubes' thickness depending on size).
     void BuildEdges()
     {
-        var root = new GameObject(m_Shape == Shape.Box ? "Edges" : "Lines").transform;
+        var root = new GameObject(isBox ? "Edges" : "Lines").transform;
         root.SetParent(transform, false);
         if (m_Shape == Shape.Sphere)
         {
@@ -1060,7 +1100,7 @@ public class TunnelContainer : NetworkBehaviour
     // size in meters whatever its scale (its transform undoes the box's), shown only on a mixed reality box.
     void BuildCorners()
     {
-        if (m_Shape != Shape.Box)
+        if (!isBox)
             return;
         var root = new GameObject("Front Corners").transform;
         root.SetParent(transform, false);
@@ -1134,7 +1174,7 @@ public class TunnelContainer : NetworkBehaviour
     {
         m_GrabRoot = new GameObject("Grab").transform;
         m_GrabRoot.SetParent(transform, false);
-        if (m_Shape == Shape.Box)
+        if (isBox)
         {
             for (int i = 0; i < 12; i++)
                 m_Rods.Add((BoxCollider)Touchless(m_GrabRoot.gameObject.AddComponent<BoxCollider>()));
@@ -1163,9 +1203,11 @@ public class TunnelContainer : NetworkBehaviour
         return collider;
     }
 
-    // Walls: on Ignore Raycast, just outside its surface; they always hold what is inside in.
+    // Walls: on Ignore Raycast, just outside its surface; they always hold what is inside in. A splat-box has none.
     void BuildWalls()
     {
+        if (!hasMedium)
+            return;
         m_WallRoot = new GameObject("Walls").transform;
         m_WallRoot.SetParent(transform, false);
         m_WallRoot.gameObject.layer = k_IgnoreRaycastLayer;
@@ -1255,9 +1297,9 @@ public class TunnelContainer : NetworkBehaviour
             }
         }
 
-        // Six walls, outside the faces, overlapping at the edges.
+        // Six walls, outside the faces, overlapping at the edges (none on a splat-box).
         int f = 0;
-        for (int axis = 0; axis < 3; axis++)
+        for (int axis = 0; axis < 3 && m_Faces.Count == 6; axis++)
         {
             foreach (int side in new[] { -1, 1 })
             {

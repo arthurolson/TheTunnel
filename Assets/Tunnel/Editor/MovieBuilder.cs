@@ -34,7 +34,9 @@ static class MovieBuilder
     static readonly Vector2 k_CanvasSize = new(620f, 700f); // 25 x 28 cm
 
     [MenuItem("Tunnel/Movie/Build 3D Movie")]
-    public static string Build()
+    public static string Build() => BuilderScratchScene.Run(BuildAll);
+
+    static string BuildAll()
     {
         if (!AssetDatabase.IsValidFolder(k_Folder))
             AssetDatabase.CreateFolder("Assets/Tunnel", "Movie");

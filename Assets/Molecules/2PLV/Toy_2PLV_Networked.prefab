@@ -414,6 +414,11 @@ MonoBehaviour:
   - 0.19814272
   - 0.1982541
   - 0.19816875
+  m_Points: []
+  m_Lengths: []
+  m_Diameters: []
+  m_Margin: 1.15
+  m_Kind: capsid
   m_Radius: 0.1999983
   m_LengthFraction: 0.25
   m_DiameterFraction: 0.1
