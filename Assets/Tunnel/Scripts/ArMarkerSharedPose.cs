@@ -48,6 +48,42 @@ public struct ArMarkerSample : INetworkSerializable, IEquatable<ArMarkerSample>
 }
 
 /// <summary>
+/// Sighting times are on a clock that changes when this headset joins or leaves a session (the app's own clock
+/// alone, the shared network clock in a session). A sighting stamped well ahead of now, or well behind the one
+/// before it, was stamped on the other clock: it is dropped rather than kept fresh for ever.
+/// </summary>
+public static class ArMarkerClock
+{
+    /// <summary>A sighting stamped more than this (seconds) after now is from another clock.</summary>
+    public const double futureTolerance = 0.5;
+
+    /// <summary>A sighting stamped more than this (seconds) before the latest one means the clock changed.</summary>
+    public const double jump = 1.0;
+
+    /// <summary>How old a sighting is at <paramref name="now"/>, or +infinity when it is from another clock.</summary>
+    public static double Age(double now, double time)
+    {
+        double age = now - time;
+        return age < -futureTolerance ? double.PositiveInfinity : Math.Max(age, 0.0);
+    }
+
+    /// <summary>
+    /// The shared clock in a session: the host's own, and on a joining headset the best estimate of the host's
+    /// clock right now. (Netcode's ServerTime on a joining headset runs half a round trip plus a 50 ms buffer behind
+    /// the host's, so its sightings looked 100 ms or more older to the host than they were; LocalTime runs a tick
+    /// ahead of the host's.)
+    /// </summary>
+    public static double SharedNow(Unity.Netcode.NetworkManager manager)
+    {
+        if (manager == null)
+            return Time.realtimeSinceStartupAsDouble;
+        if (manager.IsServer || manager.NetworkTimeSystem == null)
+            return manager.ServerTime.Time;
+        return manager.LocalTime.Time - manager.NetworkTimeSystem.LocalBufferSec;
+    }
+}
+
+/// <summary>
 /// The host's choice of which headset's sightings become the shared pose: the best fresh one, but a new source takes
 /// over only after it has been clearly better for a while (or the current one goes stale), so the source doesn't
 /// flicker between headsets that see the marker about equally well.
@@ -60,8 +96,10 @@ public class ArMarkerArbiter
     public float margin = 0.12f;
     [Tooltip("For how long (seconds) it must stay that much better.")]
     public float sustain = 0.6f;
-    [Tooltip("When another headset has fresh sightings, the source is replaced once it has sent none for this long (seconds).")]
+    [Tooltip("When another headset's latest sighting is this much newer (seconds) than the source's, the source has gone quiet and is replaced.")]
     public float silentFor = 0.2f;
+    [Tooltip("After a change of source, the new one is kept at least this long (seconds) unless it goes stale.")]
+    public float minHold = 0.5f;
 
     readonly Dictionary<ulong, ArMarkerSample> m_Latest = new();
     readonly Dictionary<ulong, float> m_Quality = new(); // smoothed
@@ -70,6 +108,7 @@ public class ArMarkerArbiter
     bool m_HasChallenger;
     ulong m_Challenger;
     double m_ChallengerSince;
+    double m_SwitchedAt = double.NegativeInfinity;
     ArMarkerSample m_Published;
 
     public int handoffs { get; private set; }
@@ -77,11 +116,34 @@ public class ArMarkerArbiter
     public ulong source => m_Source;
     public ArMarkerSample published => m_Published;
 
+    /// <summary>Sightings dropped because they were stamped on another clock (see <see cref="ArMarkerClock"/>).</summary>
+    public int fromAnotherClock { get; private set; }
+
+    /// <summary>Every headset's latest sighting.</summary>
+    public IReadOnlyDictionary<ulong, ArMarkerSample> latest => m_Latest;
+
+    /// <summary>Forget every sighting and the source (the clock changed, or the search restarts).</summary>
+    public void Reset()
+    {
+        m_Latest.Clear();
+        m_Quality.Clear();
+        m_HasSource = false;
+        m_HasChallenger = false;
+        m_SwitchedAt = double.NegativeInfinity;
+        m_Published = default;
+        handoffs = 0;
+    }
+
     /// <summary>A sighting from a headset (its <see cref="ArMarkerSample.source"/> says which).</summary>
     public void Submit(ArMarkerSample sample)
     {
         if (m_Latest.TryGetValue(sample.source, out var previous) && previous.time >= sample.time)
-            return;
+        {
+            if (previous.time - sample.time < ArMarkerClock.jump)
+                return; // out of order
+            fromAnotherClock++; // the one kept was stamped on another clock
+            m_Quality.Remove(sample.source);
+        }
         m_Latest[sample.source] = sample;
         m_Quality[sample.source] = m_Quality.TryGetValue(sample.source, out float q) ? Mathf.Lerp(q, sample.quality, 0.3f) : sample.quality;
     }
@@ -96,7 +158,24 @@ public class ArMarkerArbiter
     public float SmoothedQuality(ulong client) => m_Quality.TryGetValue(client, out float q) ? q : 0f;
 
     bool Fresh(double now, ulong client, out ArMarkerSample sample) =>
-        m_Latest.TryGetValue(client, out sample) && now - sample.time <= staleAfter;
+        m_Latest.TryGetValue(client, out sample) && ArMarkerClock.Age(now, sample.time) <= staleAfter;
+
+    // Sightings stamped on another clock never become fresh: drop them.
+    void DropFromAnotherClock(double now)
+    {
+        List<ulong> drop = null;
+        foreach (var pair in m_Latest)
+            if (now - pair.Value.time < -ArMarkerClock.futureTolerance)
+                (drop ??= new List<ulong>()).Add(pair.Key);
+        if (drop == null)
+            return;
+        foreach (var client in drop)
+        {
+            m_Latest.Remove(client);
+            m_Quality.Remove(client);
+            fromAnotherClock++;
+        }
+    }
 
     /// <summary>
     /// Picks the source at time <paramref name="now"/> and returns the pose to publish (not valid when every
@@ -105,15 +184,17 @@ public class ArMarkerArbiter
     public ArMarkerSample Choose(double now, out string change)
     {
         change = null;
+        DropFromAnotherClock(now);
         bool currentFresh = m_HasSource && Fresh(now, m_Source, out _);
 
         // The best fresh sighting other than the current source's.
         bool found = false;
         ulong best = 0;
         float bestQuality = -1f;
+        double bestTime = double.NegativeInfinity;
         foreach (var pair in m_Latest)
         {
-            if ((m_HasSource && pair.Key == m_Source) || now - pair.Value.time > staleAfter)
+            if ((m_HasSource && pair.Key == m_Source) || ArMarkerClock.Age(now, pair.Value.time) > staleAfter)
                 continue;
             float q = SmoothedQuality(pair.Key);
             if (q > bestQuality)
@@ -121,11 +202,16 @@ public class ArMarkerArbiter
                 found = true;
                 best = pair.Key;
                 bestQuality = q;
+                bestTime = pair.Value.time;
             }
         }
 
-        // A source that has gone quiet hands over sooner when someone else sees the marker.
-        if (currentFresh && found && m_Latest.TryGetValue(m_Source, out var current) && now - current.time > silentFor)
+        // A source that has gone quiet hands over sooner when someone else sees the marker: quiet means the other's
+        // latest sighting is clearly newer than the source's (sightings from other headsets arrive later, so their
+        // age against now would make every one of them look quiet and the source flip back and forth each frame),
+        // and not just after a change of source.
+        if (currentFresh && found && m_Latest.TryGetValue(m_Source, out var current) &&
+            bestTime - current.time > silentFor && now - m_SwitchedAt >= minHold)
             currentFresh = false;
 
         if (currentFresh)
@@ -141,7 +227,7 @@ public class ArMarkerArbiter
                 else if (now - m_ChallengerSince >= sustain)
                 {
                     change = $"player {best} has been better for {sustain:0.0} s ({bestQuality:0.00} vs {SmoothedQuality(m_Source):0.00})";
-                    SwitchTo(best);
+                    SwitchTo(best, now);
                 }
             }
             else
@@ -152,7 +238,7 @@ public class ArMarkerArbiter
         else if (found)
         {
             change = m_HasSource ? $"player {m_Source}'s sightings went stale; player {best} takes over" : $"player {best} sees the marker";
-            SwitchTo(best);
+            SwitchTo(best, now);
         }
         else if (m_HasSource)
         {
@@ -175,13 +261,14 @@ public class ArMarkerArbiter
         return m_Published;
     }
 
-    void SwitchTo(ulong client)
+    void SwitchTo(ulong client, double now)
     {
         if (m_HasSource && m_Source != client)
             handoffs++;
         m_HasSource = true;
         m_Source = client;
         m_HasChallenger = false;
+        m_SwitchedAt = now;
     }
 }
 
@@ -219,11 +306,28 @@ public class ArMarkerRenderChooser
     public ArMarkerSample local => m_Local;
     public ArMarkerSample shared => m_Shared;
 
+    /// <summary>Forget every sighting (the clock changed, or the search restarts).</summary>
+    public void Reset()
+    {
+        m_HasLocal = m_HasShared = false;
+        m_Local = m_LocalPrevious = m_Shared = m_SharedPrevious = default;
+        m_Steady = 0;
+        m_LocalGoodSince = m_LocalBadSince = double.NaN;
+        mode = Mode.Hidden;
+        localFresh = sharedFresh = false;
+        agree = true;
+        disagreement = 0f;
+    }
+
     /// <summary>A new sighting by this headset.</summary>
     public void AddLocal(ArMarkerSample sample)
     {
         if (m_HasLocal && sample.time <= m_Local.time)
-            return;
+        {
+            if (m_Local.time - sample.time < ArMarkerClock.jump)
+                return; // out of order
+            m_HasLocal = false; // the one kept was stamped on another clock
+        }
         bool continuous = m_HasLocal && sample.time - m_Local.time < 0.15 && m_Local.quality >= minLocalQuality;
         m_Steady = sample.quality >= minLocalQuality ? (continuous ? m_Steady + 1 : 1) : 0;
         m_LocalPrevious = m_HasLocal ? m_Local : sample;
@@ -243,13 +347,19 @@ public class ArMarkerRenderChooser
     }
 
     /// <summary>A pose carried forward to <paramref name="time"/> by its recent velocity (at most <see cref="extrapolateUpTo"/>).</summary>
-    public Pose Predict(ArMarkerSample latest, ArMarkerSample previous, double time)
+    public Pose Predict(ArMarkerSample latest, ArMarkerSample previous, double time) => Predict(latest, previous, time, float.MaxValue);
+
+    /// <summary>
+    /// As <see cref="Predict(ArMarkerSample, ArMarkerSample, double)"/>, carried at most <paramref name="maxSpans"/>
+    /// times the gap between the two sightings: two noisy sightings 33 ms apart carried 100 ms ahead triple their noise.
+    /// </summary>
+    public Pose Predict(ArMarkerSample latest, ArMarkerSample previous, double time, float maxSpans)
     {
         double span = latest.time - previous.time;
         double ahead = Math.Min(Math.Max(time - latest.time, 0.0), extrapolateUpTo);
         if (span < 0.005 || span > 0.3 || ahead <= 0.0)
             return latest.pose;
-        float t = (float)(ahead / span);
+        float t = Mathf.Min((float)(ahead / span), maxSpans);
         var position = latest.position + (latest.position - previous.position) * t;
         var turn = latest.rotation * Quaternion.Inverse(previous.rotation);
         turn.ToAngleAxis(out float angle, out var axis);
@@ -265,16 +375,17 @@ public class ArMarkerRenderChooser
     /// </summary>
     public Mode Update(double now, ulong self, out Pose target)
     {
-        localFresh = m_HasLocal && now - m_Local.time <= localFreshFor;
-        sharedFresh = m_HasShared && m_Shared.valid && now - m_Shared.time <= sharedFreshFor;
+        localFresh = m_HasLocal && ArMarkerClock.Age(now, m_Local.time) <= localFreshFor;
+        sharedFresh = m_HasShared && m_Shared.valid && ArMarkerClock.Age(now, m_Shared.time) <= sharedFreshFor;
         bool steady = localFresh && m_Steady >= steadyFrames && m_Local.quality >= minLocalQuality;
 
-        // Does this headset's sighting agree with the shared pose (compared at the same moment)?
+        // Does this headset's sighting agree with the shared pose (compared at the same moment, the shared pose carried
+        // forward at most one gap between its sightings so its noise isn't multiplied)?
         agree = true;
         disagreement = 0f;
         if (localFresh && sharedFresh && m_Shared.source != self)
         {
-            var sharedThen = Predict(m_Shared, m_SharedPrevious, m_Local.time);
+            var sharedThen = Predict(m_Shared, m_SharedPrevious, m_Local.time, 1f);
             float distance = Vector3.Distance(sharedThen.position, m_Local.position);
             float angle = Vector3.Angle(sharedThen.rotation * Vector3.up, m_Local.rotation * Vector3.up);
             disagreement = distance;

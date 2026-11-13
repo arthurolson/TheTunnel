@@ -8,6 +8,9 @@ using UnityEngine;
 /// about a second, it gives the correction: a turn about the vertical (gravity is kept) and a shift that bring this
 /// headset's sighting onto the host's. <see cref="CoLocation"/> moves the XR Origin by it.
 /// Only the host's own sightings are used, never the shared pose this headset may itself have supplied.
+/// A host sighting usually arrives before this headset has made its own sighting of that moment (the images are
+/// about 80 ms old when a sighting is made, the host's travels over the network for less), so host sightings wait
+/// until this headset's sightings on both sides of them are in, and are paired then.
 /// </summary>
 public class ArMarkerRoomAlignment
 {
@@ -25,10 +28,25 @@ public class ArMarkerRoomAlignment
     public float minShift = 0.005f;
     public float minTurn = 0.3f;
 
+    [Tooltip("A host sighting that still has no own sightings around it after this long (seconds) is dropped.")]
+    public float waitFor = 0.5f;
+
     readonly List<ArMarkerSample> m_Own = new();
+    readonly List<ArMarkerSample> m_Waiting = new();
     readonly List<(double time, Pose own, Pose host)> m_Pairs = new();
 
     public int pairs => m_Pairs.Count;
+
+    /// <summary>Since the last <see cref="ResetCounts"/>: host sightings received, paired, and dropped unpaired (this headset didn't see the marker then).</summary>
+    public int hostReceived { get; private set; }
+    public int paired { get; private set; }
+    public int unpaired { get; private set; }
+    public int ownReceived { get; private set; }
+
+    /// <summary>The time span the current pairs cover (seconds).</summary>
+    public double pairSpan => m_Pairs.Count > 1 ? m_Pairs[^1].time - m_Pairs[0].time : 0.0;
+
+    public void ResetCounts() => hostReceived = paired = unpaired = ownReceived = 0;
 
     /// <summary>The correction: turn (degrees about the vertical) and shift, in the shared tabletop frame.</summary>
     public struct Correction
@@ -52,6 +70,7 @@ public class ArMarkerRoomAlignment
     public void Clear()
     {
         m_Own.Clear();
+        m_Waiting.Clear();
         m_Pairs.Clear();
     }
 
@@ -60,17 +79,59 @@ public class ArMarkerRoomAlignment
     {
         if (!sample.valid)
             return;
+        if (m_Own.Count > 0 && m_Own[^1].time - sample.time > ArMarkerClock.jump)
+            Clear(); // the clock changed: what was gathered is on the other one
+        ownReceived++;
         m_Own.Add(sample);
         while (m_Own.Count > 0 && sample.time - m_Own[0].time > 2.0)
             m_Own.RemoveAt(0);
+        PairWaiting();
     }
 
-    /// <summary>The host's own sighting; pairs it with this headset's taken at the same moment.</summary>
+    /// <summary>The host's own sighting; paired with this headset's taken at the same moment, once those are in.</summary>
     public void AddHost(ArMarkerSample host)
     {
-        if (!host.valid || m_Own.Count < 2)
+        if (!host.valid)
             return;
-        // This headset's pose at the host's moment, between its sightings around it.
+        if (m_Waiting.Count > 0 && m_Waiting[^1].time - host.time > ArMarkerClock.jump)
+            Clear();
+        hostReceived++;
+        m_Waiting.Add(host);
+        PairWaiting();
+    }
+
+    void PairWaiting()
+    {
+        double newestOwn = m_Own.Count > 0 ? m_Own[^1].time : double.NegativeInfinity;
+        for (int w = 0; w < m_Waiting.Count; w++)
+        {
+            var host = m_Waiting[w];
+            if (TryPair(host))
+            {
+                paired++;
+            }
+            else if (newestOwn < host.time + pairWithin && newestOwn - host.time > -waitFor &&
+                     (m_Waiting[^1].time - host.time) < waitFor)
+            {
+                continue; // this headset's sighting of that moment may still come
+            }
+            else
+            {
+                unpaired++;
+            }
+            m_Waiting.RemoveAt(w--);
+        }
+        if (m_Pairs.Count > 0)
+        {
+            double latest = m_Pairs[^1].time;
+            while (m_Pairs.Count > 0 && latest - m_Pairs[0].time > window * 1.5)
+                m_Pairs.RemoveAt(0);
+        }
+    }
+
+    // This headset's pose at the host's moment, between its sightings around it.
+    bool TryPair(ArMarkerSample host)
+    {
         for (int i = m_Own.Count - 1; i > 0; i--)
         {
             var a = m_Own[i - 1];
@@ -79,12 +140,15 @@ public class ArMarkerRoomAlignment
             {
                 float k = b.time > a.time ? Mathf.Clamp01((float)((host.time - a.time) / (b.time - a.time))) : 0f;
                 var own = new Pose(Vector3.Lerp(a.position, b.position, k), Quaternion.Slerp(a.rotation, b.rotation, k));
-                m_Pairs.Add((host.time, own, host.pose));
-                break;
+                // Kept in time order (host sightings may be paired out of order).
+                int at = m_Pairs.Count;
+                while (at > 0 && m_Pairs[at - 1].time > host.time)
+                    at--;
+                m_Pairs.Insert(at, (host.time, own, host.pose));
+                return true;
             }
         }
-        while (m_Pairs.Count > 0 && host.time - m_Pairs[0].time > window * 1.5)
-            m_Pairs.RemoveAt(0);
+        return false;
     }
 
     /// <summary>A steady correction, if the pairs gathered so far give one.</summary>
@@ -94,7 +158,7 @@ public class ArMarkerRoomAlignment
         why = null;
         if (m_Pairs.Count < minPairs || m_Pairs[^1].time - m_Pairs[0].time < window)
         {
-            why = $"{m_Pairs.Count} pairs";
+            why = $"{m_Pairs.Count} pairs over {pairSpan:0.0} s, need {minPairs} over {window:0.0} s";
             return false;
         }
 

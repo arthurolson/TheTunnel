@@ -4,6 +4,9 @@
 // Only real surfaces inside the tunnel's reach count: within _RealDepthMaxDistance, above the floor band and below
 // the top of the walls, so the real floor never cuts holes and the arch still covers the real ceiling.
 // Real surfaces inside a Container's mixed reality box don't count either (see InMixedRealityBox).
+// Real surfaces lying on the AR canvas (ArMarkerCanvas: the physical panel it is drawn on) are moved to just behind
+// the canvas, so the panel never hides the painting even where tracking put the canvas a little inside it, while a
+// hand well above it still does and the panel still hides the virtual room behind it.
 // Pass 1 (debug) tints red, over everything, where a real surface counts: brighter the closer it is. Pass 2 (debug)
 // draws green at 8 m, depth tested: it shows wherever no depth nearer than that was written.
 Shader "Hidden/Tunnel/RealDepthPrepass"
@@ -24,6 +27,31 @@ Shader "Hidden/Tunnel/RealDepthPrepass"
     float _RealDepthMaxDistance;
     // How far the nearer surface wins at an outline (0 = plain smoothing, 1 = nearest of the neighbours).
     float _RealDepthWiden;
+
+    // The AR canvas, while it is shown (set by ArMarkerCanvas): world to its own frame (meters, +Z into the panel),
+    // and the region whose real surfaces don't hide it: x, y half sizes, z how far in front, w how far behind.
+    float _ArCanvasOn;
+    float4x4 _ArCanvasWorldToLocal;
+    float4 _ArCanvasExtent;
+    // How far behind the canvas (meters, along the ray) a real surface on it is moved.
+    #define AR_CANVAS_BEHIND 0.01f
+
+    // If the real surface this ray meets (at t) lies on the AR canvas: where the ray meets the canvas.
+    bool OnArCanvas(const float3 eyeWS, const float3 ray, const float t, out float tCanvas)
+    {
+        tCanvas = t;
+        if (_ArCanvasOn < 0.5f)
+            return false;
+        const float3 p = mul(_ArCanvasWorldToLocal, float4(eyeWS + ray * t, 1.0f)).xyz;
+        if (abs(p.x) > _ArCanvasExtent.x || abs(p.y) > _ArCanvasExtent.y || p.z < -_ArCanvasExtent.z || p.z > _ArCanvasExtent.w)
+            return false;
+        const float3 eye = mul(_ArCanvasWorldToLocal, float4(eyeWS, 1.0f)).xyz;
+        const float3 along = mul((float3x3)_ArCanvasWorldToLocal, ray);
+        if (abs(along.z) < 1e-4f)
+            return false;
+        tCanvas = -eye.z / along.z;
+        return tCanvas > 0.0f;
+    }
 
     struct RealVaryings
     {
@@ -113,7 +141,11 @@ Shader "Hidden/Tunnel/RealDepthPrepass"
         if (!FindRealSurface(input, eyeWS, ray, t))
             discard;
 
-        const float4 clipCS = mul(UNITY_MATRIX_VP, float4(eyeWS + ray * (t + _RealDepthPushBack), 1.0f));
+        float hideFrom = t + _RealDepthPushBack;
+        float tCanvas;
+        if (OnArCanvas(eyeWS, ray, t, tCanvas))
+            hideFrom = max(hideFrom, tCanvas + AR_CANVAS_BEHIND);
+        const float4 clipCS = mul(UNITY_MATRIX_VP, float4(eyeWS + ray * hideFrom, 1.0f));
         outDepth = clipCS.z / clipCS.w;
         #if !UNITY_REVERSED_Z
             outDepth = outDepth * 0.5f + 0.5f;

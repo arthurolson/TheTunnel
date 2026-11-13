@@ -36,11 +36,23 @@ public class CoLocation : NetworkBehaviour
 
     // Fine alignment from the AR marker (joining players only).
     readonly ArMarkerRoomAlignment m_MarkerAlignment = new();
-    float m_NextMarkerCorrection, m_NextMarkerLog;
+    float m_NextMarkerCorrection, m_NextMarkerLog, m_NextAlignedLog, m_LastHostMarker = float.NegativeInfinity;
     bool m_Gliding;
-    const float k_MarkerGlide = 0.5f, k_MarkerCooldown = 2f, k_MaxMarkerShiftWhenAligned = 1f;
+    int m_MarkerCorrections;
+    float m_MarkerMovedMm, m_MarkerTurnedDeg;
+    readonly System.Text.StringBuilder m_MarkerSteps = new();
+    const float k_MarkerGlide = 0.5f, k_MarkerCooldown = 2f, k_MaxMarkerShiftWhenAligned = 1f, k_MarkerLogEvery = 2f;
 
     public static CoLocation instance { get; private set; }
+
+    /// <summary>
+    /// On a joining headset: whether the AR marker alignment has run this session and by how much (for the logs,
+    /// e.g. when the canvas locks and tracking stops); null on the host or before the marker was seen by both.
+    /// </summary>
+    public static string markerAlignmentSummary { get; private set; }
+
+    /// <summary>When (unscaled time) the AR marker last showed this joining headset's room lined up with the host's.</summary>
+    public static float markerLinedUpAt { get; private set; } = float.NegativeInfinity;
 
     /// <summary>Progress and results, for the menu's status line.</summary>
     public event Action<string> statusChanged;
@@ -71,6 +83,12 @@ public class CoLocation : NetworkBehaviour
         ArMarkerCube.ownSighting -= OnOwnMarker;
         ArMarkerCube.hostSighting -= OnHostMarker;
         m_MarkerAlignment.Clear();
+        m_MarkerAlignment.ResetCounts();
+        m_MarkerCorrections = 0;
+        m_MarkerMovedMm = m_MarkerTurnedDeg = 0f;
+        m_MarkerSteps.Clear();
+        markerAlignmentSummary = null;
+        markerLinedUpAt = float.NegativeInfinity;
         ArMarkerCube.roomNote = null;
         // A new session starts unaligned.
         CoLocationState.isAligned = false;
@@ -150,7 +168,8 @@ public class CoLocation : NetworkBehaviour
         originTransform.SetPositionAndRotation(newPosition, rotation * originTransform.rotation);
 
         MarkAligned();
-        Debug.Log($"[QR] aligned: moved {(sharedPosition - measured.position).magnitude * 100f:0} cm, turned {turn:0.0} deg");
+        Debug.Log($"[QR] aligned: moved {(sharedPosition - measured.position).magnitude * 100f:0} cm, turned {turn:0.0} deg " +
+            "(the AR marker, seen by this headset and the host together, fine-tunes this; its lines start \"marker alignment\")");
         SetStatus($"Aligned with the shared room ({measured.samples} sightings, within {measured.spread * 100f:0} cm), " +
             $"{NetworkManager.ConnectedClientsIds.Count} players in this session.");
     }
@@ -159,14 +178,21 @@ public class CoLocation : NetworkBehaviour
 
     void OnOwnMarker(ArMarkerSample sample)
     {
-        if (!m_Gliding)
-            m_MarkerAlignment.AddOwn(sample);
+        if (m_Gliding)
+            return;
+        m_MarkerAlignment.AddOwn(sample);
+        if (markerAlignmentSummary == null)
+            markerAlignmentSummary = "marker alignment: not run yet (this headset has seen the marker, the host's sightings have not matched yet)";
+        // Say so when this headset sees the marker but the host doesn't (nothing to align to).
+        if (IsSpawned && !IsServer && Time.unscaledTime >= m_NextMarkerLog && Time.unscaledTime - m_LastHostMarker > 2f)
+            LogMarkerWaiting(m_LastHostMarker < 0f ? "the host hasn't seen the marker yet" : $"the host hasn't seen the marker for {Time.unscaledTime - m_LastHostMarker:0} s");
     }
 
     void OnHostMarker(ArMarkerSample sample)
     {
         if (m_Gliding || !IsSpawned || IsServer)
             return;
+        m_LastHostMarker = Time.unscaledTime;
         m_MarkerAlignment.AddHost(sample);
         if (Time.unscaledTime < m_NextMarkerCorrection)
             return;
@@ -174,12 +200,38 @@ public class CoLocation : NetworkBehaviour
         {
             ApplyMarkerCorrection(correction);
         }
-        else if (Time.unscaledTime >= m_NextMarkerLog && m_MarkerAlignment.pairs > 0)
+        else if (why != null && why.StartsWith("already aligned"))
         {
-            m_NextMarkerLog = Time.unscaledTime + 2f;
-            Debug.Log($"[QR] marker alignment: waiting ({why})");
+            markerLinedUpAt = Time.unscaledTime;
+            if (Time.unscaledTime >= m_NextAlignedLog)
+            {
+                m_NextAlignedLog = Time.unscaledTime + 5f;
+                string line = $"marker alignment: checked, nothing to correct: {why} (corrections this session {m_MarkerCorrections}, {MarkerTotals()})";
+                markerAlignmentSummary = $"marker alignment: {m_MarkerCorrections} correction(s) this session ({MarkerTotals()}); last check {why}";
+                Debug.Log("[QR] " + line);
+                ArMarkerTracker.instance?.Log("room alignment: " + line);
+            }
+        }
+        else if (Time.unscaledTime >= m_NextMarkerLog)
+        {
+            LogMarkerWaiting(why);
         }
     }
+
+    // Every couple of seconds while waiting: why, and how the host's and this headset's sightings are pairing up.
+    void LogMarkerWaiting(string why)
+    {
+        m_NextMarkerLog = Time.unscaledTime + k_MarkerLogEvery;
+        var a = m_MarkerAlignment;
+        string line = $"marker alignment: waiting ({why}); in the last {k_MarkerLogEvery:0} s: host sightings {a.hostReceived}, own {a.ownReceived}, " +
+            $"paired {a.paired}, host's with no own sighting at that moment {a.unpaired}; corrections this session {m_MarkerCorrections} ({MarkerTotals()})";
+        a.ResetCounts();
+        Debug.Log("[QR] " + line);
+        ArMarkerTracker.instance?.Log("room alignment: " + line);
+    }
+
+    string MarkerTotals() => m_MarkerCorrections == 0 ? "none yet" :
+        $"moved {m_MarkerMovedMm:0} mm and turned {m_MarkerTurnedDeg:0.0} deg in all: {m_MarkerSteps}";
 
     // Moves this headset's XR Origin so its sighting of the marker lands on the host's: a turn about the vertical
     // through the sighting, then a shift; glided over half a second.
@@ -221,10 +273,16 @@ public class CoLocation : NetworkBehaviour
         m_NextMarkerCorrection = Time.unscaledTime + k_MarkerCooldown;
         bool wasAligned = CoLocationState.isAligned;
         MarkAligned();
+        m_MarkerCorrections++;
+        m_MarkerMovedMm += shift * 1000f;
+        m_MarkerTurnedDeg += Mathf.Abs(correction.turn);
+        m_MarkerSteps.Append(m_MarkerSteps.Length > 0 ? ", " : "").Append($"{shift * 1000f:0} mm / {correction.turn:0.0} deg");
         string note = $"Aligned to the host via the marker: moved {shift * 1000f:0} mm, turned {correction.turn:0.0} deg";
+        markerAlignmentSummary = $"marker alignment: {m_MarkerCorrections} correction(s) this session ({MarkerTotals()})";
         ArMarkerCube.roomNote = note;
-        Debug.Log($"[QR] {note} ({correction}; {(wasAligned ? "after the QR alignment" : "without a QR alignment")}); origin now {toPosition:F3}, yaw {toRotation.eulerAngles.y:0.0}");
-        ArMarkerTracker.instance?.Log($"room alignment: {note} ({correction})");
+        Debug.Log($"[QR] {note} ({correction}; {(wasAligned ? "after the QR alignment" : "without a QR alignment")}); correction {m_MarkerCorrections} this session, " +
+            $"{MarkerTotals()}; origin now {toPosition:F3}, yaw {toRotation.eulerAngles.y:0.0}");
+        ArMarkerTracker.instance?.Log($"room alignment: {note} ({correction}); correction {m_MarkerCorrections} this session, {MarkerTotals()}");
         SetStatus(note + ".");
     }
 

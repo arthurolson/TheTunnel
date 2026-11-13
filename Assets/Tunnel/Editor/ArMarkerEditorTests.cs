@@ -12,6 +12,9 @@ using UnityEngine;
 ///   compares the cube's pose with the true one;
 /// - Test AR Marker Handoff: two simulated headsets watch a moving marker and look away in turn; checks the host's
 ///   choice of source and that the drawn cube never jumps.
+/// - Test AR Two-Player Fixes (13 Nov 2026 test): a sighting from the app's own clock no longer freezes the shared
+///   pose; a lagging player's sightings no longer flip the source every frame; the canvas settles while the source
+///   changes; host sightings that arrive early still pair for the room alignment; levelling; the occlusion region.
 /// </summary>
 static class ArMarkerEditorTests
 {
@@ -1165,6 +1168,204 @@ static class ArMarkerEditorTests
         var late = hide.Update(1.0, 1, out _);
         report.AppendLine($"  stale check: shown {early} at 50 ms, {late} at 1 s ({(early == ArMarkerRenderChooser.Mode.Shared && late == ArMarkerRenderChooser.Mode.Hidden ? "ok" : "FAIL")})");
 
+        Debug.Log(report.ToString());
+        return report.ToString();
+    }
+
+    static ArMarkerSample Sample(double time, Vector3 position, Quaternion rotation, ulong source, float quality = 0.6f) =>
+        new() { position = position, rotation = rotation, time = time, quality = quality, cameras = 3, source = source, valid = true };
+
+    [MenuItem("Tunnel/Paint/Test AR Two-Player Fixes (13 Nov 2026 test)")]
+    public static string TestTwoPlayerFixes()
+    {
+        var report = new StringBuilder("[ARMarker] two-player fixes (13 Nov 2026 test)\n");
+        bool allOk = true;
+        void Check(string name, bool ok, string detail)
+        {
+            allOk &= ok;
+            report.AppendLine($"  {(ok ? "ok  " : "FAIL")} {name}: {detail}");
+        }
+        var up = Quaternion.Euler(-90f, 0f, 0f);
+
+        // 1. The host's cube was placed before the session: its last sighting was stamped 1367 s on the app's own
+        //    clock, then the network clock started near 0. That sighting must not stay fresh nor block newer ones.
+        {
+            var arbiter = new ArMarkerArbiter();
+            var chooser = new ArMarkerRenderChooser();
+            var old = Sample(1400.0, new Vector3(2.287f, -0.185f, 2.121f), up, 0, 0.56f);
+            arbiter.Submit(old);
+            chooser.AddLocal(old);
+            var first = arbiter.Choose(30.0, out _);
+            chooser.SetShared(first);
+            var mode = chooser.Update(30.0, 0, out _);
+            Check("stale sighting from the app's clock", !first.valid && !chooser.localFresh && mode == ArMarkerRenderChooser.Mode.Hidden && arbiter.fromAnotherClock == 1,
+                $"published valid {first.valid}, local fresh {chooser.localFresh}, drawing {mode}, dropped {arbiter.fromAnotherClock} (before: shared and drawn for ever)");
+
+            // And had it been kept: newer sightings replace it.
+            var arbiter2 = new ArMarkerArbiter();
+            arbiter2.Submit(old);
+            var fresh = Sample(29.95, new Vector3(2.29f, -0.19f, 2.11f), up, 0, 0.3f);
+            arbiter2.Submit(fresh);
+            var chooser2 = new ArMarkerRenderChooser();
+            chooser2.AddLocal(old);
+            chooser2.AddLocal(fresh);
+            var second = arbiter2.Choose(30.0, out _);
+            Check("newer sighting replaces it", second.valid && second.time == 29.95 && chooser2.local.time == 29.95,
+                $"published time {second.time:0.00}, chooser's local time {chooser2.local.time:0.00} (before: 1400, newer ones refused)");
+
+            var alignment = new ArMarkerRoomAlignment();
+            alignment.AddOwn(old);
+            alignment.AddOwn(Sample(1400.03, old.position, up, 1));
+            alignment.AddOwn(fresh);
+            alignment.AddOwn(Sample(29.98, fresh.position, up, 1));
+            alignment.AddHost(Sample(29.97, fresh.position, up, 0));
+            Check("room alignment after the clock change", alignment.pairs == 1, $"{alignment.pairs} pair(s) from the new clock's sightings");
+        }
+
+        // 2. Two headsets see a still marker about equally well (q 0.27 and 0.25); the host loses it a third of the
+        //    time; the player's sightings reach the host 250 ms old (images 80 ms old, stamped on a clock 100 ms behind,
+        //    70 ms on the network). The source flipped 85 times in a minute in the test.
+        {
+            var random = new System.Random(3);
+            var marker = new Vector3(2.29f, -0.19f, 2.11f);
+            Vector3 Noise() => new Vector3((float)random.NextDouble() - 0.5f, (float)random.NextDouble() - 0.5f, (float)random.NextDouble() - 0.5f) * 0.01f;
+            foreach (double bias in new[] { 0.1, 0.0 })
+            {
+                var arbiter = new ArMarkerArbiter();
+                var finder = new ArMarkerCanvasFinder();
+                finder.Begin(0.0);
+                var inFlight = new List<(double arrive, ArMarkerSample sample)>();
+                double lockedAt = double.NaN;
+                ulong lockedFrom = 99;
+                for (double t = 0; t < 60.0; t += 1.0 / 72.0)
+                {
+                    if ((int)(t * 30.0) != (int)((t - 1.0 / 72.0) * 30.0))
+                    {
+                        double taken = t - 0.08;
+                        // The host sees it in bursts: about two seconds of every three.
+                        if (t % 3.0 < 2.0 && random.NextDouble() < 0.75)
+                        {
+                            var a = Sample(taken, marker + Noise(), up, 0, 0.27f + (float)(random.NextDouble() - 0.5) * 0.1f);
+                            arbiter.Submit(a);
+                            if (finder.Add(a) && double.IsNaN(lockedAt) && finder.TryLock(t, 0, out lockedFrom, out _))
+                                lockedAt = t;
+                        }
+                        if (random.NextDouble() < 0.8)
+                            inFlight.Add((t + 0.07, Sample(taken - bias, marker + Noise(), up, 1, 0.25f + (float)(random.NextDouble() - 0.5) * 0.1f)));
+                    }
+                    for (int i = inFlight.Count - 1; i >= 0; i--)
+                        if (inFlight[i].arrive <= t) { arbiter.Submit(inFlight[i].sample); finder.Add(inFlight[i].sample); inFlight.RemoveAt(i); }
+                    arbiter.Choose(t, out _);
+                }
+                bool ok = arbiter.handoffs <= 45; // the host loses the marker 20 times a minute here: about two handoffs each
+                Check($"source changes, player's clock {bias * 1000:0} ms behind", ok, $"{arbiter.handoffs} handoffs in 60 s (the host loses the marker 20 times)");
+                Check($"canvas settles, player's clock {bias * 1000:0} ms behind", !double.IsNaN(lockedAt) && lockedAt < 20.0 && lockedFrom == 0,
+                    double.IsNaN(lockedAt) ? "never" : $"after {lockedAt:0.0} s from player {lockedFrom}");
+            }
+        }
+
+        // 3. The canvas finder while the shared pose's source changes on every sighting: it used to start over.
+        {
+            var random = new System.Random(5);
+            var finder = new ArMarkerCanvasFinder();
+            finder.Begin(0.0);
+            double lockedAt = double.NaN;
+            for (int i = 0; i < 300 && double.IsNaN(lockedAt); i++)
+            {
+                double t = i / 30.0;
+                var p = new Vector3(2.29f, -0.19f, 2.11f) + new Vector3((float)random.NextDouble() - 0.5f, 0f, (float)random.NextDouble() - 0.5f) * 0.004f;
+                finder.Add(Sample(t, p, up, (ulong)(i % 2), 0.4f));
+                if (finder.TryLock(t, 0, out _, out _))
+                    lockedAt = t;
+            }
+            Check("canvas settles while sources alternate", !double.IsNaN(lockedAt) && lockedAt < 2.5, double.IsNaN(lockedAt) ? "never" : $"after {lockedAt:0.0} s");
+        }
+
+        // 4. Room alignment when the host's sighting of a moment arrives before this headset's own (images 80 ms old
+        //    here, the host's sighting 50 ms on the network): pairs used to need the own sightings to be in already.
+        {
+            var random = new System.Random(9);
+            float Gauss() => (float)(Math.Sqrt(-2.0 * Math.Log(1.0 - random.NextDouble())) * Math.Cos(2.0 * Math.PI * random.NextDouble()));
+            var marker = new Pose(new Vector3(2.29f, -0.19f, 2.11f), up);
+            var offset = new Vector3(0.02f, 0.011f, 0.019f); // the player's room off by 29 mm, as in the test
+            var alignment = new ArMarkerRoomAlignment();
+            var events = new List<(double at, bool host, ArMarkerSample sample)>();
+            for (int i = 0; i < 120; i++)
+            {
+                double taken = i / 30.0;
+                events.Add((taken + 0.08, false, Sample(taken + 0.005 * Gauss(), marker.position + offset + new Vector3(Gauss(), Gauss(), Gauss()) * 0.002f, marker.rotation, 1)));
+                events.Add((taken + 0.08 + 0.05, true, Sample(taken + 1.0 / 60.0, marker.position + new Vector3(Gauss(), Gauss(), Gauss()) * 0.002f, marker.rotation, 0)));
+            }
+            // The host's sightings (of moments between this headset's frames) arrive 30 ms after the moment, before
+            // this headset's own sighting of the frame after it (80 ms).
+            for (int i = 0; i < events.Count; i++)
+                if (events[i].host)
+                    events[i] = (events[i].sample.time + 0.03, true, events[i].sample);
+            events.Sort((a, b) => a.at.CompareTo(b.at));
+            ArMarkerRoomAlignment.Correction correction = default;
+            double got = double.NaN;
+            foreach (var e in events)
+            {
+                if (e.host) alignment.AddHost(e.sample); else alignment.AddOwn(e.sample);
+                if (e.host && double.IsNaN(got) && alignment.TryCorrection(out correction, out _))
+                    got = e.at;
+            }
+            float error = Vector3.Distance(correction.shift, -offset) * 1000f;
+            Check("room alignment with early host sightings", !double.IsNaN(got) && got < 2.5 && error < 3f,
+                double.IsNaN(got) ? $"no correction ({alignment.pairs} pairs; paired {alignment.paired}, unpaired {alignment.unpaired})"
+                    : $"after {got:0.0} s: {correction}; {error:0.0} mm from the true 29 mm");
+        }
+
+        // 5. Levelling: the canvas as locked in the test (facing (-0.016, 0.999, -0.030), about 2 deg off level).
+        {
+            var layout = ArMarkerCanvasLayout.Default;
+            layout.rotation = 90f;
+            layout.size = new Vector2(0.6096f, 0.4572f);
+            var face = new Vector3(-0.016f, 0.999f, -0.030f).normalized;
+            var panel = new Pose(new Vector3(2.1089f, -0.2046f, 1.8614f), Quaternion.LookRotation(-face, new Vector3(1f, 0.015f, -0.019f)));
+            var pivot = ArMarkerMath.Apply(panel, layout.markerOnCanvas.position);
+            var level = layout.Levelled(panel, pivot, out float tilt, out string what);
+            var levelFace = level.rotation * Vector3.back;
+            float far = 0f;
+            foreach (var c in new[] { new Vector3(-1f, -1f), new Vector3(-1f, 1f), new Vector3(1f, -1f), new Vector3(1f, 1f) })
+            {
+                var onPanel = Vector3.Scale(c, layout.size * 0.5f);
+                far = Mathf.Max(far, Vector3.Distance(ArMarkerMath.Apply(panel, onPanel), ArMarkerMath.Apply(level, onPanel)));
+            }
+            bool pivotKept = Vector3.Distance(ArMarkerMath.Apply(level, layout.markerOnCanvas.position), pivot) < 1e-4f;
+            Check("levelled canvas", what == "level" && Vector3.Angle(levelFace, Vector3.up) < 0.01f && pivotKept && tilt > 1.5f && tilt < 2.5f,
+                $"{what}, tilt {tilt:0.00} deg taken out, far corner moved {far * 1000f:0} mm, marker kept {pivotKept}");
+
+            var steep = new Pose(panel.position, Quaternion.AngleAxis(10f, Vector3.right) * panel.rotation);
+            layout.Levelled(steep, pivot, out _, out string steepWhat);
+            var wall = new Pose(Vector3.one, Quaternion.LookRotation(Quaternion.AngleAxis(2f, Vector3.right) * Vector3.forward, Vector3.up));
+            var upright = layout.Levelled(wall, wall.position, out float wallTilt, out string wallWhat);
+            Check("tilted panel kept, wall panel upright", steepWhat == null && wallWhat == "upright" && Mathf.Abs((upright.rotation * Vector3.back).y) < 1e-4f,
+                $"10 deg: {steepWhat ?? "kept"}; wall 2 deg: {wallWhat} ({wallTilt:0.00} deg)");
+        }
+
+        // 6. The occlusion exemption's region (RealDepthPrepass's OnArCanvas, the same sums): the real panel 2.5 cm
+        //    above a canvas that sank into it doesn't hide it, a hand 10 cm above does.
+        {
+            var canvas = new Pose(new Vector3(2.1f, -0.2f, 1.86f), Quaternion.LookRotation(Vector3.down, Vector3.right)); // face up
+            var toLocal = ArMarkerCanvas.OcclusionWorldToLocal(canvas);
+            var extent = new Vector4(0.6096f * 0.5f + 0.03f, 0.4572f * 0.5f + 0.03f, 0.04f, 0.06f);
+            bool Inside(Vector3 world)
+            {
+                var p = toLocal.MultiplyPoint3x4(world);
+                return Mathf.Abs(p.x) <= extent.x && Mathf.Abs(p.y) <= extent.y && p.z >= -extent.z && p.z <= extent.w;
+            }
+            var eye = canvas.position + new Vector3(-0.5f, 0.45f, 0.2f);
+            var panelTop = canvas.position + new Vector3(0.2f, 0.025f, 0.1f);
+            var ray = (panelTop - eye).normalized;
+            var e = toLocal.MultiplyPoint3x4(eye);
+            var along = toLocal.MultiplyVector(ray);
+            float tCanvas = -e.z / along.z, tPanel = Vector3.Distance(eye, panelTop);
+            Check("occlusion region", Inside(panelTop) && !Inside(canvas.position + new Vector3(0.1f, 0.10f, 0f)) && !Inside(canvas.position + new Vector3(0.5f, 0f, 0f)) && tCanvas > tPanel,
+                $"panel 25 mm above the canvas inside {Inside(panelTop)} (moved from {tPanel:0.000} m to {tCanvas + 0.01f:0.000} m along the ray, behind the canvas at {tCanvas:0.000}); hand 10 cm above inside {Inside(canvas.position + new Vector3(0.1f, 0.10f, 0f))}; 50 cm aside inside {Inside(canvas.position + new Vector3(0.5f, 0f, 0f))}");
+        }
+
+        report.AppendLine(allOk ? "  PASS" : "  FAIL");
         Debug.Log(report.ToString());
         return report.ToString();
     }

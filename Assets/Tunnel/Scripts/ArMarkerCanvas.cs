@@ -29,6 +29,12 @@ public struct ArMarkerCanvasLayout : INetworkSerializable, IEquatable<ArMarkerCa
     public float touchAllowance;
     /// <summary>The virtual canvas (lines and paint) sits this far in front of the real panel (m), so the panel doesn't hide it.</summary>
     public float lift;
+    /// <summary>
+    /// When the settled canvas is within this many degrees of level (a panel on a table) or of upright (on a wall),
+    /// it is made exactly so, turned about the marker: the small marker's tilt is its least certain part, and a
+    /// 2 degree tilt puts the far corner 2 cm off the real panel. 0 = never.
+    /// </summary>
+    public float levelWithin;
 
     static readonly string[] k_Corners = { "TopLeft", "TopRight", "BottomLeft", "BottomRight" };
 
@@ -48,6 +54,7 @@ public struct ArMarkerCanvasLayout : INetworkSerializable, IEquatable<ArMarkerCa
         inset = 0.0254f,
         touchAllowance = 0.01f,
         lift = 0.002f,
+        levelWithin = 3f,
     };
 
     /// <summary>The paint area (the panel less the inset all round), in meters.</summary>
@@ -75,10 +82,44 @@ public struct ArMarkerCanvasLayout : INetworkSerializable, IEquatable<ArMarkerCa
     public Pose Lifted(Pose canvas) => new(canvas.position + canvas.rotation * new Vector3(0f, 0f, -lift), canvas.rotation);
 
     /// <summary>
+    /// The panel's pose made exactly level (face up) or upright (face horizontal) when it is within
+    /// <see cref="levelWithin"/> degrees of that, turned about <paramref name="pivot"/> (the marker's centre, the
+    /// best known point). <paramref name="tilt"/> is the turn taken out (degrees), <paramref name="what"/> what it was
+    /// made ("level", "upright", or null when left alone).
+    /// </summary>
+    public Pose Levelled(Pose panel, Vector3 pivot, out float tilt, out string what)
+    {
+        tilt = 0f;
+        what = null;
+        if (levelWithin <= 0f)
+            return panel;
+        var face = panel.rotation * Vector3.back;
+        float fromUp = Vector3.Angle(face, Vector3.up);
+        Vector3 want;
+        if (fromUp <= levelWithin)
+        {
+            want = Vector3.up;
+            what = "level";
+        }
+        else if (Mathf.Abs(fromUp - 90f) <= levelWithin)
+        {
+            want = Vector3.ProjectOnPlane(face, Vector3.up).normalized;
+            what = "upright";
+        }
+        else
+        {
+            return panel;
+        }
+        var turn = Quaternion.FromToRotation(face, want);
+        tilt = Vector3.Angle(face, want);
+        return new Pose(pivot + turn * (panel.position - pivot), turn * panel.rotation);
+    }
+
+    /// <summary>
     /// The default with any canvas keys in settings.txt applied: canvasCorner (TopLeft, TopRight, BottomLeft,
     /// BottomRight), canvasOffsetX, canvasOffsetY, canvasWidth, canvasHeight (meters), canvasMarkerRotation (degrees,
     /// counter-clockwise seen from the front), canvasPaintInset (meters), canvasTouchAllowance (meters), canvasLift
-    /// (meters), and markerWidth.
+    /// (meters), canvasLevelWithin (degrees; 0 keeps the measured tilt), and markerWidth.
     /// </summary>
     public static ArMarkerCanvasLayout Load(string settingsFile, Action<string> log)
     {
@@ -108,6 +149,7 @@ public struct ArMarkerCanvasLayout : INetworkSerializable, IEquatable<ArMarkerCa
                 case "canvasPaintInset" when number && f >= 0f: layout.inset = f; break;
                 case "canvasTouchAllowance" when number && f >= 0f: layout.touchAllowance = f; break;
                 case "canvasLift" when number && f >= 0f && f < 0.05f: layout.lift = f; break;
+                case "canvasLevelWithin" when number && f >= 0f && f <= 10f: layout.levelWithin = f; break;
                 case "markerWidth" when number && f > 0.01f: layout.markerWidth = f; break;
             }
         }
@@ -117,7 +159,8 @@ public struct ArMarkerCanvasLayout : INetworkSerializable, IEquatable<ArMarkerCa
     public override string ToString() =>
         $"{size.x * 100f:0.0} x {size.y * 100f:0.0} cm, marker {markerWidth * 1000f:0} mm in the {cornerName} corner, " +
         $"{offsetX * 100f:0.0} cm from the side and {offsetY * 100f:0.0} cm from the {(bottom ? "bottom" : "top")}, turned {rotation:0.#} deg, " +
-        $"paint area {paintArea.x * 100f:0.0} x {paintArea.y * 100f:0.0} cm ({inset * 100f:0.0} cm in), touch allowance {touchAllowance * 1000f:0} mm, lifted {lift * 1000f:0.0} mm off the panel; " +
+        $"paint area {paintArea.x * 100f:0.0} x {paintArea.y * 100f:0.0} cm ({inset * 100f:0.0} cm in), touch allowance {touchAllowance * 1000f:0} mm, lifted {lift * 1000f:0.0} mm off the panel, " +
+        $"{(levelWithin > 0f ? $"made level or upright when within {levelWithin:0.#} deg" : "measured tilt kept")}; " +
         $"marker centre on the canvas {markerOnCanvas.position * 100f} cm";
 
     public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
@@ -131,12 +174,13 @@ public struct ArMarkerCanvasLayout : INetworkSerializable, IEquatable<ArMarkerCa
         serializer.SerializeValue(ref inset);
         serializer.SerializeValue(ref touchAllowance);
         serializer.SerializeValue(ref lift);
+        serializer.SerializeValue(ref levelWithin);
     }
 
     public bool Equals(ArMarkerCanvasLayout other) =>
         corner == other.corner && offsetX == other.offsetX && offsetY == other.offsetY && size == other.size &&
         rotation == other.rotation && markerWidth == other.markerWidth && inset == other.inset && touchAllowance == other.touchAllowance &&
-        lift == other.lift;
+        lift == other.lift && levelWithin == other.levelWithin;
 
     public override bool Equals(object obj) => obj is ArMarkerCanvasLayout other && Equals(other);
     public override int GetHashCode() => HashCode.Combine(corner, offsetX, offsetY, size, rotation, markerWidth, inset);
@@ -150,6 +194,10 @@ public struct ArMarkerCanvasLayout : INetworkSerializable, IEquatable<ArMarkerCa
 /// (<see cref="IPaintSurface"/>); the marks move with the panel and are shared with everyone.
 /// Its transform sits at the panel's centre, +X right, +Y up, +Z into the panel, so its face looks along -Z, lifted
 /// a couple of millimetres off the real panel toward the viewer (canvasLift) so the panel doesn't hide the painting.
+/// The real panel never hides the canvas: while it is shown, the real-depth occlusion (RealDepthPrepass) moves real
+/// surfaces it finds within a few centimetres of the canvas to just behind it, so a canvas that tracking or room
+/// alignment put a little inside the real panel still shows whole, while a hand well above it still hides it and the
+/// panel still hides the virtual room behind it.
 /// </summary>
 public class ArMarkerCanvas : MonoBehaviour, IPaintSurface
 {
@@ -157,6 +205,21 @@ public class ArMarkerCanvas : MonoBehaviour, IPaintSurface
     [SerializeField] float m_LineWidth = 0.003f;
     [SerializeField] float m_Dash = 0.012f;
     [SerializeField] float m_Gap = 0.008f;
+
+    [Header("Real-depth occlusion")]
+    [SerializeField]
+    [Tooltip("Real surfaces up to this far (m) in front of the canvas don't hide it (the panel itself, where the canvas sits a little inside it).")]
+    float m_IgnoreInFront = 0.04f;
+    [SerializeField]
+    [Tooltip("Real surfaces up to this far (m) behind the canvas count as just behind it.")]
+    float m_IgnoreBehind = 0.06f;
+    [SerializeField]
+    [Tooltip("Beyond the panel's edges (m), so the edge line is covered too.")]
+    float m_IgnoreMargin = 0.03f;
+
+    static readonly int k_CanvasOn = Shader.PropertyToID("_ArCanvasOn");
+    static readonly int k_CanvasWorldToLocal = Shader.PropertyToID("_ArCanvasWorldToLocal");
+    static readonly int k_CanvasExtent = Shader.PropertyToID("_ArCanvasExtent");
 
     ArMarkerCanvasLayout m_Layout = ArMarkerCanvasLayout.Default;
     MeshRenderer m_Lines, m_MarkerSquare;
@@ -208,6 +271,29 @@ public class ArMarkerCanvas : MonoBehaviour, IPaintSurface
         if (!m_Built)
             Build();
     }
+
+    void OnEnable() => Application.onBeforeRender += ShareWithOcclusion;
+
+    void OnDisable()
+    {
+        Application.onBeforeRender -= ShareWithOcclusion;
+        Shader.SetGlobalFloat(k_CanvasOn, 0f);
+    }
+
+    /// <summary>Where the canvas is, for the real-depth occlusion (see the class summary); every frame it is shown.</summary>
+    void ShareWithOcclusion()
+    {
+        var t = transform;
+        Shader.SetGlobalMatrix(k_CanvasWorldToLocal, OcclusionWorldToLocal(new Pose(t.position, t.rotation)));
+        Shader.SetGlobalVector(k_CanvasExtent, OcclusionExtent);
+        Shader.SetGlobalFloat(k_CanvasOn, 1f);
+    }
+
+    /// <summary>World to the canvas's own frame (unscaled: meters, +Z into the panel).</summary>
+    public static Matrix4x4 OcclusionWorldToLocal(Pose canvas) => Matrix4x4.TRS(canvas.position, canvas.rotation, Vector3.one).inverse;
+
+    /// <summary>The region round the canvas whose real surfaces don't hide it: half width, half height, in front, behind (m).</summary>
+    public Vector4 OcclusionExtent => new(m_Layout.size.x * 0.5f + m_IgnoreMargin, m_Layout.size.y * 0.5f + m_IgnoreMargin, m_IgnoreInFront, m_IgnoreBehind);
 
     void OnDestroy()
     {
@@ -510,5 +596,78 @@ public class ArMarkerCanvasLocker
         sorted.Sort();
         int middle = sorted.Count / 2;
         return sorted.Count % 2 == 1 ? sorted[middle] : 0.5f * (sorted[middle - 1] + sorted[middle]);
+    }
+}
+
+/// <summary>
+/// Finds the AR canvas from every headset's sightings at once (on the host): each headset's good sightings since the
+/// search began go to its own <see cref="ArMarkerCanvasLocker"/> (players' sightings aren't mixed: each headset's
+/// room alignment differs a little), so a change of the shared pose's source no longer throws away what was
+/// gathered. The host's own sightings settle it when they can (they define the shared room); another headset's
+/// settle it only while the host hasn't had a good sighting for <see cref="preferHostFor"/> seconds.
+/// </summary>
+public class ArMarkerCanvasFinder
+{
+    public float minQuality = 0.3f;
+    public float preferHostFor = 1f;
+
+    readonly Dictionary<ulong, ArMarkerCanvasLocker> m_Lockers = new();
+    readonly Dictionary<ulong, double> m_Last = new();
+    double m_Since = double.NegativeInfinity;
+
+    /// <summary>Sightings gathered so far by the headset with the most.</summary>
+    public int count
+    {
+        get
+        {
+            int most = 0;
+            foreach (var locker in m_Lockers.Values)
+                most = Mathf.Max(most, locker.count);
+            return most;
+        }
+    }
+
+    public int needed => new ArMarkerCanvasLocker().needed;
+
+    /// <summary>Start a new search: only sightings taken after <paramref name="since"/> count.</summary>
+    public void Begin(double since)
+    {
+        m_Lockers.Clear();
+        m_Last.Clear();
+        m_Since = since;
+    }
+
+    /// <summary>A headset's sighting; whether it was good enough to count.</summary>
+    public bool Add(ArMarkerSample sample)
+    {
+        if (!sample.valid || !sample.both || sample.quality < minQuality || sample.time <= m_Since)
+            return false;
+        if (m_Last.TryGetValue(sample.source, out double last) && sample.time <= last)
+            return false;
+        m_Last[sample.source] = sample.time;
+        if (!m_Lockers.TryGetValue(sample.source, out var locker))
+            m_Lockers[sample.source] = locker = new ArMarkerCanvasLocker();
+        locker.Add(sample.time, sample.pose);
+        return true;
+    }
+
+    /// <summary>Settles the canvas at <paramref name="now"/> if some headset's sightings agree: which, and the result.</summary>
+    public bool TryLock(double now, ulong host, out ulong source, out ArMarkerCanvasLocker.Result result)
+    {
+        source = host;
+        result = default;
+        if (m_Lockers.TryGetValue(host, out var hostLocker) && hostLocker.TryLock(out result))
+            return true;
+        bool hostSeesIt = m_Last.TryGetValue(host, out double hostLast) && now - hostLast < preferHostFor;
+        if (hostSeesIt)
+            return false;
+        foreach (var pair in m_Lockers)
+        {
+            if (pair.Key == host || !pair.Value.TryLock(out result))
+                continue;
+            source = pair.Key;
+            return true;
+        }
+        return false;
     }
 }
