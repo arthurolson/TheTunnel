@@ -200,12 +200,29 @@ public class TunnelSegmentPaint : NetworkBehaviour
             AddOp(OpKind.Clear, default, null);
     }
 
-    /// <summary>Takes every mark off every segment, for everyone.</summary>
+    /// <summary>
+    /// Takes every mark off the tunnel's walls and the canvases, for everyone. Copies of paintings on the walls
+    /// (<see cref="PaintingCopy"/>) keep theirs: a copy goes only when it is deleted itself.
+    /// </summary>
     public static void ClearAll()
     {
         foreach (var paint in all.ToArray())
-            if (paint != null)
+            if (paint != null && paint.GetComponent<PaintingCopy>() == null)
                 paint.Clear();
+    }
+
+    /// <summary>The marks as a picture (transparent where nothing is painted), or null if nothing was painted here yet.</summary>
+    public Texture2D ReadCanvas()
+    {
+        if (m_CanvasTexture == null || !m_CanvasTexture.IsCreated())
+            return null;
+        var previous = RenderTexture.active;
+        RenderTexture.active = m_CanvasTexture;
+        var picture = new Texture2D(m_CanvasTexture.width, m_CanvasTexture.height, TextureFormat.RGBA32, false);
+        picture.ReadPixels(new Rect(0, 0, m_CanvasTexture.width, m_CanvasTexture.height), 0, 0);
+        picture.Apply();
+        RenderTexture.active = previous;
+        return picture;
     }
 
     /// <summary>

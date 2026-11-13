@@ -19,7 +19,8 @@ using XRMultiplayer;
 /// poke) lets the chooser change that disk's colour; touching a disk with the marker's tip loads its colour into the
 /// marker. Check boxes choose what the marker does: solid Paint, Pencil lines (straight from touch to touch, or with
 /// Curve a Bezier curve whose control points are the touches; End line finishes one, as does touching the same spot
-/// twice), Airbrush, or Eraser. Clear all marks (pressed twice) takes every mark off the tunnel.
+/// twice), Airbrush, or Eraser. Clear all marks (pressed twice) takes every mark off the tunnel's walls and the
+/// canvases; copies of paintings on the walls keep theirs.
 /// Real marker paints with a real marker, tracked by this headset's camera, on a real panel with marked corners or on
 /// a tunnel wall that lies on a real wall (<see cref="RealMarkerTracker"/>): it uses the marker's colour, and selecting
 /// a disk then gives the marker its colour. Copy to wall puts a copy of the panel's painting on the tunnel wall in
@@ -265,7 +266,7 @@ public class TunnelPalette : NetworkBehaviour
         bool pencil = current == PaintMode.Pencil;
         SetRow(m_CurveRow, Check(curve) + "  Curve  <color=#AAA>" + (pencil ? "touches are Bezier controls" : "(pencil)") + "</color>", pencil);
         SetRow(m_EndLineRow, "End line  <color=#AAA>" + (pencil ? "or touch the last point again" : "(pencil)") + "</color>", pencil);
-        SetRow(m_ClearRow, Time.time < m_ClearArmedUntil ? "<color=#F88>Press again to clear every mark</color>" : "Clear all marks", true);
+        SetRow(m_ClearRow, Time.time < m_ClearArmedUntil ? "<color=#F88>Press again: walls and canvas (not copies)</color>" : "Clear all marks  <color=#AAA>not copies</color>", true);
         SetRow(m_RealRow, Check(realOn) + "  Real marker  <color=#AAA>" + (realOn ? "press to stop" : "tracked by camera") + "</color>", true);
         bool arCanvas = ArCanvasPaint() != null;
         SetRow(m_CopyRow, "Copy to wall  <color=#AAA>" + (arCanvas ? "the AR canvas's painting" : "the panel's painting") + "</color>",
@@ -423,8 +424,8 @@ public class TunnelPalette : NetworkBehaviour
         }
         m_ClearArmedUntil = 0f;
         TunnelSegmentPaint.ClearAll();
-        Debug.Log("[Paint] every mark cleared");
-        ShareStatus("Every mark cleared.");
+        Debug.Log("[Paint] every mark cleared from the walls and canvases (copies kept)");
+        ShareStatus("Marks cleared from the walls and the canvas. Copies on the walls are kept (delete one with the TS Menu's Delete).");
     }
 
     // The painting on the real panel, on this headset, if there is one.
@@ -452,14 +453,20 @@ public class TunnelPalette : NetworkBehaviour
         var menu = FindAnyObjectByType<TunnelPaintMenu>();
         if (menu == null)
             return;
-        if (!PaintingCopy.WallInView(out var pose))
+        var size = arCanvas != null ? ArMarkerCube.instance.canvasPaintMeters : RealMarkerTracker.instance.board.size;
+        // Flat on the placed tunnel's wall: the one looked at, else the nearest.
+        if (PaintingCopy.ChooseWall(size, out var pose, out string where))
+        {
+            Debug.Log("[Paint] copy goes on " + where);
+        }
+        else
         {
             var head = Camera.main.transform;
             var forward = Vector3.ProjectOnPlane(head.forward, Vector3.up).normalized;
             pose = new Pose(head.position + forward * 1.2f, Quaternion.LookRotation(forward, Vector3.up));
+            Debug.Log("[Paint] copy placed in front of the head: " + where);
         }
 
-        var size = arCanvas != null ? ArMarkerCube.instance.canvasPaintMeters : RealMarkerTracker.instance.board.size;
         menu.CopyPainting(source, size, pose);
         PlayerHudNotification.Instance?.ShowText("Painting copied: grab a corner to size and turn it", 2.5f);
         Debug.Log($"[Paint] copied {(arCanvas != null ? "the AR canvas's" : "the panel's")} painting ({size.x * 100f:0} x {size.y * 100f:0} cm) to {pose.position:F2}");

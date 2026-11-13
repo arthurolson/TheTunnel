@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.UI;
 using UnityEngine.XR.Interaction.Toolkit;
 using UnityEngine.XR.Interaction.Toolkit.Interactables;
 using UnityEngine.XR.Interaction.Toolkit.Interactors;
@@ -19,7 +20,13 @@ using XRMultiplayer;
 ///  - Grabbed anywhere else, it moves; let go near a flat tunnel wall, it lies flat on the wall, keeping its turn.
 ///  - Grabbed with the TS Menu's Delete on, it goes.
 /// Its marks are shared like a tunnel segment's (its own <see cref="TunnelSegmentPaint"/>), so players who join later
-/// see it too, and the virtual marker can paint on it. Works locally when not connected.
+/// see it too, and the virtual marker can paint on it; the palette's Clear all marks leaves them alone. Works locally
+/// when not connected.
+/// Under its bottom edge, a small bar (always the same size, however the copy is enlarged):
+///  - Save to Viewer: every headset saves the painting (transparent where unpainted) as a PNG in its Viewer's Images,
+///    named "painting" and the copy's creation time ("painting 2026-11-12 14-35"), so it can be shown in the Viewer;
+///  - Content only: hides the frame (outline, corner balls, the bar) for everyone, leaving only the painting; a small
+///    Frame button at its lower right corner brings them back. Corners can't be dragged while the frame is hidden.
 /// Its transform sits at its centre, +X right, +Y up, +Z into the wall; its scale is how much it has been enlarged.
 /// </summary>
 [RequireComponent(typeof(TunnelSegmentPaint))]
@@ -53,8 +60,8 @@ public class PaintingCopy : NetworkBehaviour, IPaintSurface
     Shader m_Brush;
 
     [SerializeField]
-    [Tooltip("Size of a canvas texel (meters, before enlarging).")]
-    float m_Texel = 0.0015f;
+    [Tooltip("Size of a canvas texel (meters, before enlarging); also the saved picture's resolution.")]
+    float m_Texel = 0.001f;
 
     /// <summary>Every copy.</summary>
     public static readonly List<PaintingCopy> all = new();
@@ -66,6 +73,26 @@ public class PaintingCopy : NetworkBehaviour, IPaintSurface
     readonly NetworkVariable<Vector2> m_SharedMeters = new(Vector2.zero, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<int> m_SharedRequest = new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<ulong> m_SharedRequester = new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<bool> m_SharedContentOnly = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<long> m_SharedCreated = new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    [Header("Bar")]
+    [SerializeField]
+    [Tooltip("The bar under the copy (Save to Viewer, Content only).")]
+    RectTransform m_Bar;
+    [SerializeField] Button m_SaveButton;
+    [SerializeField] Button m_ContentOnlyButton;
+    [SerializeField]
+    [Tooltip("The small button that brings the frame back, at the lower right corner while the frame is hidden.")]
+    RectTransform m_ShowFrame;
+    [SerializeField] Button m_ShowFrameButton;
+    [SerializeField]
+    [Tooltip("Meters per canvas unit of the bar and the Frame button, whatever the copy's size.")]
+    float m_BarScale = 0.0004f;
+
+    bool m_LocalContentOnly;
+    long m_LocalCreated;
+    bool m_ShownContentOnly;
 
     Vector2 m_LocalMeters;
     int m_LocalRequest;
@@ -115,6 +142,71 @@ public class PaintingCopy : NetworkBehaviour, IPaintSurface
         m_SharedMeters.Value = meters;
         m_SharedRequest.Value = request;
         m_SharedRequester.Value = requester;
+        m_LocalCreated = DateTime.Now.Ticks;
+        m_SharedCreated.Value = m_LocalCreated;
+    }
+
+    /// <summary>Only the painting shows (frame, corner balls and bar hidden), for everyone.</summary>
+    public bool contentOnly => IsSpawned ? m_SharedContentOnly.Value : m_LocalContentOnly;
+
+    /// <summary>When the copy was made (the host's clock), for its saved picture's name.</summary>
+    public DateTime created => new(IsSpawned ? m_SharedCreated.Value : m_LocalCreated);
+
+    /// <summary>The name its picture is saved under in the Viewer: "painting" and when the copy was made.</summary>
+    public string pictureName => "painting " + created.ToString("yyyy-MM-dd HH-mm", System.Globalization.CultureInfo.InvariantCulture);
+
+    public void SetContentOnly(bool on)
+    {
+        if (IsSpawned)
+            ContentOnlyRpc(on);
+        else
+            m_LocalContentOnly = on;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void ContentOnlyRpc(bool on) => m_SharedContentOnly.Value = on;
+
+    /// <summary>Saves the painting into every headset's Viewer (each saves its own copy of the same picture).</summary>
+    public void SaveToViewer()
+    {
+        if (IsSpawned)
+            SaveRpc();
+        else
+            SavePicture();
+    }
+
+    [Rpc(SendTo.Everyone, InvokePermission = RpcInvokePermission.Everyone)]
+    void SaveRpc() => SavePicture();
+
+    // The painting as a PNG (transparent where unpainted) in this headset's Viewer folder for images.
+    void SavePicture()
+    {
+        var picture = m_Paint != null ? m_Paint.ReadCanvas() : null;
+        if (picture == null)
+        {
+            PlayerHudNotification.Instance?.ShowText("Nothing painted on this copy to save", 2f);
+            Debug.Log("[Paint] save to Viewer: nothing painted on this copy yet");
+            return;
+        }
+        try
+        {
+            string folder = System.IO.Path.Combine(ViewerLibrary.HeadsetRoot, ViewerLibrary.KindFolders[(int)ViewerMediaKind.Image]);
+            System.IO.Directory.CreateDirectory(folder);
+            string path = System.IO.Path.Combine(folder, pictureName + ".png");
+            System.IO.File.WriteAllBytes(path, picture.EncodeToPNG());
+            Debug.Log($"[Paint] saved the copy's painting to the Viewer: {path} ({picture.width} x {picture.height})");
+            PlayerHudNotification.Instance?.ShowText($"Saved to the Viewer's Images as \"{pictureName}\"", 2.5f);
+            StartCoroutine(ViewerLibrary.Refresh());
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[Paint] save to Viewer failed: " + e.Message);
+            PlayerHudNotification.Instance?.ShowText("Couldn't save the painting: " + e.Message, 3f);
+        }
+        finally
+        {
+            Destroy(picture);
+        }
     }
 
     void Awake()
@@ -131,6 +223,11 @@ public class PaintingCopy : NetworkBehaviour, IPaintSurface
             m_Grab.selectEntered.AddListener(OnGrabbed);
             m_Grab.selectExited.AddListener(OnReleased);
         }
+        m_SaveButton?.onClick.AddListener(SaveToViewer);
+        m_ContentOnlyButton?.onClick.AddListener(() => SetContentOnly(true));
+        m_ShowFrameButton?.onClick.AddListener(() => SetContentOnly(false));
+        if (m_ShowFrame != null)
+            m_ShowFrame.gameObject.SetActive(false);
     }
 
     void OnEnable() => all.Add(this);
@@ -187,9 +284,49 @@ public class PaintingCopy : NetworkBehaviour, IPaintSurface
             rebuilt?.Invoke();
         }
         if (m_Shown.x > 0f)
+        {
             PlaceBalls();
+            ShowFrame();
+        }
         if (m_DragCorner >= 0)
             DragCorner();
+    }
+
+    // The frame (outline, corner balls, bar) or, in content only, just the small Frame button; the bar under the
+    // bottom edge and the button off the lower right corner, both the same size however the copy is enlarged.
+    void ShowFrame()
+    {
+        bool only = contentOnly;
+        if (only != m_ShownContentOnly)
+        {
+            m_ShownContentOnly = only;
+            if (m_Outline != null)
+                m_Outline.enabled = !only;
+            foreach (var ball in m_Balls)
+                if (ball != null)
+                    ball.gameObject.SetActive(!only);
+            if (m_Bar != null)
+                m_Bar.gameObject.SetActive(!only);
+            if (m_ShowFrame != null)
+                m_ShowFrame.gameObject.SetActive(only);
+            Debug.Log($"[Paint] painting copy: {(only ? "content only" : "frame shown")}");
+        }
+        float s = Mathf.Max(scale, 1e-3f);
+        float gap = 0.012f / s;
+        if (m_Bar != null && !only)
+        {
+            m_Bar.localScale = Vector3.one * (m_BarScale / s);
+            float half = m_Bar.rect.height * m_BarScale * 0.5f / s;
+            m_Bar.localPosition = new Vector3(0f, -m_Shown.y * 0.5f - gap - half, -0.004f / s);
+            m_Bar.localRotation = Quaternion.identity;
+        }
+        if (m_ShowFrame != null && only)
+        {
+            m_ShowFrame.localScale = Vector3.one * (m_BarScale / s);
+            var half = m_ShowFrame.rect.size * m_BarScale * 0.5f / s;
+            m_ShowFrame.localPosition = new Vector3(m_Shown.x * 0.5f + gap * 0.5f + half.x, -m_Shown.y * 0.5f - gap * 0.5f - half.y, -0.004f / s);
+            m_ShowFrame.localRotation = Quaternion.identity;
+        }
     }
 
     #region The surface
@@ -313,7 +450,7 @@ public class PaintingCopy : NetworkBehaviour, IPaintSurface
             }
         }
 
-        if (corner < 0)
+        if (corner < 0 || contentOnly)
             return;
         m_DragCorner = corner;
         m_Dragger = args.interactorObject;
@@ -438,6 +575,105 @@ public class PaintingCopy : NetworkBehaviour, IPaintSurface
             pose = OnWall(segment, side, hit.y, hit.z, Vector3.up);
         }
         return found;
+    }
+
+    /// <summary>
+    /// Where a new copy of <paramref name="size"/> goes: flat on a wall of the placed tunnel, the wall the head looks
+    /// at, else the tunnel wall nearest the player (preferring one in front); at about eye height and wholly on the
+    /// segment's wall, moved along the wall off any palette lying there. False if there is no tunnel.
+    /// <paramref name="why"/> says which wall and why, for the log.
+    /// </summary>
+    public static bool ChooseWall(Vector2 size, out Pose pose, out string why)
+    {
+        pose = default;
+        why = "no tunnel segment is placed";
+        var head = Camera.main != null ? Camera.main.transform : null;
+        if (head == null)
+            return false;
+
+        // The wall looked at (within 6 m).
+        TunnelSegmentGeometry chosen = null;
+        int chosenSide = 0;
+        float hitY = 0f, hitZ = 0f, nearest = 6f;
+        foreach (var segment in TunnelSegmentGeometry.all)
+        {
+            if (segment == null || !segment.isActiveAndEnabled)
+                continue;
+            var frame = segment.transform;
+            var origin = frame.InverseTransformPoint(head.position);
+            var direction = frame.InverseTransformDirection(head.forward);
+            if (Mathf.Abs(direction.x) < 1e-3f)
+                continue;
+            int side = direction.x < 0f ? -1 : 1;
+            float t = (side * segment.width * 0.5f - origin.x) / direction.x;
+            var hit = origin + direction * t;
+            if (t <= 0.2f || t >= nearest || Mathf.Abs(hit.z) > segment.length * 0.5f || hit.y < 0f || hit.y > segment.wallHeight)
+                continue;
+            nearest = t;
+            chosen = segment;
+            chosenSide = side;
+            hitY = hit.y;
+            hitZ = hit.z;
+            why = $"looked at ({t:0.0} m away)";
+        }
+
+        // Else the nearest wall, one in front counting as nearer.
+        if (chosen == null)
+        {
+            float best = float.MaxValue;
+            foreach (var segment in TunnelSegmentGeometry.all)
+            {
+                if (segment == null || !segment.isActiveAndEnabled)
+                    continue;
+                var frame = segment.transform;
+                var p = frame.InverseTransformPoint(head.position);
+                var forward = Vector3.ProjectOnPlane(frame.InverseTransformDirection(head.forward), Vector3.up).normalized;
+                for (int side = -1; side <= 1; side += 2)
+                {
+                    float across = Mathf.Abs(side * segment.width * 0.5f - p.x);
+                    float along = Mathf.Max(0f, Mathf.Abs(p.z) - segment.length * 0.5f);
+                    float facing = Mathf.Max(0f, forward.x * side);
+                    float score = Mathf.Sqrt(across * across + along * along) - 0.5f * facing;
+                    if (score >= best)
+                        continue;
+                    best = score;
+                    chosen = segment;
+                    chosenSide = side;
+                    hitY = p.y - 0.15f;
+                    hitZ = p.z;
+                    why = $"nearest wall ({Mathf.Sqrt(across * across + along * along):0.0} m away{(facing > 0.3f ? ", in front" : "")}); not looking at a wall";
+                }
+            }
+        }
+        if (chosen == null)
+            return false;
+
+        // Wholly on the wall: at about eye height, within the segment's length.
+        float halfLength = Mathf.Max(0f, chosen.length * 0.5f - size.x * 0.5f - 0.05f);
+        float z = Mathf.Clamp(hitZ, -halfLength, halfLength);
+        float y = Mathf.Clamp(hitY, Mathf.Min(size.y * 0.5f + 0.3f, chosen.wallHeight * 0.5f), Mathf.Max(chosen.wallHeight - size.y * 0.5f - 0.05f, chosen.wallHeight * 0.5f));
+
+        // Off any palette lying on that wall.
+        foreach (var palette in TunnelPalette.all)
+        {
+            if (palette == null)
+                continue;
+            var q = chosen.transform.InverseTransformPoint(palette.transform.position);
+            if (Mathf.Abs(chosenSide * chosen.width * 0.5f - q.x) > 0.25f)
+                continue; // not on this wall
+            const float paletteHalfWidth = 0.27f, paletteHalfHeight = 0.2f;
+            if (Mathf.Abs(q.z - z) >= size.x * 0.5f + paletteHalfWidth || Mathf.Abs(q.y - y) >= size.y * 0.5f + paletteHalfHeight)
+                continue;
+            float before = q.z - paletteHalfWidth - size.x * 0.5f - 0.05f, after = q.z + paletteHalfWidth + size.x * 0.5f + 0.05f;
+            float moved = Mathf.Abs(before - z) <= Mathf.Abs(after - z) && before >= -halfLength ? before : after <= halfLength ? after : before;
+            why += $"; moved {Mathf.Abs(moved - z) * 100f:0} cm along the wall, off the palette";
+            z = Mathf.Clamp(moved, -halfLength, halfLength);
+        }
+
+        pose = OnWall(chosen, chosenSide, y, z, Vector3.up);
+        why = $"segment '{chosen.transform.root.name}' ({chosen.transform.position:F2}), {(chosenSide < 0 ? "left (-X)" : "right (+X)")} wall at " +
+            $"{z:0.00} m along, {y:0.00} m up: " + why;
+        return true;
     }
 
     static Pose OnWall(TunnelSegmentGeometry segment, int side, float y, float z, Vector3 up)

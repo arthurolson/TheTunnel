@@ -55,7 +55,7 @@ static class PaintBuilder
             var marker = MakeMarker(body, cap);
             var arCube = MakeArCube();
             var palette = MakePalette(control, board, arCube);
-            var copy = MakeCopy(overlay);
+            var copy = MakeCopy(overlay, control);
             registry.marker = marker;
             registry.palette = palette;
             registry.paintCopy = copy;
@@ -423,7 +423,7 @@ static class PaintBuilder
     }
 
     // A copy of a real panel's painting, put on a tunnel wall: grabbed and shared like the palette, with its own paint.
-    static GameObject MakeCopy(Material overlay)
+    static GameObject MakeCopy(Material overlay, Transform control)
     {
         var copy = MakeToy("Paint_Copy_Networked");
         var generalSo = new SerializedObject(copy.GetComponent<XRGeneralGrabTransformer>());
@@ -440,10 +440,56 @@ static class PaintBuilder
         paintSo.FindProperty("m_BrushShader").objectReferenceValue = Shader.Find("Tunnel/Paint Brush");
         paintSo.ApplyModifiedPropertiesWithoutUndo();
 
+        // The bar under the copy (Save to Viewer, Content only) and the small Frame button shown in content only:
+        // world-space canvases like the TS Menu's, placed and sized by the copy at runtime.
+        var rowTemplate = control.Find("Container List/Box Row").gameObject;
+        RectTransform SmallCanvas(string name, Vector2 size)
+        {
+            var go = new GameObject(name, typeof(RectTransform));
+            go.layer = control.gameObject.layer;
+            var rect = (RectTransform)go.transform;
+            rect.SetParent(copy.transform, false);
+            foreach (var type in new[] { typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster), typeof(UnityEngine.XR.Interaction.Toolkit.UI.TrackedDeviceGraphicRaycaster) })
+            {
+                var source = control.GetComponent(type);
+                if (source != null && UnityEditorInternal.ComponentUtility.CopyComponent(source))
+                    UnityEditorInternal.ComponentUtility.PasteComponentAsNew(go);
+            }
+            rect.sizeDelta = size;
+            rect.localScale = Vector3.one * k_CanvasScale;
+            return rect;
+        }
+        Button BarButton(RectTransform parent, string name, string text, float x, float width)
+        {
+            var row = Object.Instantiate(rowTemplate, parent, false);
+            row.name = name;
+            var rect = (RectTransform)row.transform;
+            rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.anchoredPosition = new Vector2(x, 0f);
+            rect.sizeDelta = new Vector2(width, 56f);
+            var button = row.GetComponent<Button>();
+            button.onClick = new Button.ButtonClickedEvent();
+            var label = row.GetComponentInChildren<TMP_Text>(true);
+            label.text = text;
+            label.alignment = TextAlignmentOptions.Center;
+            return button;
+        }
+        var bar = SmallCanvas("Copy Bar", new Vector2(470f, 60f));
+        var save = BarButton(bar, "Save Button", "Save to Viewer", -117f, 228f);
+        var contentOnly = BarButton(bar, "Content Only Button", "Content only", 117f, 228f);
+        var showFrame = SmallCanvas("Show Frame", new Vector2(110f, 60f));
+        var frame = BarButton(showFrame, "Show Frame Button", "Frame", 0f, 106f);
+
         var component = copy.AddComponent<PaintingCopy>();
         var so = new SerializedObject(component);
         so.FindProperty("m_Overlay").objectReferenceValue = overlay;
         so.FindProperty("m_Brush").objectReferenceValue = Shader.Find("Tunnel/Paint Brush");
+        so.FindProperty("m_Bar").objectReferenceValue = bar;
+        so.FindProperty("m_SaveButton").objectReferenceValue = save;
+        so.FindProperty("m_ContentOnlyButton").objectReferenceValue = contentOnly;
+        so.FindProperty("m_ShowFrame").objectReferenceValue = showFrame;
+        so.FindProperty("m_ShowFrameButton").objectReferenceValue = frame;
+        so.FindProperty("m_BarScale").floatValue = k_CanvasScale;
         so.ApplyModifiedPropertiesWithoutUndo();
         return Save(copy);
     }
