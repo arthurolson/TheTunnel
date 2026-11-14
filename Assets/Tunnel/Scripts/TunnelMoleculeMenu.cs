@@ -12,7 +12,8 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// The Magnification slider (1 to 10) under the list sets how large new molecules are: every molecule keeps its true
 /// size relative to the others (one ångström-to-meter scale for all), times the magnification, so two molecules placed
 /// at the same magnification are in proportion. In a session everyone shares the one slider and sees the same
-/// messages. Works locally when not connected.
+/// messages. The Spawn nozzle check box under the slider calls up the spawn nozzle (see <see cref="SpawnNozzle"/>)
+/// in front of whoever ticks it, for everyone, or removes it. Works locally when not connected.
 /// </summary>
 public class TunnelMoleculeMenu : NetworkBehaviour
 {
@@ -54,6 +55,23 @@ public class TunnelMoleculeMenu : NetworkBehaviour
     [SerializeField]
     TMP_Text m_MagnificationText;
 
+    [Header("Spawn nozzle")]
+    [SerializeField]
+    [Tooltip("The Spawn nozzle check box (made by Tunnel > Molecules > Build Spawn Nozzle).")]
+    Button m_NozzleRow;
+
+    [SerializeField]
+    [Tooltip("The spawn nozzle it calls up.")]
+    SpawnNozzle m_NozzlePrefab;
+
+    [SerializeField]
+    [Tooltip("How far in front of whoever ticks the box a new nozzle appears (meters).")]
+    float m_NozzleDistance = 0.45f;
+
+    [SerializeField]
+    [Tooltip("How far below their eyes it appears (meters).")]
+    float m_NozzleDrop = 0.2f;
+
     const int k_MinMagnification = 1;
     const int k_MaxMagnification = 10;
     const float k_FreeSpotStep = 0.05f; // meters along the tunnel between tries for a free spot
@@ -85,6 +103,14 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         }
 
         ShowMagnification();
+        if (m_NozzleRow != null)
+            m_NozzleRow.onClick.AddListener(ToggleNozzle);
+    }
+
+    void Update()
+    {
+        if (isListOpen)
+            ShowNozzleRow();
     }
 
     public override void OnNetworkSpawn()
@@ -123,6 +149,8 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         base.OnDestroy();
         if (m_MagnificationSlider != null)
             m_MagnificationSlider.onValueChanged.RemoveAllListeners();
+        if (m_NozzleRow != null)
+            m_NozzleRow.onClick.RemoveAllListeners();
     }
 
     void ShowMagnification()
@@ -295,6 +323,89 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         var renderer = molecule.GetComponentInChildren<Renderer>(true);
         return renderer != null ? renderer.bounds.extents.magnitude : 0.05f;
     }
+
+    #region Spawn nozzle
+
+    // ■ while there is a nozzle in the tunnel, □ when there isn't.
+    void ShowNozzleRow()
+    {
+        if (m_NozzleRow == null)
+            return;
+        bool on = SpawnNozzle.current != null;
+        string text = on ? "■  Spawn nozzle  <color=#AAA>untick to remove it</color>" : "□  Spawn nozzle  <color=#AAA>sprays copies of a molecule</color>";
+        var label = m_NozzleRow.GetComponentInChildren<TMP_Text>(true);
+        if (label != null && label.text != text)
+            label.text = text;
+    }
+
+    void ToggleNozzle()
+    {
+        bool on = SpawnNozzle.current == null;
+        var head = Camera.main != null ? Camera.main.transform : null;
+        var pose = head != null ? NozzlePose(head.position, head.forward, m_NozzleDistance, m_NozzleDrop)
+            : new Pose(m_ListPanel.transform.position - m_ListPanel.transform.forward * m_NozzleDistance, Quaternion.LookRotation(-m_ListPanel.transform.forward));
+        Debug.Log($"[Nozzle] Spawn nozzle {(on ? "ticked" : "unticked")}: " +
+            (IsSpawned ? (IsServer ? "for everyone" : "asking the host") : "not connected, here only"));
+        ShareStatus(on ? "Spawn nozzle placed in front of you: let go of a molecule at the cup on its back, then Spawn on its menu."
+            : "Spawn nozzle removed.");
+        if (IsSpawned)
+            NozzleRpc(on, pose.position, pose.rotation);
+        else
+            SetNozzle(on, pose);
+        ShowNozzleRow();
+    }
+
+    /// <summary>
+    /// Where a new nozzle goes: in front of someone's eyes, level, a little below them, pointing the way they look.
+    /// </summary>
+    public static Pose NozzlePose(Vector3 eyes, Vector3 looking, float distance, float drop)
+    {
+        var forward = Vector3.ProjectOnPlane(looking, Vector3.up);
+        if (forward.sqrMagnitude < 1e-4f)
+            forward = Vector3.forward;
+        forward.Normalize();
+        return new Pose(eyes + forward * distance + Vector3.down * drop, Quaternion.LookRotation(forward, Vector3.up));
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void NozzleRpc(bool on, Vector3 position, Quaternion rotation) => SetNozzle(on, new Pose(position, rotation));
+
+    // On the host (or here when not connected): one nozzle at most.
+    void SetNozzle(bool on, Pose pose)
+    {
+        var current = SpawnNozzle.current;
+        if (!on)
+        {
+            if (current == null)
+                return;
+            Debug.Log("[Nozzle] removed");
+            if (current.TryGetComponent(out NetworkObject currentObject) && currentObject.IsSpawned)
+                currentObject.Despawn(true);
+            else
+                Destroy(current.gameObject);
+            return;
+        }
+        if (current != null)
+            return;
+        if (m_NozzlePrefab == null)
+        {
+            Debug.LogWarning("[Nozzle] no spawn nozzle to place (run Tunnel > Molecules > Build Spawn Nozzle)");
+            return;
+        }
+
+        // Placed before it wakes up, as the molecules are (its network transform takes its pose when it's created).
+        var holder = new GameObject("Nozzle Holder");
+        holder.SetActive(false);
+        var nozzle = Instantiate(m_NozzlePrefab, holder.transform);
+        nozzle.transform.SetPositionAndRotation(pose.position, pose.rotation);
+        nozzle.transform.SetParent(null, true);
+        Destroy(holder);
+        Debug.Log($"[Nozzle] placed at {pose.position:F2}");
+        if (IsSpawned && nozzle.TryGetComponent(out NetworkObject networkObject))
+            networkObject.Spawn(true);
+    }
+
+    #endregion
 
     /// <summary>A message on everyone's copy of the menu.</summary>
     void ShareStatus(string text)

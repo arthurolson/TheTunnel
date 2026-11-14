@@ -40,6 +40,13 @@ What has been built, what is in progress, and where each build is. Updated as wo
   its 30 spikes.
 - The molecule library simplifies any model over 200,000 vertices.
 - Delete mode in the TS Menu.
+- Spawn nozzle (TS Menu > Molecules > Spawn nozzle check box): a grabbable spray gun placed in front of whoever ticks
+  it, shared by everyone; untick to remove it. Let go of a molecule at the cup on its back to attach it (the ring turns
+  green when it will); pull it off to swap in another. Its menu's Copies slider (1–100) and Spawn button spray that
+  many copies of the attached molecule at its size from the mouth for everyone, one at a time (at most 20 per second,
+  waiting while the mouth is full); Stop ends a spray. Each spray is capped at 3M triangles ('at most N of these':
+  2PLV 50, TBSV 27, Zika 24, SARS-CoV-2 9, IgG 100). Built by Tunnel > Molecules > Build Spawn Nozzle; Editor test
+  Tunnel > Molecules > Test Spawn Nozzle (in Play mode); log tag [Nozzle].
 
 ### Containers
 - Box and sphere containers. A box has quarter-inch rod edges, and a Collider check box sets whether its walls hold
@@ -138,6 +145,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
 | AR canvas | Two-player test of 12.11.2026.2: both cameras tracked; the canvas jittered. 12.11.2026.3 locks it: once the panel is found, the host settles the canvas on a robust average of the first good sightings (about 1 s), shares it, and every headset stops tracking; the palette button then reads Re-find canvas. The canvas is drawn 2 mm in front of the real panel (canvasLift) so the panel doesn't hide the painting. Tested in the Editor; next: headset test. Two-player test of 13.11.2026.1: the player saw the canvas outline partly hidden, and host and player disagreed on the marker. Causes: a sighting made before hosting (on the app's own clock) looked 23 minutes in the future once the session's clock took over, so the shared pose froze for 6 minutes; the shared source flipped back and forth (a joining headset's sightings arrived ~250 ms old against a 200 ms limit), restarting the lock each time (58 s); the canvas sat ~2° tilted, so its far side sank 1–2.5 cm into the real panel and real-depth occlusion hid it. 13.11.2026.2: sightings from another clock are dropped; joining headsets stamp sightings on the host's clock; a source is replaced only when another's is clearly newer, and kept at least 0.5 s; each headset's sightings are gathered separately for the lock; a canvas within 3° of level or upright is made exactly so (canvasLevelWithin, 0 turns it off); real surfaces within a few cm of the canvas no longer hide it (a hand 4 cm above still does). Editor test: Tunnel > Paint > Test AR Two-Player Fixes. 13.11.2026.2 and .3 crashed at start on every headset (sharedassets0.assets corrupted: a texture was added mid-build, and the next incremental build reused the damaged data); 13.11.2026.4, built with a clean build cache, starts normally. Next: two-player headset test. |
 | Copy to wall | One-headset test of 12.11.2026.4: painting on the locked AR canvas works well (the real panel's surface helps); the copy floated where the gaze missed a wall, and Clear all marks wiped it. 12.11.2026.5: the copy lands flat on the placed tunnel's wall (looked at, else nearest; eye height; off the palette); Clear all marks no longer clears copies; under each copy a bar with Save to Viewer (every headset saves 'painting yyyy-MM-dd HH-mm', transparent where unpainted, to the Viewer's Images) and Content only (a small Frame button brings the frame back). 13.11.2026.1: marks drawn with the pencil and not yet finished are finished before copying, and touching a colour disk finishes a pencil line in its own colour (the copy left out unfinished lines); Save to Viewer keeps see-through paint's transparency right. Editor test (Tunnel > Paint > Test Copy to Wall Matches the Canvas) passes. Next: headset. |
 | Splat-box | Built (13.11.2026.1): tested in the Editor, not connected (placing, even scaling, mixed reality, setting into a wall, unsnapping, the menu). Next: headset (colours, frame rate with 250k triangles on Quest 3S, grabbing and scaling by hand, the menu by ray and poke) and two players (same splat, size and pose; late joiner). The source model is mostly room around the figure, so Goodsell is small in the box. |
+| Spawn nozzle | Built and passing its Editor test, not connected (14.11.2026.2). Next: headset (grip, aiming, attaching and pulling off by hand and ray, the menu, frame rate during a full spray on Quest 3S) and two players (attached molecule riding on the nozzle for both, shared count and status, a client spraying and stopping, a late joiner). |
 | Co-location (floor QR) | Two-player test: after aligning to the floor QR, the joining headset's AR-marker sighting sat 23–24 cm (briefly 30 cm) from the host's. 12.11.2026.4: the floor QR is read by both cameras through the AR marker's verified camera path (corner squares refined, floor height measured from the code; Editor: under 1 mm and 0.05°), and whenever a joining player and the host both see the AR marker held still, the player's view glides onto the host's (Editor: a 24 cm / 3° error corrected to within 3 mm). Next: two-player headset test. 13.11.2026.1 test: the floor QR left the player ~5 cm off; the marker alignment then corrected 29 mm and 7 mm, leaving under 1 cm. But it ran only because the canvas took a minute to lock: tracking stopped at the lock, so normally it never would. 13.11.2026.2: with other players present, tracking stays on for up to 15 s after the lock until each player's room is lined up with the host's by the marker; the logs say whether alignment ran, each correction and the totals. |
 | Headset checks still owed | SARS-CoV-2 in the 3D movie (09.11.2026.1); the movie panel's placement on the wall beside a mixed reality box; transparent Viewer images (09.11.2026.2); Viewer Content only with two players and the backdrop fix (10.11.2026.2); the virtual marker following the hand instantly (09.11.2026.3). |
 | Grab diagnostics | Every grab and release is logged (since 08.11.2026.1), to track down grabs that don't take. Still on. |
@@ -146,10 +154,10 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 14.11.2026.1 |
+| Latest build (Builds/TheTunnelDev.apk) | 14.11.2026.2 |
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |
 | Quest 3S 3497C10HC4041K | 13.11.2026.4 |
 | Quest 3S 3497C10HC4004X | 13.11.2026.4 |
-| Quest 3 2G0YC1ZF760BMQ | 13.11.2026.5 |
+| Quest 3 2G0YC1ZF760BMQ | 14.11.2026.2 |

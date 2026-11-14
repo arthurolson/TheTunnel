@@ -258,10 +258,16 @@ static class ContainerBuilder
             var list = Object.Instantiate(moleculeList.gameObject, control, false);
             list.name = "Container List";
             Object.DestroyImmediate(list.transform.Find("Scroll View").gameObject);
-            // Two columns: the rows on the left, the thermometer on the right.
+            var nozzleRow = list.transform.Find(NozzleBuilder.k_RowName); // the Molecules list's own (Build Spawn Nozzle)
+            if (nozzleRow != null)
+                Object.DestroyImmediate(nozzleRow.gameObject);
+            // Two columns: the rows on the left, the thermometer on the right. Placed from the Molecules list's top,
+            // which stays put when that list grows downward.
             var panelRect = (RectTransform)list.transform;
             panelRect.sizeDelta = new Vector2(680f, 930f);
-            panelRect.anchoredPosition = ((RectTransform)moleculeList).anchoredPosition + new Vector2(-70f, -165f);
+            var moleculeRect = (RectTransform)moleculeList;
+            float moleculeTop = moleculeRect.anchoredPosition.y + moleculeRect.sizeDelta.y * 0.5f;
+            panelRect.anchoredPosition = new Vector2(moleculeRect.anchoredPosition.x - 70f, moleculeTop - 280f - 165f);
             const float rowsX = -80f, rowsWidth = 460f, thermometerX = 225f;
 
             var title = (RectTransform)list.transform.Find("Title");

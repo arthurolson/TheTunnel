@@ -20,6 +20,8 @@ using XRMultiplayer;
 /// While the 3D movie of the container it is in is paused (see <see cref="TunnelMovie"/>), it stands still where it is
 /// and goes on as it was when the movie plays again; it can still be moved by hand. Antibodies bound to a capsid add
 /// their volume, and so their mass, to it (see <see cref="extraVolume"/>).
+/// Attached to a spawn nozzle's cup (see <see cref="SpawnNozzle"/>) it is held still there, kinematic, with no heat or
+/// gravity, and the nozzle carries it; taken in hand, it comes off.
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
 public class MoleculeGravity : MonoBehaviour
@@ -117,6 +119,12 @@ public class MoleculeGravity : MonoBehaviour
     /// <summary>Whether someone is holding it here.</summary>
     public bool isHeld => m_Grab != null && m_Grab.isSelected;
 
+    /// <summary>The spawn nozzle it is attached to on this headset, if any (set by the nozzle).</summary>
+    public SpawnNozzle dock { get; private set; }
+
+    /// <summary>A hand on this headset has just let go of a molecule (both hands, if it was held in two).</summary>
+    public static event System.Action<MoleculeGravity> released;
+
     static PhysicsMaterial s_Material;
 
     Rigidbody m_Rigidbody;
@@ -154,7 +162,10 @@ public class MoleculeGravity : MonoBehaviour
         UpdateMass();
 
         if (TryGetComponent(out m_Grab))
+        {
             m_Grab.selectEntered.AddListener(OnGrabbed);
+            m_Grab.selectExited.AddListener(OnReleased);
+        }
     }
 
     void OnEnable() => all.Add(this);
@@ -191,7 +202,41 @@ public class MoleculeGravity : MonoBehaviour
     void OnDestroy()
     {
         if (m_Grab != null)
+        {
             m_Grab.selectEntered.RemoveListener(OnGrabbed);
+            m_Grab.selectExited.RemoveListener(OnReleased);
+        }
+    }
+
+    // Let go of by a hand (not cancelled by Delete, not a socket): a spawn nozzle may take it.
+    void OnReleased(SelectExitEventArgs args)
+    {
+        if (args.isCanceled || m_Grab.isSelected || args.interactorObject is UnityEngine.XR.Interaction.Toolkit.Interactors.XRSocketInteractor || TunnelMenu.deleteMode)
+            return;
+        released?.Invoke(this);
+    }
+
+    /// <summary>
+    /// Attaches it to a spawn nozzle's cup on this headset (null takes it off): while attached it is kinematic and
+    /// still, and the nozzle places it every frame.
+    /// </summary>
+    public void SetDock(SpawnNozzle nozzle)
+    {
+        if (nozzle == dock)
+            return;
+        dock = nozzle;
+        if (nozzle != null)
+            HoldDocked();
+        Debug.Log($"[Nozzle] {name} {(nozzle != null ? "held on the nozzle's cup" : "off the nozzle")}");
+    }
+
+    void HoldDocked()
+    {
+        if (m_Rigidbody.isKinematic)
+            return;
+        m_Rigidbody.linearVelocity = Vector3.zero;
+        m_Rigidbody.angularVelocity = Vector3.zero;
+        m_Rigidbody.isKinematic = true;
     }
 
     void OnGrabbed(SelectEnterEventArgs args)
@@ -346,6 +391,13 @@ public class MoleculeGravity : MonoBehaviour
 
     void FixedUpdate()
     {
+        // On a spawn nozzle's cup it is held still there (once taken in hand, the hand has the say).
+        if (dock != null && !isHeld)
+        {
+            HoldDocked();
+            return;
+        }
+
         // Inside a container its viscosity scales the drag (1 outside them all), and its heat may move it.
         var container = TunnelContainer.At(m_Rigidbody.worldCenterOfMass);
         FollowOwner(container != null && container.movie != null && container.movie.isPaused);
