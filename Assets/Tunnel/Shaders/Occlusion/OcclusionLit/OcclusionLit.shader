@@ -147,6 +147,9 @@ Shader "Occlusion/OcclusionLit"
             #pragma shader_feature_local_fragment _SPECULARHIGHLIGHTS_OFF
             #pragma shader_feature_local_fragment _ENVIRONMENTREFLECTIONS_OFF
             #pragma shader_feature_local_fragment _SPECULAR_SETUP
+            // Tunnel addition: set from script (TunnelSegmentAppearance) to break up a wall texture's repeat. A
+            // dynamic branch, not a variant, so it adds no shader variants and works on runtime material copies.
+            #pragma dynamic_branch_local_fragment _ _WALL_TILE_BREAKUP
 
             // -------------------------------------
             // Universal Pipeline keywords

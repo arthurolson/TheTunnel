@@ -3,6 +3,7 @@
 
 #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 #include "../OcclusionComputation.hlsl"
+#include "WallTileBreakup.hlsl"
 
 #if defined(LOD_FADE_CROSSFADE)
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/LODCrossFade.hlsl"
@@ -237,6 +238,14 @@ void LitPassFragment(
 
     SurfaceData surfaceData;
     InitializeStandardLitSurfaceData(input.uv, surfaceData);
+
+    // Tunnel addition: a fine wall texture (stucco) without a visible repeat.
+    if (_WALL_TILE_BREAKUP)
+    {
+        float aspect = _BaseMap_TexelSize.z / max(_BaseMap_TexelSize.w, 1.0);
+        half4 broken = SampleWallTileBreakup(TEXTURE2D_ARGS(_BaseMap, sampler_BaseMap), input.uv, aspect);
+        surfaceData.albedo = broken.rgb * _BaseColor.rgb;
+    }
 
 #ifdef LOD_FADE_CROSSFADE
     LODFadeCrossFade(input.positionCS);

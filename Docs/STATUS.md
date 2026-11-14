@@ -23,7 +23,9 @@ What has been built, what is in progress, and where each build is. Updated as wo
 - Shared TS Menu: everyone sees the same menus and objects.
 - Wall textures (TS Menu > Textures): built-in ones ship in the app; a fine surface (White Stucco) repeats at about
   0.5 m (16 times round the profile) instead of one image stretched round the whole tunnel (TunnelTextureLibrary
-  ImageSizeOnWall).
+  ImageSizeOnWall). Its repeat is hidden: the wall shows small hexagonal patches of the image, each randomly
+  rotated and shifted, blended at their edges (OcclusionLit's _WALL_TILE_BREAKUP dynamic branch, three texture
+  reads instead of one; only on such textures).
 
 ### Molecules
 - Molecule toys built from Assets/Molecules, chosen from the TS Menu's Molecules list. A slider magnifies them
@@ -144,10 +146,10 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 13.11.2026.5 |
+| Latest build (Builds/TheTunnelDev.apk) | 14.11.2026.1 |
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |
 | Quest 3S 3497C10HC4041K | 13.11.2026.4 |
 | Quest 3S 3497C10HC4004X | 13.11.2026.4 |
-| Quest 3 2G0YC1ZF760BMQ | 10.11.2026.2 |
+| Quest 3 2G0YC1ZF760BMQ | 13.11.2026.5 |

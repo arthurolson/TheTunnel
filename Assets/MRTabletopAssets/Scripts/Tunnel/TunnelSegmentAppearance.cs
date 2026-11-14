@@ -88,6 +88,7 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         float m_LastLocalEditTime = float.NegativeInfinity;
 
         static readonly int k_WindowStencilComp = Shader.PropertyToID("_WindowStencilComp");
+        const string k_TileBreakup = "_WALL_TILE_BREAKUP";
 
         Material m_OpaqueInstance;
         Material m_TransparentInstance;
@@ -174,10 +175,13 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         /// Puts a texture on the walls and ceiling (null removes it); the chosen colour still tints it. By default one
         /// image height wraps the whole profile. A fine surface such as stucco would look blown up that way, so with
         /// <paramref name="imageSize"/> (metres, above 0) the image repeats at about that size, wall to wall and along
-        /// the tunnel. Either way the image keeps its proportions and lines up across joined segments.
+        /// the tunnel, and its repeat is broken up: the wall shows small randomly rotated pieces of the image, so the
+        /// eye can't pick out the same patch over and over. Either way the image keeps its proportions and lines up
+        /// across joined segments.
         /// </summary>
         public void SetWallTexture(Texture texture, float imageSize = 0f)
         {
+            bool breakUp = texture != null && imageSize > 0f;
             float aspect = texture != null && texture.height > 0 ? texture.width / (float)texture.height : 1f;
             var geometry = m_ShellRenderer != null ? m_ShellRenderer.GetComponent<TunnelSegmentGeometry>() : null;
             float perimeter = geometry != null ? geometry.perimeter : 0f;
@@ -191,7 +195,11 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
                 // Offsetting by the segment's position along its axis lines the image up across joined segments.
                 var frame = geometry.transform;
                 float nearEnd = Vector3.Dot(frame.position, frame.forward) - geometry.length * 0.5f;
-                offset = Mathf.Repeat(nearEnd / perimeter * tiling, 1f);
+                offset = nearEnd / perimeter * tiling;
+                // A plain repeat looks the same shifted by whole images; the broken-up pattern doesn't, so it keeps
+                // the full offset to carry on across the join.
+                if (!breakUp)
+                    offset = Mathf.Repeat(offset, 1f);
             }
 
             var scaleOffset = new Vector4(tiling, repeats, offset, 0f);
@@ -201,6 +209,10 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
                     continue;
                 material.SetTexture("_BaseMap", texture);
                 material.SetVector("_BaseMap_ST", scaleOffset);
+                if (breakUp)
+                    material.EnableKeyword(k_TileBreakup);
+                else
+                    material.DisableKeyword(k_TileBreakup);
             }
         }
 

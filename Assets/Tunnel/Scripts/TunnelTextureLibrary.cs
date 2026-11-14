@@ -29,7 +29,8 @@ public static class TunnelTextureLibrary
 
     /// <summary>
     /// Built-in textures of a fine surface, and how big one copy of the image is on the wall (m), so the grain looks
-    /// its real size instead of one image being stretched round the whole tunnel.
+    /// its real size instead of one image being stretched round the whole tunnel. These repeat, so the wall shows them
+    /// as small randomly rotated pieces to hide the repeat (see TunnelSegmentAppearance.SetWallTexture).
     /// </summary>
     static readonly Dictionary<string, float> k_ImageSizeOnWall = new()
     {
