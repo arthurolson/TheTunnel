@@ -27,6 +27,19 @@ public static class TunnelTextureLibrary
 
     public static string folderPath => Path.Combine(Application.persistentDataPath, "Textures");
 
+    /// <summary>
+    /// Built-in textures of a fine surface, and how big one copy of the image is on the wall (m), so the grain looks
+    /// its real size instead of one image being stretched round the whole tunnel.
+    /// </summary>
+    static readonly Dictionary<string, float> k_ImageSizeOnWall = new()
+    {
+        { "White Stucco", 0.5f },
+    };
+
+    /// <summary>How big one copy of this texture's image is on the wall (m); 0 = one image wraps the whole profile.</summary>
+    public static float ImageSizeOnWall(string name) =>
+        name != null && k_ImageSizeOnWall.TryGetValue(name, out float size) ? size : 0f;
+
     /// <summary>Built-in textures by name (the image's file name without extension).</summary>
     static Dictionary<string, Texture2D> builtIn
     {

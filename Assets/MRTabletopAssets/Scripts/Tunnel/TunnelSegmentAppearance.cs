@@ -171,25 +171,30 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         }
 
         /// <summary>
-        /// Puts a texture on the walls and ceiling (null removes it). One image height wraps the whole profile and
-        /// the image keeps its proportions along the tunnel; the chosen colour still tints it.
+        /// Puts a texture on the walls and ceiling (null removes it); the chosen colour still tints it. By default one
+        /// image height wraps the whole profile. A fine surface such as stucco would look blown up that way, so with
+        /// <paramref name="imageSize"/> (metres, above 0) the image repeats at about that size, wall to wall and along
+        /// the tunnel. Either way the image keeps its proportions and lines up across joined segments.
         /// </summary>
-        public void SetWallTexture(Texture texture)
+        public void SetWallTexture(Texture texture, float imageSize = 0f)
         {
             float aspect = texture != null && texture.height > 0 ? texture.width / (float)texture.height : 1f;
-            // Mesh u is tunnel distance in profile lengths, so tiling 1/aspect keeps the image's proportions.
-            // Offsetting by the segment's position along its axis lines the image up across joined segments.
-            float tiling = 1f / aspect;
-            float offset = 0f;
             var geometry = m_ShellRenderer != null ? m_ShellRenderer.GetComponent<TunnelSegmentGeometry>() : null;
-            if (geometry != null && geometry.perimeter > 0f)
+            float perimeter = geometry != null ? geometry.perimeter : 0f;
+            // Mesh v runs once around the profile and u is tunnel distance in profile lengths, so the image repeats
+            // `repeats` times around and tiling repeats/aspect along keeps its proportions.
+            float repeats = imageSize > 0f && perimeter > 0f ? Mathf.Max(1f, Mathf.Round(perimeter / imageSize)) : 1f;
+            float tiling = repeats / aspect;
+            float offset = 0f;
+            if (perimeter > 0f)
             {
+                // Offsetting by the segment's position along its axis lines the image up across joined segments.
                 var frame = geometry.transform;
                 float nearEnd = Vector3.Dot(frame.position, frame.forward) - geometry.length * 0.5f;
-                offset = Mathf.Repeat(nearEnd / geometry.perimeter * tiling, 1f);
+                offset = Mathf.Repeat(nearEnd / perimeter * tiling, 1f);
             }
 
-            var scaleOffset = new Vector4(tiling, 1f, offset, 0f);
+            var scaleOffset = new Vector4(tiling, repeats, offset, 0f);
             foreach (var material in new[] { m_OpaqueInstance, m_TransparentInstance })
             {
                 if (material == null)

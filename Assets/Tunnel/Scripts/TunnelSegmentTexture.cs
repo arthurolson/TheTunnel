@@ -219,7 +219,7 @@ public class TunnelSegmentTexture : NetworkBehaviour
         if (TunnelTextureLibrary.TryGetCached(textureName, out var texture) ||
             ((!IsSpawned || IsServer) && TunnelTextureLibrary.TryLoadFromFolder(textureName, out texture, out _)))
         {
-            m_Appearance.SetWallTexture(texture);
+            m_Appearance.SetWallTexture(texture, TunnelTextureLibrary.ImageSizeOnWall(textureName));
             SetStatus($"Current: {textureName}");
             return;
         }

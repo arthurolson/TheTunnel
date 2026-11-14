@@ -21,6 +21,9 @@ What has been built, what is in progress, and where each build is. Updated as wo
 - Co-location: a printed QR code on the floor (Printables/) lines up every player's headset with the same real room.
   Players aligned this way see each other's real bodies instead of avatars.
 - Shared TS Menu: everyone sees the same menus and objects.
+- Wall textures (TS Menu > Textures): built-in ones ship in the app; a fine surface (White Stucco) repeats at about
+  0.5 m (16 times round the profile) instead of one image stretched round the whole tunnel (TunnelTextureLibrary
+  ImageSizeOnWall).
 
 ### Molecules
 - Molecule toys built from Assets/Molecules, chosen from the TS Menu's Molecules list. A slider magnifies them
@@ -141,7 +144,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 13.11.2026.4 |
+| Latest build (Builds/TheTunnelDev.apk) | 13.11.2026.5 |
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |
