@@ -48,6 +48,23 @@ What has been built, what is in progress, and where each build is. Updated as wo
   2PLV 50, TBSV 27, Zika 24, SARS-CoV-2 9, IgG 100). Built by Tunnel > Molecules > Build Spawn Nozzle; Editor test
   Tunnel > Molecules > Test Spawn Nozzle (in Play mode); log tag [Nozzle].
 
+### Signage
+- TS Menu > Signage (under Containers): New sign puts a sign flat on the wall beside the list, with its menu open for
+  whoever pressed it; Saved signs lists the signs stored on the host (tap one, then Place or Delete); "Edit buttons on
+  signs" hides or shows every sign's Edit button for everyone.
+- A sign is a shared, grabbable panel of text (two hands scale it). Let go within 25 cm of a flat wall, it lies flat on
+  the wall; taking it in hand pulls it off. Delete mode deletes it. Not connected, it works locally.
+- Its menu (Edit button at its lower right) has Edit text (the browser's keyboard; Enter starts a new line, and each
+  key shows for everyone), a list of 19 open-licence fonts each shown in its own font (sans, condensed, headline,
+  monospace, serif, display, script and stencil), Regular / Bold / Italic, Left / Centre / Right, Drop shadow, a colour
+  chooser for the letters, border or background (hue, saturation, brightness, opacity), and Border (on/off, width
+  0.2–3 cm, space round the text 0–10 cm). Save keeps the sign on the host (files/Signs/<first line>.json) to call up
+  again, also after a restart.
+- Fonts live in Assets/Tunnel/Signage/Fonts with their licences (SIL OFL; Apache 2.0 for Roboto); Tunnel > Signage >
+  Build Signage makes static 512x512 SDF atlases and the font library (drop in a new font folder and rebuild). Editor
+  test: Tunnel > Signage > Test Signage (in Play mode). Log tag [Sign].
+- The TS Menu's Align to QR status line sits under the menu panel again (it had overlapped the bottom buttons).
+
 ### Containers
 - Box and sphere containers. A box has quarter-inch rod edges, and a Collider check box sets whether its walls hold
   molecules in.
@@ -146,6 +163,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
 | Copy to wall | One-headset test of 12.11.2026.4: painting on the locked AR canvas works well (the real panel's surface helps); the copy floated where the gaze missed a wall, and Clear all marks wiped it. 12.11.2026.5: the copy lands flat on the placed tunnel's wall (looked at, else nearest; eye height; off the palette); Clear all marks no longer clears copies; under each copy a bar with Save to Viewer (every headset saves 'painting yyyy-MM-dd HH-mm', transparent where unpainted, to the Viewer's Images) and Content only (a small Frame button brings the frame back). 13.11.2026.1: marks drawn with the pencil and not yet finished are finished before copying, and touching a colour disk finishes a pencil line in its own colour (the copy left out unfinished lines); Save to Viewer keeps see-through paint's transparency right. Editor test (Tunnel > Paint > Test Copy to Wall Matches the Canvas) passes. Next: headset. |
 | Splat-box | Built (13.11.2026.1): tested in the Editor, not connected (placing, even scaling, mixed reality, setting into a wall, unsnapping, the menu). Next: headset (colours, frame rate with 250k triangles on Quest 3S, grabbing and scaling by hand, the menu by ray and poke) and two players (same splat, size and pose; late joiner). The source model is mostly room around the figure, so Goodsell is small in the box. |
 | Spawn nozzle | Built and passing its Editor test, not connected (14.11.2026.3; 14.11.2026.2 crashed at start, sharedassets0 corrupted by an incremental build after the new assets; .3 is a clean build and starts normally). Next: headset (grip, aiming, attaching and pulling off by hand and ray, the menu, frame rate during a full spray on Quest 3S) and two players (attached molecule riding on the nozzle for both, shared count and status, a client spraying and stopping, a late joiner). |
+| Signage | Built and passing its Editor test, not connected (14.11.2026.4). Next: headset (grab, scale and snap to the wall by hand and ray; menu and keyboard by poke and ray; how legible the letters are at 1–3 m; the Edit button's size; the sliders' dark fill) and two players (typing and styling from a client, Save / Place / Delete from a client storing on the host, wall pose, late joiner). |
 | Co-location (floor QR) | Two-player test: after aligning to the floor QR, the joining headset's AR-marker sighting sat 23–24 cm (briefly 30 cm) from the host's. 12.11.2026.4: the floor QR is read by both cameras through the AR marker's verified camera path (corner squares refined, floor height measured from the code; Editor: under 1 mm and 0.05°), and whenever a joining player and the host both see the AR marker held still, the player's view glides onto the host's (Editor: a 24 cm / 3° error corrected to within 3 mm). Next: two-player headset test. 13.11.2026.1 test: the floor QR left the player ~5 cm off; the marker alignment then corrected 29 mm and 7 mm, leaving under 1 cm. But it ran only because the canvas took a minute to lock: tracking stopped at the lock, so normally it never would. 13.11.2026.2: with other players present, tracking stays on for up to 15 s after the lock until each player's room is lined up with the host's by the marker; the logs say whether alignment ran, each correction and the totals. |
 | Headset checks still owed | SARS-CoV-2 in the 3D movie (09.11.2026.1); the movie panel's placement on the wall beside a mixed reality box; transparent Viewer images (09.11.2026.2); Viewer Content only with two players and the backdrop fix (10.11.2026.2); the virtual marker following the hand instantly (09.11.2026.3). |
 | Grab diagnostics | Every grab and release is logged (since 08.11.2026.1), to track down grabs that don't take. Still on. |
@@ -154,7 +172,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 14.11.2026.3 |
+| Latest build (Builds/TheTunnelDev.apk) | 14.11.2026.4 |
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |

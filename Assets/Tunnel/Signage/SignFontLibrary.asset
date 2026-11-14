@@ -1,0 +1,262 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e3630814357334bc99e39df4a0c89ec1, type: 3}
+  m_Name: SignFontLibrary
+  m_EditorClassIdentifier: Assembly-CSharp::SignFontLibrary
+  m_Fonts:
+  - name: Roboto (sans)
+    regular:
+      font: {fileID: 11400000, guid: 54030f631390c43c58dc5a06f8149e45, type: 2}
+      shadow: {fileID: 2100000, guid: 09326e8162ffc4021b16f620b96bc09a, type: 2}
+    bold:
+      font: {fileID: 11400000, guid: 71f12d62d866d49b781dca561b7957e5, type: 2}
+      shadow: {fileID: 2100000, guid: 0c10779eee5f94f999341b8bec64fc38, type: 2}
+    italic:
+      font: {fileID: 11400000, guid: 182a8b8b0594a4bb28dd1ee6e0b97075, type: 2}
+      shadow: {fileID: 2100000, guid: c5b9022049c674a9e96762253c1c832b, type: 2}
+    boldItalic:
+      font: {fileID: 11400000, guid: a808f5d62443a40b39c214e637a3c90c, type: 2}
+      shadow: {fileID: 2100000, guid: be8765a8a02594add96ac254b2eb91f0, type: 2}
+  - name: Inter (sans)
+    regular:
+      font: {fileID: 11400000, guid: f675742eaf9c20a4f909d78ee7a14fed, type: 2}
+      shadow: {fileID: 2100000, guid: 31835f3dba9b04a6baec49be29e04b26, type: 2}
+    bold:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+  - name: Lato (sans)
+    regular:
+      font: {fileID: 11400000, guid: 77b951dd6217549b298a768142f84b22, type: 2}
+      shadow: {fileID: 2100000, guid: 7292c09d13f934f7893cf27d8d669a1c, type: 2}
+    bold:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+  - name: Liberation Sans (sans)
+    regular:
+      font: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
+      shadow: {fileID: 2100000, guid: 9e7a7e37760814b6f97fad73339901fe, type: 2}
+    bold:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+  - name: Oswald (condensed)
+    regular:
+      font: {fileID: 11400000, guid: 12fdf753dc78d4ffcb18e4c504f36488, type: 2}
+      shadow: {fileID: 2100000, guid: 958fb25d502cc49a3993b099a59fe78c, type: 2}
+    bold:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+  - name: Bebas Neue (headline)
+    regular:
+      font: {fileID: 11400000, guid: 3b68e235e68334aa3ae1c8206e9dda08, type: 2}
+      shadow: {fileID: 2100000, guid: 9d7ab01a0ea744d70abe79adfc5613cf, type: 2}
+    bold:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+  - name: Teko (headline)
+    regular:
+      font: {fileID: 11400000, guid: 34fdb17ec28fe4ee0b57eb18530db729, type: 2}
+      shadow: {fileID: 2100000, guid: e5cac95be4ce14ca0888519df8c0548e, type: 2}
+    bold:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+  - name: Roboto Mono (monospace)
+    regular:
+      font: {fileID: 11400000, guid: f17c4d83a062e4e82a0f80a365049ab1, type: 2}
+      shadow: {fileID: 2100000, guid: 190d93345f69c411fb3d05281de26cb3, type: 2}
+    bold:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+  - name: Merriweather (serif)
+    regular:
+      font: {fileID: 11400000, guid: 8f70a4af637b54630b934c7fb9b6b181, type: 2}
+      shadow: {fileID: 2100000, guid: aa189d27fa56448c9b05e963f21ebbd9, type: 2}
+    bold:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+  - name: Playfair Display (serif)
+    regular:
+      font: {fileID: 11400000, guid: 7b08bdf0a25514ff0ae17d7ef5b1650d, type: 2}
+      shadow: {fileID: 2100000, guid: 2b086d4f4b93c44fb91a8a5dcacea284, type: 2}
+    bold:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+  - name: Cinzel (classical capitals)
+    regular:
+      font: {fileID: 11400000, guid: 93a64afd462c14d7491e6eea080db39b, type: 2}
+      shadow: {fileID: 2100000, guid: beff7e834d7804c68a953afff0487e89, type: 2}
+    bold:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+  - name: Abril Fatface (display)
+    regular:
+      font: {fileID: 11400000, guid: e47238a6cad2a475aa93514b60a743cc, type: 2}
+      shadow: {fileID: 2100000, guid: 88670dbefeade4d64a332b59e3963774, type: 2}
+    bold:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+  - name: Lobster (script)
+    regular:
+      font: {fileID: 11400000, guid: c0f9e4ffede1e4e45ad68cca15830b52, type: 2}
+      shadow: {fileID: 2100000, guid: 481ba36bbbb0641b1b0b7e23ef35acfe, type: 2}
+    bold:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+  - name: Pacifico (script)
+    regular:
+      font: {fileID: 11400000, guid: 64bef43ce32f04a3ca47c513b34810a1, type: 2}
+      shadow: {fileID: 2100000, guid: 77914f0f545dc4a789e6bba5fd11ebe4, type: 2}
+    bold:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+  - name: Dancing Script (script)
+    regular:
+      font: {fileID: 11400000, guid: 634ef9d8d8ae940618e9a2d502389d18, type: 2}
+      shadow: {fileID: 2100000, guid: 1f4e85516072e4b9c89c3395148d05a2, type: 2}
+    bold:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+  - name: Stardos Stencil (stencil)
+    regular:
+      font: {fileID: 11400000, guid: f451904cb350b4356a8e29bb859114dc, type: 2}
+      shadow: {fileID: 2100000, guid: ac0e560c175004654832279426b6293e, type: 2}
+    bold:
+      font: {fileID: 11400000, guid: ba50e9e45efa9429d9046264e67786c3, type: 2}
+      shadow: {fileID: 2100000, guid: a023b8d9cb55d45818d6b6928179d16b, type: 2}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+  - name: Allerta Stencil (stencil)
+    regular:
+      font: {fileID: 11400000, guid: 22ed4bec2e1ef41339e0c9c84ab84e66, type: 2}
+      shadow: {fileID: 2100000, guid: b7b942b18728845eba780992ff4a5065, type: 2}
+    bold:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+  - name: Saira Stencil One (stencil)
+    regular:
+      font: {fileID: 11400000, guid: 7ce0323a7eea3493eb63d6630dc9818d, type: 2}
+      shadow: {fileID: 2100000, guid: c51393445b142455ca5989772eaeec17, type: 2}
+    bold:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+  - name: Black Ops One (stencil)
+    regular:
+      font: {fileID: 11400000, guid: ea4252489edf54d3b844ddca89879dcc, type: 2}
+      shadow: {fileID: 2100000, guid: 4f04698c46b6e4190bac033016d293c9, type: 2}
+    bold:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    italic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}
+    boldItalic:
+      font: {fileID: 0}
+      shadow: {fileID: 0}

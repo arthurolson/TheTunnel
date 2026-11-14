@@ -10,8 +10,9 @@ using XRMultiplayer;
 
 /// <summary>
 /// The Tunnel Segment's "TS Menu" button: opens and closes the panel holding the segment's buttons
-/// (Colors, Textures, Molecules, Containers, Delete, New Browser, New Viewer, Add Segment, Remove Segment, Align to
-/// QR). The colour chooser, the texture list, the molecule list and the container list open beside it, one at a time; closing the menu also closes them. Everyone sees
+/// (Colors, Textures, Molecules, Containers, Signage, Delete, New Browser, New Viewer, Add Segment, Remove Segment,
+/// Align to QR). The colour chooser, the texture list, the molecule list, the container list and the signage list open
+/// beside it, one at a time; closing the menu also closes them. Everyone sees
 /// the same menu: whoever presses a button opens or closes it for all players (the colour chooser shares itself the
 /// same way). Works locally when not connected.
 /// Delete is one switch for everyone, like the rest of the menu: while it is on, any molecule or container anyone
@@ -25,6 +26,7 @@ public class TunnelMenu : NetworkBehaviour
         Textures,
         Molecules,
         Containers,
+        Signage,
     }
 
     [SerializeField]
@@ -58,6 +60,12 @@ public class TunnelMenu : NetworkBehaviour
     TMP_Text m_ContainersLabel;
 
     [SerializeField]
+    Button m_SignageButton;
+
+    [SerializeField]
+    TMP_Text m_SignageLabel;
+
+    [SerializeField]
     Button m_DeleteButton;
 
     [SerializeField]
@@ -74,6 +82,9 @@ public class TunnelMenu : NetworkBehaviour
 
     [SerializeField]
     TunnelContainerMenu m_Containers;
+
+    [SerializeField]
+    TunnelSignageMenu m_Signage;
 
     readonly NetworkVariable<bool> m_Open = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<SidePanel> m_Panel = new(SidePanel.None, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
@@ -108,6 +119,8 @@ public class TunnelMenu : NetworkBehaviour
             m_MoleculesButton.onClick.AddListener(ToggleMolecules);
         if (m_ContainersButton != null)
             m_ContainersButton.onClick.AddListener(() => ToggleSidePanel(SidePanel.Containers));
+        if (m_SignageButton != null)
+            m_SignageButton.onClick.AddListener(() => ToggleSidePanel(SidePanel.Signage));
         if (m_DeleteButton != null)
             m_DeleteButton.onClick.AddListener(ToggleDeleteMode);
         // The appearance component toggles the chooser itself; just keep the lists out of its way.
@@ -341,6 +354,15 @@ public class TunnelMenu : NetworkBehaviour
         ShowTextures(side == SidePanel.Textures);
         ShowMolecules(side == SidePanel.Molecules);
         ShowContainers(side == SidePanel.Containers);
+        ShowSignage(side == SidePanel.Signage);
+    }
+
+    void ShowSignage(bool show)
+    {
+        if (m_Signage != null)
+            m_Signage.ShowList(show);
+        if (m_SignageLabel != null)
+            m_SignageLabel.text = show ? "Hide Signage" : "Signage";
     }
 
     void ShowContainers(bool show)

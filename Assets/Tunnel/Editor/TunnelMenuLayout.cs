@@ -3,13 +3,13 @@ using UnityEngine;
 /// <summary>
 /// Spaces the TS Menu's buttons in its menu panel, in a fixed order, one every 56 units from the top, and sizes the
 /// panel to hold them (its top stays where it is). Buttons not in the prefab are skipped. Used by the builders that
-/// add buttons (Containers, Delete, Paint).
+/// add buttons (Containers, Delete, Paint, Signage).
 /// </summary>
 static class TunnelMenuLayout
 {
     static readonly string[] k_Order =
     {
-        "Colors Button", "Textures Button", "Molecules Button", "Containers Button", "Paint Button", "Delete Button",
+        "Colors Button", "Textures Button", "Molecules Button", "Containers Button", "Signage Button", "Paint Button", "Delete Button",
         "New Browser Button", "New Viewer Button", "Add Segment Button", "Remove Segment Button", "Align Button",
     };
 
@@ -33,5 +33,9 @@ static class TunnelMenuLayout
             buttons[i].anchoredPosition = new Vector2(buttons[i].anchoredPosition.x, top - k_Spacing * i);
             buttons[i].SetSiblingIndex(i);
         }
+
+        // The Align to QR status line stays just under the panel (it hangs from the panel's top edge).
+        if (menuPanel.Find("QR Status") is RectTransform status)
+            status.anchoredPosition = new Vector2(status.anchoredPosition.x, -height - 8f);
     }
 }
