@@ -14,7 +14,7 @@ using XRMultiplayer;
 /// Gravity button on (which switches <see cref="Physics.gravity"/> for everyone) it falls like the other toys
 /// (scaled like their small-scale physics). A molecule just placed from the TS Menu stays frozen on the wall until
 /// someone first grabs it or something pushes it, connected or not (in a session the network interactable's spawn
-/// lock does the same for the headset that simulates it). While the TS Menu's Delete is on, grabbing it deletes it.
+/// lock does the same for the headset that simulates it). The TS Menu's eraser deletes it (see <see cref="TunnelEraser"/>).
 /// Inside a Container's mixed reality box it passes through the tunnel's walls (the box is set into them).
 /// In a session only its owner simulates it and the others follow (see <see cref="FollowOwner"/>).
 /// While the 3D movie of the container it is in is paused (see <see cref="TunnelMovie"/>), it stands still where it is
@@ -208,10 +208,10 @@ public class MoleculeGravity : MonoBehaviour
         }
     }
 
-    // Let go of by a hand (not cancelled by Delete, not a socket): a spawn nozzle may take it.
+    // Let go of by a hand (not cancelled, not a socket): a spawn nozzle may take it.
     void OnReleased(SelectExitEventArgs args)
     {
-        if (args.isCanceled || m_Grab.isSelected || args.interactorObject is UnityEngine.XR.Interaction.Toolkit.Interactors.XRSocketInteractor || TunnelMenu.deleteMode)
+        if (args.isCanceled || m_Grab.isSelected || args.interactorObject is UnityEngine.XR.Interaction.Toolkit.Interactors.XRSocketInteractor)
             return;
         released?.Invoke(this);
     }
@@ -241,12 +241,6 @@ public class MoleculeGravity : MonoBehaviour
 
     void OnGrabbed(SelectEnterEventArgs args)
     {
-        if (TunnelMenu.deleteMode)
-        {
-            TunnelMenu.DeleteGrabbed(this, m_Grab);
-            return;
-        }
-
         m_Rigidbody.constraints = RigidbodyConstraints.None;
     }
 

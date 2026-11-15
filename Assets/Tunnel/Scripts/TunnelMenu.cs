@@ -15,8 +15,10 @@ using XRMultiplayer;
 /// beside it, one at a time; closing the menu also closes them. Everyone sees
 /// the same menu: whoever presses a button opens or closes it for all players (the colour chooser shares itself the
 /// same way). Works locally when not connected.
-/// Delete is one switch for everyone, like the rest of the menu: while it is on, any molecule or container anyone
-/// grabs is deleted for everyone (see <see cref="Delete"/>).
+/// Delete is one switch for everyone, like the rest of the menu: turning it on (the label reads Delete: ON in red)
+/// calls up the eraser in front of whoever pressed it (see <see cref="TunnelEraser"/>); held in a hand, the eraser
+/// deletes for everyone whatever deletable thing it touches (see <see cref="Delete"/>). Turning it off removes the
+/// eraser. Grabbing things no longer deletes them, so people can go on holding things while Delete is on.
 /// </summary>
 public class TunnelMenu : NetworkBehaviour
 {
@@ -72,6 +74,18 @@ public class TunnelMenu : NetworkBehaviour
     TMP_Text m_DeleteLabel;
 
     [SerializeField]
+    [Tooltip("The eraser that Delete calls up (made by Tunnel > Eraser > Build Eraser).")]
+    TunnelEraser m_EraserPrefab;
+
+    [SerializeField]
+    [Tooltip("How far in front of whoever turns Delete on the eraser appears (meters).")]
+    float m_EraserDistance = 0.4f;
+
+    [SerializeField]
+    [Tooltip("How far below their eyes it appears (meters).")]
+    float m_EraserDrop = 0.25f;
+
+    [SerializeField]
     TunnelSegmentAppearance m_Appearance;
 
     [SerializeField]
@@ -103,8 +117,14 @@ public class TunnelMenu : NetworkBehaviour
     static TunnelMenu s_Shared;
     static bool s_LocalDelete;
 
-    /// <summary>While on, a molecule or container anyone grabs is deleted. Off when the app starts.</summary>
-    public static bool deleteMode => s_Shared != null && s_Shared.IsSpawned ? s_Shared.m_Delete.Value : s_LocalDelete;
+    /// <summary>Whether Delete is on (for everyone): the eraser is out. Off when the app starts.</summary>
+    public static bool eraserMode => s_Shared != null && s_Shared.IsSpawned ? s_Shared.m_Delete.Value : s_LocalDelete;
+
+    /// <summary>
+    /// Whether grabbing something deletes it: never now, since the eraser deletes instead (see <see cref="TunnelEraser"/>).
+    /// Kept false for the grab handlers that still ask, so grabbing with Delete on just holds the thing.
+    /// </summary>
+    public static bool deleteMode => false;
 
     bool isOpen => IsSpawned ? m_Open.Value : m_LocalOpen;
     SidePanel panel => IsSpawned ? m_Panel.Value : m_LocalPanel;
@@ -165,36 +185,85 @@ public class TunnelMenu : NetworkBehaviour
 
     void ToggleDeleteMode()
     {
-        bool next = !deleteMode;
+        bool next = !eraserMode;
+        var head = Camera.main != null ? Camera.main.transform : null;
+        var pose = head != null ? TunnelMoleculeMenu.NozzlePose(head.position, head.forward, m_EraserDistance, m_EraserDrop)
+            : new Pose(transform.position - transform.forward * m_EraserDistance, Quaternion.LookRotation(-transform.forward));
+        Debug.Log($"[TS Menu] Delete {(next ? "on: calling up the eraser" : "off: removing the eraser")} " +
+            $"({(s_Shared != null && s_Shared.IsSpawned ? "for everyone" : "not connected, here only")})");
         if (s_Shared != null && s_Shared.IsSpawned)
-            s_Shared.SetDeleteRpc(next);
+            s_Shared.SetDeleteRpc(next, pose.position, pose.rotation);
         else
         {
             s_LocalDelete = next;
+            SetEraser(next, pose);
             ShowDeleteMode(next);
         }
     }
 
-    // On every segment's menu, so whichever one a player reads has it.
+    // On every segment's menu, so whichever one a player reads has it; the eraser comes or goes with it.
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    void SetDeleteRpc(bool on)
+    void SetDeleteRpc(bool on, Vector3 position, Quaternion rotation)
     {
         foreach (var menu in FindObjectsByType<TunnelMenu>(FindObjectsSortMode.None))
             if (menu.IsSpawned)
                 menu.m_Delete.Value = on;
+        SetEraser(on, new Pose(position, rotation));
+    }
+
+    /// <summary>
+    /// On the host (or here, not connected): puts the eraser at this pose, for everyone (one at most), or removes it.
+    /// </summary>
+    void SetEraser(bool on, Pose pose)
+    {
+        var current = TunnelEraser.current;
+        if (!on)
+        {
+            if (current == null)
+                return;
+            Debug.Log("[Eraser] removed");
+            if (current.TryGetComponent(out NetworkObject currentObject) && currentObject.IsSpawned)
+                currentObject.Despawn(true);
+            else
+                Destroy(current.gameObject);
+            return;
+        }
+        if (current != null)
+        {
+            Debug.Log("[Eraser] already out");
+            return;
+        }
+        if (m_EraserPrefab == null)
+        {
+            Debug.LogWarning("[Eraser] no eraser to call up (run Tunnel > Eraser > Build Eraser)");
+            return;
+        }
+
+        // Placed before it wakes up, as the molecules are (its network transform takes its pose when it's created).
+        var holder = new GameObject("Eraser Holder");
+        holder.SetActive(false);
+        var eraser = Instantiate(m_EraserPrefab, holder.transform);
+        eraser.transform.SetPositionAndRotation(pose.position, pose.rotation);
+        eraser.transform.SetParent(null, true);
+        Destroy(holder);
+        Debug.Log($"[Eraser] placed at {pose.position:F2}");
+        if (IsSpawned && eraser.TryGetComponent(out NetworkObject networkObject))
+            networkObject.Spawn(true);
     }
 
     void OnDeleteChanged(bool previous, bool current) => ShowDeleteMode(current);
 
     static void ShowDeleteMode(bool on) =>
-        PlayerHudNotification.Instance?.ShowText(on ? "Delete on for everyone: grab a molecule or container to delete it" : "Delete off", 3f);
+        PlayerHudNotification.Instance?.ShowText(on
+            ? "Delete on for everyone: hold the eraser and touch something to delete it"
+            : "Delete off: the eraser is gone", 3f);
 
     void Update()
     {
         // Every segment's menu shows the one switch.
         if (m_DeleteLabel == null)
             return;
-        string text = deleteMode ? "<color=#F55>Delete: ON</color>" : "Delete";
+        string text = eraserMode ? "<color=#F55>Delete: ON</color>" : "Delete";
         if (m_DeleteLabel.text != text)
             m_DeleteLabel.text = text;
     }
@@ -202,7 +271,8 @@ public class TunnelMenu : NetworkBehaviour
     static readonly HashSet<GameObject> s_Deleting = new();
 
     /// <summary>
-    /// Deletes a molecule or container its player has just grabbed with Delete on. Called from the grab event, but
+    /// Deletes a molecule or container its player has just grabbed (no longer called with Delete on: the eraser
+    /// deletes instead, see <see cref="TunnelEraser"/>). Called from the grab event, but
     /// deletes it only on the next frame: the interaction toolkit finishes the grab after that event (it gives the
     /// hand focus on what it grabbed), and an object deleted in the middle of it leaves the hand focused on
     /// something that's gone, which breaks grabbing for the rest of the session. Next frame the hand lets go of it
@@ -239,8 +309,9 @@ public class TunnelMenu : NetworkBehaviour
     }
 
     /// <summary>
-    /// Deletes a molecule or container for everyone: the host removes it from the session (asked through any
-    /// tunnel segment's menu); when not connected it is simply destroyed.
+    /// Deletes a molecule, container or other deletable thing for everyone (the eraser calls it on what it touches):
+    /// the host removes it from the session (asked through any tunnel segment's menu); when not connected it is simply
+    /// destroyed.
     /// </summary>
     public static void Delete(GameObject target)
     {

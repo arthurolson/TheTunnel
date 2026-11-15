@@ -4,7 +4,9 @@ using UnityEngine;
 /// An antibody (IGG) in a container's 3D movie (see <see cref="TunnelMovie"/>). When it touches a capsid's live
 /// binding site (see <see cref="CapsidSites"/>), the nearer tip of its two Fab arms is drawn to the site's base on
 /// the capsid's surface, while the container's heat goes on jostling it; when it reaches the capsid it binds there,
-/// its Fab arm pointing straight out along the site's axis. It lets go of a site that is taken meanwhile, or that it
+/// its Fab arm pointing straight out along the site's axis, for the movie's binding time (see
+/// <see cref="TunnelMovie.bindingTime"/>); then the capsid lets it go again, pushed off the site, and it rests a few
+/// seconds (see <see cref="Rest"/>) before it can bind again. It lets go of a site that is taken meanwhile, or that it
 /// hasn't reached in a while, and isn't drawn while held in a hand or while the movie is paused (it waits).
 /// A spike's site (SARS-CoV-2) draws it up to the middle of the spike's outer end, and it binds there, pointing
 /// out along the spike. Only the headset that moves it (its owner) draws it; the host decides the binding.
@@ -47,9 +49,24 @@ public class AntibodyBinder : MonoBehaviour
     int m_Tip;
     float m_Drawn;       // seconds drawn so far (not counting pauses)
     float m_AskedAt = -1f;
+    float m_RestUntil = -1f;
 
     /// <summary>The capsid it is drawn to, if any.</summary>
     public CapsidSites target => m_Target;
+
+    /// <summary>Whether it is resting after being let go by a capsid: no site draws it in yet.</summary>
+    public bool resting => Time.time < m_RestUntil;
+
+    /// <summary>
+    /// Keeps it from being drawn to any site for this many seconds: just let go by a capsid, it drifts away from the
+    /// site first, then binds again like any other free antibody.
+    /// </summary>
+    public void Rest(float seconds)
+    {
+        m_RestUntil = Time.time + Mathf.Max(0f, seconds);
+        m_Target = null;
+        m_AskedAt = -1f;
+    }
 
     void Awake() => m_Physics = GetComponent<MoleculeGravity>();
 
@@ -57,7 +74,7 @@ public class AntibodyBinder : MonoBehaviour
 
     void OnTriggerStay(Collider other)
     {
-        if (m_Target != null || m_AskedAt >= 0f || m_Tips.Length == 0 || !other.TryGetComponent(out CapsidSite site))
+        if (m_Target != null || m_AskedAt >= 0f || m_Tips.Length == 0 || resting || !other.TryGetComponent(out CapsidSite site))
             return;
         var capsid = site.capsid;
         if (capsid == null || !capsid.sitesActive || !capsid.SiteOpen(site.index) || !m_Physics.simulatedHere || m_Physics.isHeld)

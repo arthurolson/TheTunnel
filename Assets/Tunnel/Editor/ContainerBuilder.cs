@@ -194,10 +194,12 @@ static class ContainerBuilder
             }
             else
             {
-                // Its 3D movie, and the controls shown on it (made by Tunnel > Movie > Build 3D Movie).
+                // Its Antibody action (3D movie), the controls shown on it (made by Tunnel > Movie > Build 3D Movie),
+                // and the molecules list Play again makes the starting state's molecules from.
                 var movie = container.AddComponent<TunnelMovie>();
                 var movieSo = new SerializedObject(movie);
                 movieSo.FindProperty("m_PanelPrefab").objectReferenceValue = AssetDatabase.LoadAssetAtPath<TunnelMoviePanel>(k_MoviePanelPath);
+                movieSo.FindProperty("m_Prefabs").objectReferenceValue = AssetDatabase.LoadAssetAtPath<TunnelPrefabRegistry>(k_RegistryPath);
                 movieSo.ApplyModifiedPropertiesWithoutUndo();
             }
 
@@ -234,7 +236,7 @@ static class ContainerBuilder
             var label = containersButton.Find("Button Front/Text (TMP)").GetComponent<TMPro.TMP_Text>();
             label.text = "Containers";
 
-            // Delete, under Containers: while on, whatever molecule or container its player grabs is deleted.
+            // Delete, under Containers: while on, the eraser is out (see TunnelEraser, Tunnel > Eraser > Build Eraser).
             var deleteButton = menuPanel.Find("Delete Button");
             if (deleteButton == null)
             {
@@ -307,7 +309,8 @@ static class ContainerBuilder
             var unsnapRow = Row("Unsnap Row", -35f, "Unsnap from wall");
             var randomRow = Row("Random Row", -125f, "■  Random motion");
             var ballisticRow = Row("Ballistic Row", -190f, "□  Ballistic motion");
-            var movieRow = Row("Movie Row", -385f, "□  3D movie controls");
+            var movieRow = Row("Movie Row", -385f, $"□  {TunnelMovie.k_Title} controls");
+            var clearRow = Row("Clear Row", -450f, "Clear contents");
 
             // Viscosity: the molecule list's Magnification slider, 0 to 1 in tenths.
             var viscosity = list.transform.Find("Magnification");
@@ -341,6 +344,14 @@ static class ContainerBuilder
             var thermometer = BuildThermometer(heat, thermometerX, out var temperatureSlider, out var temperatureText);
             ((RectTransform)thermometer).anchoredPosition = new Vector2(0f, 70f); // its title just under the status
             Object.DestroyImmediate(template.gameObject);
+
+            // Room for Clear contents: the panel grows 70 downward, its top and everything on it staying put.
+            const float grow = 70f;
+            panelRect.sizeDelta += new Vector2(0f, grow);
+            panelRect.anchoredPosition -= new Vector2(0f, grow * 0.5f);
+            foreach (RectTransform child in list.transform)
+                if (Mathf.Approximately(child.anchorMin.y, child.anchorMax.y))
+                    child.anchoredPosition += new Vector2(0f, grow * (1f - child.anchorMin.y));
             list.SetActive(false);
 
             // The menu that runs it, beside the molecule menu, and the TS Menu's links to both.
@@ -365,6 +376,7 @@ static class ContainerBuilder
             so.FindProperty("m_TemperatureSlider").objectReferenceValue = temperatureSlider;
             so.FindProperty("m_TemperatureText").objectReferenceValue = temperatureText;
             so.FindProperty("m_MovieRow").objectReferenceValue = movieRow;
+            so.FindProperty("m_ClearRow").objectReferenceValue = clearRow;
             so.ApplyModifiedPropertiesWithoutUndo();
 
             var tunnelMenu = control.GetComponent<TunnelMenu>();

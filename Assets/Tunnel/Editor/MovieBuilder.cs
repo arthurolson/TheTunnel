@@ -5,15 +5,17 @@ using TMPro;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
 using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
+using UnityEngine.XR.Interaction.Toolkit.Transformers;
 
 /// <summary>
-/// Makes the containers' 3D movie (see <see cref="TunnelMovie"/>):
+/// Makes the containers' Antibody action, their 3D movie (see <see cref="TunnelMovie"/>):
 /// the capsids' binding sites (<see cref="CapsidSites"/>) on the symmetry axes found from each capsid's own surface
-/// (2-folds for TBSV, 5-folds for poliovirus, 3-folds for Zika) and on SARS-CoV-2's spikes, and the see-through material a neutralized one is
-/// drawn with; the antibody's Fab tips (<see cref="AntibodyBinder"/>) found
-/// from its chains; the movie's control panel (<see cref="TunnelMoviePanel"/>, from the TS Menu's rows and the
-/// browser's keyboard); and then the containers again, which carry the movie (Tunnel > Containers > Build Containers).
+/// (2-folds for TBSV, 5-folds for poliovirus, 3-folds for Zika) and on SARS-CoV-2's spikes; the antibody's Fab tips
+/// (<see cref="AntibodyBinder"/>) found from its chains; the movie's menu (<see cref="TunnelMoviePanel"/>, from the
+/// TS Menu's rows and the browser's keyboard, with a bar along its top to carry it by); and then the containers again,
+/// which carry the movie (Tunnel > Containers > Build Containers).
 /// Runs from Tunnel > Movie > Build 3D Movie.
 /// </summary>
 static class MovieBuilder
@@ -31,7 +33,11 @@ static class MovieBuilder
     const float k_SiteDiameterFraction = 0.1f;   // of the capsid's diameter
 
     const float k_CanvasScale = 0.0004f;                   // meters per canvas unit, as the palette
-    static readonly Vector2 k_CanvasSize = new(620f, 700f); // 25 x 28 cm
+    static readonly Vector2 k_CanvasSize = new(620f, 920f); // 25 x 37 cm
+
+    // The bar along the menu's top that hands take it by (meters): its size, and the room it takes above the canvas.
+    static readonly Vector3 k_BarSize = new(0.16f, 0.018f, 0.01f);
+    const float k_BarSpace = 0.035f;
 
     [MenuItem("Tunnel/Movie/Build 3D Movie")]
     public static string Build() => BuilderScratchScene.Run(BuildAll);
@@ -42,11 +48,10 @@ static class MovieBuilder
             AssetDatabase.CreateFolder("Assets/Tunnel", "Movie");
         var log = new StringBuilder("[Movie] ");
         var siteMaterial = SiteMaterial();
-        var seeThrough = SeeThroughMaterial();
         var antibody = AssetDatabase.LoadAssetAtPath<GameObject>(k_AntibodyPath);
         foreach (var (name, fold) in k_Capsids)
-            log.Append(BuildCapsid(name, fold, antibody, siteMaterial, seeThrough)).Append("; ");
-        log.Append(BuildVirion(antibody, siteMaterial, seeThrough)).Append("; ");
+            log.Append(BuildCapsid(name, fold, antibody, siteMaterial)).Append("; ");
+        log.Append(BuildVirion(antibody, siteMaterial)).Append("; ");
         log.Append(BuildAntibody()).Append("; ");
         log.Append(BuildPanel()).Append("; ");
         AssetDatabase.SaveAssets();
@@ -81,41 +86,6 @@ static class MovieBuilder
         return material;
     }
 
-    // A see-through lit material (the molecules' own shader has no transparency). Kept as an asset so the build
-    // includes the shader's transparent version.
-    static Material SeeThroughMaterial()
-    {
-        string path = $"{k_Folder}/NeutralizedCapsid.mat";
-        var shader = Shader.Find("Universal Render Pipeline/Lit");
-        var material = AssetDatabase.LoadAssetAtPath<Material>(path);
-        if (material == null)
-        {
-            material = new Material(shader) { name = "NeutralizedCapsid" };
-            AssetDatabase.CreateAsset(material, path);
-        }
-        else if (material.shader != shader)
-        {
-            material.shader = shader;
-            material.shaderKeywords = new string[0];
-        }
-        material.SetColor("_BaseColor", new Color(0.5f, 0.5f, 0.5f, 0.3f));
-        material.SetFloat("_Smoothness", 0.5f);
-        material.SetFloat("_Metallic", 0f);
-        material.SetFloat("_Surface", 1f); // transparent
-        material.SetFloat("_Blend", 0f);   // alpha
-        material.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.SrcAlpha);
-        material.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-        material.SetFloat("_SrcBlendAlpha", (float)UnityEngine.Rendering.BlendMode.One);
-        material.SetFloat("_DstBlendAlpha", (float)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-        material.SetFloat("_ZWrite", 0f);
-        material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
-        material.SetOverrideTag("RenderType", "Transparent");
-        material.SetShaderPassEnabled("ShadowCaster", false);
-        material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
-        EditorUtility.SetDirty(material);
-        return material;
-    }
-
     static List<Vector3> Vertices(GameObject prefab, IEnumerable<MeshFilter> filters = null)
     {
         var points = new List<Vector3>();
@@ -130,7 +100,7 @@ static class MovieBuilder
 
     #region Capsids
 
-    static string BuildCapsid(string name, int fold, GameObject antibody, Material siteMaterial, Material seeThrough)
+    static string BuildCapsid(string name, int fold, GameObject antibody, Material siteMaterial)
     {
         string path = $"Assets/Molecules/{name}/Toy_{name}_Networked.prefab";
         var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
@@ -166,7 +136,7 @@ static class MovieBuilder
         try
         {
             var sites = root.GetComponent<CapsidSites>() ?? root.AddComponent<CapsidSites>();
-            sites.Configure($"{fold}-fold", axes.ToArray(), bases, radius, antibody, siteMaterial, seeThrough);
+            sites.Configure($"{fold}-fold", axes.ToArray(), bases, radius, antibody, siteMaterial);
             EditorUtility.SetDirty(sites);
             PrefabUtility.SaveAsPrefabAsset(root, path);
         }
@@ -184,9 +154,9 @@ static class MovieBuilder
     /// SARS-CoV-2's binding sites: its spikes, from the cylinders that enclose them (its "Spike N" colliders, made by
     /// Tunnel > Molecules > Build SARS Toy). An antibody binds at the middle of a spike's outer end.
     /// </summary>
-    public static string BuildVirion() => BuildVirion(AssetDatabase.LoadAssetAtPath<GameObject>(k_AntibodyPath), SiteMaterial(), SeeThroughMaterial());
+    public static string BuildVirion() => BuildVirion(AssetDatabase.LoadAssetAtPath<GameObject>(k_AntibodyPath), SiteMaterial());
 
-    static string BuildVirion(GameObject antibody, Material siteMaterial, Material seeThrough)
+    static string BuildVirion(GameObject antibody, Material siteMaterial)
     {
         if (AssetDatabase.LoadAssetAtPath<GameObject>(k_VirionPath) == null)
             return "SARS: no toy";
@@ -216,7 +186,7 @@ static class MovieBuilder
             }
             float radius = points.Max(p => p.magnitude);
             var sites = root.GetComponent<CapsidSites>() ?? root.AddComponent<CapsidSites>();
-            sites.ConfigureProtrusions("spikes", "virion", points, axes, lengths, diameters, radius, antibody, siteMaterial, seeThrough);
+            sites.ConfigureProtrusions("spikes", "virion", points, axes, lengths, diameters, radius, antibody, siteMaterial);
             EditorUtility.SetDirty(sites);
             PrefabUtility.SaveAsPrefabAsset(root, k_VirionPath);
             return $"SARS: {spikes.Count} spike sites, tips {points.Min(p => p.magnitude) / k_UnitsPerAngstrom:0}-{radius / k_UnitsPerAngstrom:0} Å out";
@@ -515,7 +485,7 @@ static class MovieBuilder
             background.color = menuPanel.color;
 
             var titleTemplate = control.Find("Container List/Title").gameObject;
-            var title = Text(titleTemplate, canvas, "Title", "3D Movie", new Vector2(0f, 298f), new Vector2(560f, 64f));
+            var title = Text(titleTemplate, canvas, "Title", TunnelMovie.k_Title, new Vector2(0f, 408f), new Vector2(560f, 64f));
             title.alignment = TextAlignmentOptions.Left;
 
             var rowTemplate = control.Find("Container List/Box Row").gameObject;
@@ -539,16 +509,17 @@ static class MovieBuilder
                 }
                 return button;
             }
-            var start = Row("Start Row", new Vector2(0f, 225f), 560f, "Start movie", true);
-            var pause = Row("Pause Row", new Vector2(-142f, 160f), 276f, "Pause", true);
-            var play = Row("Play Row", new Vector2(142f, 160f), 276f, "Play", true);
-            var sites = Row("Sites Row", new Vector2(0f, 80f), 560f, "□  Show binding sites", false);
+            var start = Row("Start Row", new Vector2(0f, 335f), 560f, "Start", true);
+            var pause = Row("Pause Row", new Vector2(-142f, 270f), 276f, "Pause", true);
+            var play = Row("Play Row", new Vector2(142f, 270f), 276f, "Play", true);
+            var playAgain = Row("Play Again Row", new Vector2(0f, 205f), 560f, "Play again", false);
+            var sites = Row("Sites Row", new Vector2(0f, 135f), 560f, "□  Show binding sites", false);
 
             // The sites' diameter: the Containers list's viscosity slider, 2% to 30% of the capsid's diameter.
             var diameterGroup = Object.Instantiate(control.Find("Container List/Viscosity").gameObject, canvas, false);
             diameterGroup.name = "Site Diameter";
             var diameterRect = (RectTransform)diameterGroup.transform;
-            diameterRect.anchoredPosition = new Vector2(0f, -15f);
+            diameterRect.anchoredPosition = new Vector2(0f, 40f);
             diameterRect.sizeDelta = new Vector2(540f, 60f);
             var diameter = diameterGroup.GetComponentInChildren<Slider>(true);
             diameter.name = "Site Diameter Slider";
@@ -579,8 +550,43 @@ static class MovieBuilder
                 tick.GetComponent<TMP_Text>().text = $"{tickValues[i]}%";
             }
 
-            var save = Row("Save Row", new Vector2(0f, -110f), 560f, "Save starting state...", false);
-            var status = Text(titleTemplate, canvas, "Status", "", new Vector2(0f, -250f), new Vector2(560f, 150f));
+            // The binding time: another copy, 10 s to 1 min in whole seconds.
+            var timeGroup = Object.Instantiate(control.Find("Container List/Viscosity").gameObject, canvas, false);
+            timeGroup.name = "Binding Time";
+            var timeRect = (RectTransform)timeGroup.transform;
+            timeRect.anchoredPosition = new Vector2(0f, -100f);
+            timeRect.sizeDelta = new Vector2(540f, 60f);
+            var bindingTime = timeGroup.GetComponentInChildren<Slider>(true);
+            bindingTime.name = "Binding Time Slider";
+            bindingTime.onValueChanged = new Slider.SliderEvent();
+            bindingTime.minValue = TunnelMovie.k_MinBindingTime;
+            bindingTime.maxValue = TunnelMovie.k_MaxBindingTime;
+            bindingTime.wholeNumbers = true;
+            bindingTime.SetValueWithoutNotify(TunnelMovie.k_DefaultBindingTime);
+            foreach (var labelName in new[] { "Value Text", "Type Text" })
+            {
+                var label = bindingTime.transform.Find(labelName);
+                if (label != null)
+                    label.GetComponent<TMP_Text>().text = "";
+            }
+            var bindingTimeText = timeGroup.transform.Find("Viscosity Text").GetComponent<TMP_Text>();
+            bindingTimeText.name = "Binding Time Text";
+            bindingTimeText.text = $"Binding time: {TunnelMovie.k_DefaultBindingTime:0} s";
+            var timeTicks = timeGroup.transform.Find("Ticks");
+            var timeValues = new[] { 10, 20, 30, 40, 50, 60 };
+            while (timeTicks.childCount > timeValues.Length)
+                Object.DestroyImmediate(timeTicks.GetChild(timeTicks.childCount - 1).gameObject);
+            for (int i = 0; i < timeValues.Length; i++)
+            {
+                var tick = (RectTransform)timeTicks.GetChild(i);
+                float at = (timeValues[i] - bindingTime.minValue) / (bindingTime.maxValue - bindingTime.minValue);
+                tick.name = $"Tick {timeValues[i]} s";
+                tick.anchorMin = tick.anchorMax = new Vector2(at, 0.5f);
+                tick.GetComponent<TMP_Text>().text = $"{timeValues[i]} s";
+            }
+
+            var save = Row("Save Row", new Vector2(0f, -215f), 560f, "Save starting state...", false);
+            var status = Text(titleTemplate, canvas, "Status", "", new Vector2(0f, -360f), new Vector2(560f, 170f));
             status.fontSize = 22f;
             status.fontStyle = FontStyles.Normal;
             status.alignment = TextAlignmentOptions.TopLeft;
@@ -602,9 +608,12 @@ static class MovieBuilder
             keyboard.closeOnSubmit = false;
             keyboardObject.SetActive(false);
 
+            // The bar along its top, which hands take it by (one hand moves it, kept upright; two don't scale it).
+            var grab = BuildBar(panel, title.font);
+
             var component = panel.AddComponent<TunnelMoviePanel>();
             component.Configure(start, pause, play, sites, save, diameter, diameterText, title, status, keyboard,
-                k_CanvasSize.x * k_CanvasScale, k_CanvasSize.y * k_CanvasScale);
+                k_CanvasSize.x * k_CanvasScale, k_CanvasSize.y * k_CanvasScale, playAgain, bindingTime, bindingTimeText, grab, k_BarSpace);
             PrefabUtility.SaveAsPrefabAsset(panel, k_PanelPath);
             Object.DestroyImmediate(panel);
             return $"panel {k_PanelPath}";
@@ -614,6 +623,75 @@ static class MovieBuilder
             PrefabUtility.UnloadPrefabContents(browser);
             PrefabUtility.UnloadPrefabContents(segment);
         }
+    }
+
+    /// <summary>
+    /// The bar above the menu's top edge, with "Grab here to move" on it, and what makes the menu grabbable by it: a
+    /// still (kinematic) body and a grab interactable whose only collider is the bar's, moved by the hand where it took
+    /// it, kept upright and never scaled.
+    /// </summary>
+    static XRGrabInteractable BuildBar(GameObject panel, TMP_FontAsset font)
+    {
+        string path = $"{k_Folder}/MoveBar.mat";
+        var material = AssetDatabase.LoadAssetAtPath<Material>(path);
+        if (material == null)
+        {
+            material = new Material(Shader.Find("Universal Render Pipeline/Lit")) { name = "MoveBar" };
+            AssetDatabase.CreateAsset(material, path);
+        }
+        material.SetColor("_BaseColor", new Color(0.32f, 0.36f, 0.44f));
+        material.SetFloat("_Smoothness", 0.4f);
+        material.SetFloat("_Metallic", 0f);
+        EditorUtility.SetDirty(material);
+
+        float top = k_CanvasSize.y * k_CanvasScale * 0.5f;
+        var bar = new GameObject("Move Bar", typeof(MeshFilter), typeof(MeshRenderer));
+        bar.transform.SetParent(panel.transform, false);
+        bar.transform.localPosition = new Vector3(0f, top + k_BarSpace * 0.5f, k_BarSize.z * 0.5f);
+        bar.transform.localScale = k_BarSize;
+        bar.GetComponent<MeshFilter>().sharedMesh = Resources.GetBuiltinResource<Mesh>("Cube.fbx");
+        var renderer = bar.GetComponent<MeshRenderer>();
+        renderer.sharedMaterial = material;
+        renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+
+        // A grab box a little larger than the bar, so it's easy to take.
+        var handle = new GameObject("Move Bar Grab");
+        handle.transform.SetParent(panel.transform, false);
+        handle.transform.localPosition = bar.transform.localPosition;
+        var box = handle.AddComponent<BoxCollider>();
+        box.size = new Vector3(k_BarSize.x + 0.02f, k_BarSpace, 0.03f);
+        box.excludeLayers = ~0; // found by the hands and lasers, but pushes no molecule
+
+        var labelObject = new GameObject("Move Bar Label", typeof(RectTransform));
+        labelObject.transform.SetParent(panel.transform, false);
+        var labelRect = (RectTransform)labelObject.transform;
+        labelRect.localPosition = new Vector3(0f, top + k_BarSpace * 0.5f, -0.0005f);
+        labelRect.sizeDelta = new Vector2(k_BarSize.x, k_BarSize.y);
+        var label = labelObject.AddComponent<TextMeshPro>();
+        if (font != null)
+            label.font = font;
+        label.text = "Grab here to move";
+        label.fontSize = 0.1f;
+        label.alignment = TextAlignmentOptions.Center;
+        label.color = new Color(0.92f, 0.94f, 0.97f);
+        label.textWrappingMode = TextWrappingModes.NoWrap;
+
+        var body = panel.AddComponent<Rigidbody>();
+        body.isKinematic = true;
+        body.useGravity = false;
+        var grab = panel.AddComponent<XRGrabInteractable>();
+        grab.movementType = XRBaseInteractable.MovementType.Instantaneous;
+        grab.throwOnDetach = false;
+        grab.useDynamicAttach = true;
+        grab.trackScale = false;
+        grab.colliders.Clear();
+        grab.colliders.Add(box);
+        var general = panel.AddComponent<XRGeneralGrabTransformer>();
+        var generalSo = new SerializedObject(general);
+        generalSo.FindProperty("m_AllowTwoHandedScaling").boolValue = false;
+        generalSo.ApplyModifiedPropertiesWithoutUndo();
+        panel.AddComponent<UnityEngine.XR.Templates.MRTTabletopAssets.UprightGrabTransformer>();
+        return grab;
     }
 
     static RectTransform UiObject(string name, RectTransform parent, Vector2 position, Vector2 size)

@@ -28,6 +28,8 @@ using XRMultiplayer;
 /// molecules pass in and out and lasers reach inside, and the real room's depth doesn't hide what's in the box.
 /// Molecules inside a mixed reality box never collide with the tunnel's walls, wherever it is. Unsnap from wall in the
 /// menu, or grabbing it by its front edges and pulling, brings it back into the tunnel.
+/// Clear contents (on the TS Menu's Containers list) deletes everything inside it for everyone, leaving it empty (see
+/// <see cref="ClearContents"/>). The TS Menu's eraser deletes the container itself when it touches its edges.
 /// Shared over the network like the molecules: size and pose by its network transform.
 /// A splat-box is a box that is only a frame for a 3D portrait (a Gaussian splat, see <see cref="SplatBox"/>): it has
 /// the box's edges, grab, scale and mixed reality box (set into a wall) but no walls, medium, heat or movie, so
@@ -248,17 +250,12 @@ public class TunnelContainer : NetworkBehaviour
 
     void OnReleased(SelectExitEventArgs args)
     {
-        if (isMixedReality && m_Grab != null && !m_Grab.isSelected && !TunnelMenu.deleteMode && isActiveAndEnabled)
+        if (isMixedReality && m_Grab != null && !m_Grab.isSelected && isActiveAndEnabled)
             StartCoroutine(SnapAfterRelease());
     }
 
     void OnGrabbed(UnityEngine.XR.Interaction.Toolkit.SelectEnterEventArgs args)
     {
-        if (TunnelMenu.deleteMode)
-        {
-            TunnelMenu.DeleteGrabbed(this, m_Grab);
-            return;
-        }
         current = this;
         // The network interactable freezes a new object on the player who owns it when it appears (its spawn lock,
         // for the molecules); a container is moved only by hand anyway, so it's free as soon as anyone takes it.
@@ -460,6 +457,89 @@ public class TunnelContainer : NetworkBehaviour
         }
         return result;
     }
+
+    #region Contents
+
+    /// <summary>
+    /// Everything inside it that the eraser could delete (see <see cref="TunnelEraser.IsDeletable"/>): molecules
+    /// (viruses and antibodies, with whatever is bound to them) whose middle is inside, and any palette, marker,
+    /// painting copy, spawn nozzle or sign put in it; with <paramref name="moleculesOnly"/>, only the molecules. Never
+    /// itself or another container, and nothing at all for a splat-box (it has no inside).
+    /// </summary>
+    public List<GameObject> Contents(bool moleculesOnly = false)
+    {
+        var result = new List<GameObject>();
+        if (!hasMedium)
+            return result;
+        foreach (var molecule in MoleculeGravity.all)
+            if (molecule != null && molecule.isActiveAndEnabled && Contains(molecule.body != null ? molecule.body.worldCenterOfMass : molecule.transform.position))
+                result.Add(molecule.gameObject);
+        if (moleculesOnly)
+            return result;
+        foreach (var type in TunnelEraser.deletableTypes)
+        {
+            if (type == typeof(MoleculeGravity) || type == typeof(TunnelContainer))
+                continue;
+            foreach (var found in FindObjectsByType(type, FindObjectsInactive.Exclude))
+            {
+                var go = ((Component)found).gameObject;
+                if (!result.Contains(go) && TunnelEraser.IsDeletable(go) && Contains(go.transform.position))
+                    result.Add(go);
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Clear contents: deletes everything inside it (see <see cref="Contents"/>) for everyone, leaving the container
+    /// itself; the host does it (asked by whoever pressed it). Returns how many things this headset sees going.
+    /// </summary>
+    public int ClearContents()
+    {
+        int count = Contents().Count;
+        Debug.Log($"[Container] Clear contents of the {m_Shape}: {count} thing(s) inside " +
+            $"({(IsSpawned ? (IsServer ? "for everyone" : "asking the host") : "not connected, here only")})");
+        if (IsSpawned)
+            ClearContentsRpc();
+        else
+            ClearHere();
+        return count;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void ClearContentsRpc() => ClearHere();
+
+    // On the host (or here, not connected).
+    int ClearHere()
+    {
+        var contents = Contents();
+        foreach (var go in contents)
+            RemoveForEveryone(go);
+        Debug.Log($"[Container] cleared {contents.Count} thing(s) from the {m_Shape}");
+        return contents.Count;
+    }
+
+    /// <summary>
+    /// On the host (or here, not connected): takes something out of the tunnel for everyone at once (its network
+    /// object despawned, or destroyed when it isn't one). For many things at a time, quietly: no message per thing.
+    /// </summary>
+    public static void RemoveForEveryone(GameObject target)
+    {
+        if (target == null)
+            return;
+        if (target.TryGetComponent(out NetworkObject networkObject) && networkObject.IsSpawned)
+        {
+            if (networkObject.NetworkManager != null && networkObject.NetworkManager.IsServer)
+                networkObject.Despawn(true);
+            else
+                TunnelMenu.Delete(target); // only the host despawns; ask it
+            return;
+        }
+        target.SetActive(false); // gone from the lists at once
+        Destroy(target);
+    }
+
+    #endregion
 
     /// <summary>The viscosity at a point: that of the container it is in (see <see cref="At"/>), or 1 outside.</summary>
     public static float ViscosityAt(Vector3 world)

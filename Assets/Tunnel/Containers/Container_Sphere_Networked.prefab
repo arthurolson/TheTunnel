@@ -383,4 +383,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::TunnelMovie
   ShowTopMostFoldoutHeaderGroup: 1
   m_PanelPrefab: {fileID: 2535420819302649588, guid: 3fa608898f4d14ef8aa8fb20bcc8e68b, type: 3}
+  m_Prefabs: {fileID: 11400000, guid: f1344fd65db284c9d90286dab1e2abae, type: 2}
   m_PanelGap: 0.04
+  m_RestartDelay: 5
+  m_PanelSnapDistance: 0.25

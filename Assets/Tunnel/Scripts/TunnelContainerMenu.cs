@@ -13,8 +13,9 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// sets itself into a tunnel wall (see <see cref="TunnelContainer.isMixedReality"/>),
 /// and Unsnap from wall pulls it back out into the tunnel (see <see cref="TunnelContainer.Unsnap"/>);
 /// Random motion / Ballistic motion and the thermometer (absolute zero to 100 °C, continuous, read in °C) show and set
-/// the heat inside it (see <see cref="TunnelContainer.temperature"/>); 3D movie controls shows or hides its movie's
-/// controls on the container (see <see cref="TunnelMovie"/>).
+/// the heat inside it (see <see cref="TunnelContainer.temperature"/>); Antibody action controls shows or hides the
+/// menu of its Antibody action (see <see cref="TunnelMovie"/>); Clear contents deletes everything inside it for
+/// everyone, leaving the container (see <see cref="TunnelContainer.ClearContents"/>).
 /// A splat-box (see <see cref="SplatBox"/>) is only a frame for a 3D portrait, chosen on its own menu beside it: it can
 /// be a mixed reality box, but the medium, heat and movie rows don't apply to it.
 /// In a session everyone sees the same menu: the shape checked, the container it shows (the one placed or held last by
@@ -79,6 +80,10 @@ public class TunnelContainerMenu : NetworkBehaviour
     Button m_MovieRow;
 
     [SerializeField]
+    [Tooltip("Clear contents: deletes everything inside the container (made by Tunnel > Containers > Build Containers).")]
+    Button m_ClearRow;
+
+    [SerializeField]
     float m_GapFromList = 0.05f;
 
     [SerializeField]
@@ -113,6 +118,8 @@ public class TunnelContainerMenu : NetworkBehaviour
             m_UnsnapRow.onClick.AddListener(Unsnap);
         if (m_MovieRow != null)
             m_MovieRow.onClick.AddListener(ToggleMovie);
+        if (m_ClearRow != null)
+            m_ClearRow.onClick.AddListener(ClearContents);
         if (m_ViscositySlider != null)
         {
             // Steps of 0.1: the slider counts tenths.
@@ -170,17 +177,45 @@ public class TunnelContainerMenu : NetworkBehaviour
         ShowViscosity(container);
         ShowHeat(container);
         ShowMovie(container);
+        ShowClear(container);
     }
 
     void ShowMovie(TunnelContainer container)
     {
         var movie = container != null ? container.movie : null;
+        string title = $"{TunnelMovie.k_Title} controls";
         if (container != null && !container.hasMedium)
-            SetRow(m_MovieRow, "□  3D movie controls  <color=#AAA>(not for a splat-box)</color>", false);
+            SetRow(m_MovieRow, $"□  {title}  <color=#AAA>(not for a splat-box)</color>", false);
         else if (movie == null)
-            SetRow(m_MovieRow, "□  3D movie controls  <color=#AAA>(place a container first)</color>", false);
+            SetRow(m_MovieRow, $"□  {title}  <color=#AAA>(place a container first)</color>", false);
         else
-            SetRow(m_MovieRow, (movie.controlsShown ? "■" : "□") + "  3D movie controls  <color=#AAA>on the container</color>", true);
+            SetRow(m_MovieRow, (movie.controlsShown ? "■" : "□") + $"  {title}  <color=#AAA>on the container</color>", true);
+    }
+
+    void ShowClear(TunnelContainer container)
+    {
+        if (m_ClearRow == null)
+            return;
+        if (container == null)
+            SetRow(m_ClearRow, "Clear contents  <color=#AAA>(place a container first)</color>", false);
+        else if (!container.hasMedium)
+            SetRow(m_ClearRow, "Clear contents  <color=#AAA>(a splat-box holds nothing)</color>", false);
+        else
+            SetRow(m_ClearRow, "Clear contents  <color=#AAA>deletes all inside, for everyone</color>", true);
+    }
+
+    void ClearContents()
+    {
+        var container = TunnelContainer.current;
+        if (container == null || !container.hasMedium)
+        {
+            ShareStatus("Clear contents empties the container placed or held last: place a box or sphere first.");
+            return;
+        }
+        int count = container.ClearContents();
+        ShareStatus(count == 0
+            ? $"The {container.shape.ToString().ToLowerInvariant()} was already empty."
+            : $"Cleared the {container.shape.ToString().ToLowerInvariant()}: {count} thing{(count == 1 ? "" : "s")} deleted for everyone.");
     }
 
     void ToggleMovie()

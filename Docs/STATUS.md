@@ -39,7 +39,11 @@ What has been built, what is in progress, and where each build is. Updated as wo
 - SARS-CoV-2 virion built from its bead model: about 310,000 triangles, with colliders on its membrane and on each of
   its 30 spikes.
 - The molecule library simplifies any model over 200,000 vertices.
-- Delete mode in the TS Menu.
+- Delete in the TS Menu calls up an eraser (a felt pad on a wooden block) in front of whoever pressed it, for
+  everyone; the label reads Delete: ON in red. Only while a player holds it, whatever deletable thing its felt touches
+  (molecule, virus, container by its edges, palette and marker, painting copy, spawn nozzle, sign) is deleted for
+  everyone, with a haptic tick, a soft rub and a flash. It never deletes itself, menus, panels or the tunnel. Delete
+  again removes it. Grabbing no longer deletes. Built by Tunnel > Eraser > Build Eraser; log tag [Eraser].
 - Spawn nozzle (TS Menu > Molecules > Spawn nozzle check box): a grabbable spray gun placed in front of whoever ticks
   it, shared by everyone; untick to remove it. Let go of a molecule at the cup on its back to attach it (the ring turns
   green when it will); pull it off to swap in another. Its menu's Copies slider (1–100) and Spawn button spray that
@@ -53,7 +57,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
   whoever pressed it; Saved signs lists the signs stored on the host (tap one, then Place or Delete); "Edit buttons on
   signs" hides or shows every sign's Edit button for everyone.
 - A sign is a shared, grabbable panel of text (two hands scale it). Let go within 25 cm of a flat wall, it lies flat on
-  the wall; taking it in hand pulls it off. Delete mode deletes it. Not connected, it works locally.
+  the wall; taking it in hand pulls it off. The TS Menu's eraser deletes it. Not connected, it works locally.
 - Its menu (Edit button at its lower right) has Edit text (the browser's keyboard; Enter starts a new line, and each
   key shows for everyone), a list of 19 open-licence fonts each shown in its own font (sans, condensed, headline,
   monospace, serif, display, script and stencil), Regular / Bold / Italic, Left / Centre / Right, Drop shadow, a colour
@@ -70,6 +74,8 @@ What has been built, what is in progress, and where each build is. Updated as wo
   molecules in.
 - Viscosity (0 to 1) and temperature (0 to 100 °C). Molecules inside move randomly (Brownian) or ballistically, and
   random motion spins them too.
+- Clear contents (Containers list): deletes everything inside the container placed or held last, for everyone, and
+  leaves the container. Log tag [Container].
 - Mixed reality boxes:
   - opaque walls and a glass front;
   - let go against a tunnel wall, a box sets itself into the wall, which opens there;
@@ -83,19 +89,26 @@ What has been built, what is in progress, and where each build is. Updated as wo
   made by Tunnel > Containers > Build Splats (also run by Build Containers). Log tag [Splat].
 - The container, splat and movie builders work in a scratch scene, so running them leaves the open scene unchanged.
 
-### 3D movie (in a container)
+### Antibody action (the 3D movie in a container)
 - Capsids carry invisible antibody binding sites, found from each capsid's surface: TBSV on its 2-folds, poliovirus
   on its 5-folds, Zika on its 3-folds.
 - SARS-CoV-2 takes part too: each of its 30 spikes is a binding site, and an IgG binds at the spike's tip.
 - How binding works:
-  - an IgG that touches a site is drawn in by a Fab tip and binds;
-  - each binding darkens the capsid and adds the antibody's mass;
-  - a fourth antibody neutralizes the capsid, which turns see-through but still collides;
-  - the movie ends when every capsid is neutralized.
-- Movie controls on a panel beside the container (flat on the wall next to a mixed reality box):
-  - Start, Pause and Play;
-  - Show binding sites, and a slider for the sites' size;
-  - save the starting state by name to 3D Movies.
+  - an IgG that touches a site is drawn in by a Fab tip and binds, adding its mass to the virus;
+  - no limit: every free site can take one;
+  - the virus's colour shifts toward green in proportion to the sites taken, fully green when all are, and back as
+    antibodies leave (everyone sees it from the shared bindings);
+  - each IgG stays bound for the binding time (slider, 10 s to 1 min, counted only while playing; applies to new
+    bindings), then lets go: pushed off along the site's axis, resting 3 s before it can bind again.
+- Its menu (Antibody action controls in the Containers list), beside the container or flat on the wall next to a
+  mixed reality box:
+  - Start, Pause and Play; Play again lets every IgG go at once, counts down 5 s on the menu, then puts back the
+    starting state (the same molecules where and as they were, the container's viscosity, heat and motion) and plays;
+  - Show binding sites, and sliders for the sites' size and the binding time;
+  - save the starting state by name (default "Antibody action N") to 3D Movies; older saved states still read;
+  - a bar along its top to carry it by, for everyone; let go within 25 cm of a flat wall it lies flat on the wall
+    (the signs' rule, TunnelWallSnap). Hiding and showing the controls puts it back beside the container.
+- Editor test: Tunnel > Movie > Test Antibody Action (in Play mode), also covering Clear contents and the eraser.
 
 ### Painting
 - The TS Menu's Paint button places a palette and a marker:
@@ -166,16 +179,18 @@ What has been built, what is in progress, and where each build is. Updated as wo
 | Signage | Built and passing its Editor test, not connected (14.11.2026.4). Next: headset (grab, scale and snap to the wall by hand and ray; menu and keyboard by poke and ray; how legible the letters are at 1–3 m; the Edit button's size; the sliders' dark fill) and two players (typing and styling from a client, Save / Place / Delete from a client storing on the host, wall pose, late joiner). |
 | Co-location (floor QR) | Two-player test: after aligning to the floor QR, the joining headset's AR-marker sighting sat 23–24 cm (briefly 30 cm) from the host's. 12.11.2026.4: the floor QR is read by both cameras through the AR marker's verified camera path (corner squares refined, floor height measured from the code; Editor: under 1 mm and 0.05°), and whenever a joining player and the host both see the AR marker held still, the player's view glides onto the host's (Editor: a 24 cm / 3° error corrected to within 3 mm). Next: two-player headset test. 13.11.2026.1 test: the floor QR left the player ~5 cm off; the marker alignment then corrected 29 mm and 7 mm, leaving under 1 cm. But it ran only because the canvas took a minute to lock: tracking stopped at the lock, so normally it never would. 13.11.2026.2: with other players present, tracking stays on for up to 15 s after the lock until each player's room is lined up with the host's by the marker; the logs say whether alignment ran, each correction and the totals. |
 | Headset checks still owed | SARS-CoV-2 in the 3D movie (09.11.2026.1); the movie panel's placement on the wall beside a mixed reality box; transparent Viewer images (09.11.2026.2); Viewer Content only with two players and the backdrop fix (10.11.2026.2); the virtual marker following the hand instantly (09.11.2026.3). |
+| Antibody action, Clear contents, eraser | Built and passing its Editor test, not connected (14.11.2026.5). Next: headset (the menu's bar by hand and ray, its wall snap; the eraser in the hand, haptics and sound; the green shift on each virus) and two players (bindings, releases and colour the same for both; Play again's countdown and restore from a client; menu position shared while carried; a client erasing something another player holds; late joiner). |
 | Grab diagnostics | Every grab and release is logged (since 08.11.2026.1), to track down grabs that don't take. Still on. |
 
 ## Builds and headsets
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 14.11.2026.4 |
+| Latest build (Builds/TheTunnelDev.apk) | 14.11.2026.5 (not yet launch-tested on a headset) |
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |
 | Quest 3S 3497C10HC4041K | 13.11.2026.4 |
 | Quest 3S 3497C10HC4004X | 13.11.2026.4 |
-| Quest 3 2G0YC1ZF760BMQ | 14.11.2026.3 |
+| Quest 3 2G0YC1ZF760BMQ | 14.11.2026.4 |
+| Quest 3 2G0YC1ZF7X0DTC | 14.11.2026.4 |

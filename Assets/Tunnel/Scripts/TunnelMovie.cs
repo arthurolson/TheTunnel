@@ -1,23 +1,29 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using Unity.Netcode;
 using UnityEngine;
 
 /// <summary>
-/// A container's 3D movie: some molecules inside it, the actors, act out what is set for them, while the others go
-/// on moving as the container's medium and heat move them. For now the story is antibodies neutralising viruses: the
-/// capsids (TBSV, poliovirus, Zika) carry invisible binding sites (see <see cref="CapsidSites"/>), and an antibody
-/// (IGG) that touches one is drawn in and binds (see <see cref="AntibodyBinder"/>); a capsid that takes more than
-/// three is neutralized (see-through, its sites gone), and when every capsid in the container is, the movie ends.
-/// Its controls are a small panel beside the container (shown by the TS Menu's Containers list, see
-/// <see cref="TunnelMoviePanel"/>): Start movie makes the binding sites live; Pause holds everything in the container
-/// still, and Play lets it go on as it was; Show binding sites shows them (to check them), and the slider sets how
-/// wide they are (see <see cref="siteDiameter"/>); Save starting state
-/// saves the container and every molecule in it as they were just before the movie started (or as they are, before it
-/// has), under a name typed on the panel's keyboard, as a file in the 3D Movies folder (see <see cref="folder"/>).
-/// In a session everyone shares the movie's state, the sites' visibility and the panel's messages; each player saves
-/// to their own headset.
+/// A container's Antibody action (the 3D movie that runs in it): some molecules inside it, the actors, act out what
+/// is set for them, while the others go on moving as the container's medium and heat move them. The story is
+/// antibodies binding viruses: the capsids (TBSV, poliovirus, Zika) and SARS-CoV-2's spikes carry invisible binding
+/// sites (see <see cref="CapsidSites"/>), and an antibody (IGG) that touches one is drawn in and binds (see
+/// <see cref="AntibodyBinder"/>). Any number bind, one per site; each virus turns greener the more of its sites are
+/// taken, fully green when all are. Each antibody stays bound for the binding time (<see cref="bindingTime"/>,
+/// 10 s to 1 min from when it bound), then lets go, is pushed off the site and is soon free to bind again.
+/// Its controls are a small menu beside the container (shown by the TS Menu's Containers list, see
+/// <see cref="TunnelMoviePanel"/>), which anyone can take by its bar and move, or let go of against a tunnel wall to
+/// lie flat on it, for everyone: Start makes the binding sites live; Pause holds everything in the container still,
+/// and Play lets it go on as it was; Play again lets every bound antibody go at once and, after a 5 second countdown,
+/// starts again from the starting state (the container's contents and settings as they were when it started);
+/// Show binding sites shows them (to check them), and the sliders set how wide they are (see
+/// <see cref="siteDiameter"/>) and the binding time; Save starting state saves the container and every molecule in
+/// it as they were just before it started (or as they are, before it has), under a name typed on the menu's keyboard,
+/// as a file in the 3D Movies folder (see <see cref="folder"/>).
+/// In a session everyone shares its state, the sliders, the sites' visibility, the menu's place and its messages; the
+/// host decides bindings, releases and the restart; each player saves to their own headset.
 /// </summary>
 public class TunnelMovie : NetworkBehaviour
 {
@@ -27,20 +33,40 @@ public class TunnelMovie : NetworkBehaviour
         Ready,
         Playing,
         Paused,
-        /// <summary>Every capsid in the container is gone.</summary>
+        /// <summary>Stopped for good (not used by the Antibody action now; kept for saved states and older menus).</summary>
         Ended,
+        /// <summary>Play again: every antibody has let go, and it starts again from the starting state when the countdown ends.</summary>
+        Restarting,
     }
+
+    /// <summary>What people see this movie called, on its menu, the Containers list and its saved states.</summary>
+    public const string k_Title = "Antibody action";
 
     [SerializeField]
     [Tooltip("The movie's controls, shown on the container.")]
     TunnelMoviePanel m_PanelPrefab;
 
     [SerializeField]
+    [Tooltip("The molecules the TS Menu lists: Play again makes the starting state's molecules from their prefabs.")]
+    TunnelPrefabRegistry m_Prefabs;
+
+    [SerializeField]
     [Tooltip("Gap between the container's side and the panel (meters).")]
     float m_PanelGap = 0.04f;
 
+    [SerializeField]
+    [Tooltip("Seconds Play again waits, after letting every antibody go, before it starts again.")]
+    float m_RestartDelay = 5f;
+
+    [SerializeField]
+    [Tooltip("The menu let go of with its middle this close to a flat tunnel wall (meters) lies flat on the wall.")]
+    float m_PanelSnapDistance = 0.25f;
+
     /// <summary>The binding sites' diameters, as a fraction of each capsid's diameter: the slider's range.</summary>
     public const float k_MinSiteDiameter = 0.02f, k_MaxSiteDiameter = 0.3f, k_DefaultSiteDiameter = 0.1f;
+
+    /// <summary>How long an antibody stays bound (seconds): the Binding time slider's range.</summary>
+    public const float k_MinBindingTime = 10f, k_MaxBindingTime = 60f, k_DefaultBindingTime = 30f;
 
     /// <summary>Where saved starting states go: the 3D Movies folder in the app's own storage.</summary>
     public static string folder => Path.Combine(Application.persistentDataPath, "3D Movies");
@@ -49,21 +75,32 @@ public class TunnelMovie : NetworkBehaviour
     readonly NetworkVariable<bool> m_ShowSites = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<bool> m_Controls = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<float> m_SiteDiameter = new(k_DefaultSiteDiameter, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<float> m_BindingTime = new(k_DefaultBindingTime, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<byte> m_Countdown = new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<bool> m_PanelMoved = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<Vector3> m_PanelPosition = new(Vector3.zero, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<Quaternion> m_PanelRotation = new(Quaternion.identity, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     float m_LocalSiteDiameter = k_DefaultSiteDiameter;
+    float m_LocalBindingTime = k_DefaultBindingTime;
     State m_LocalState;
     bool m_LocalShowSites;
     bool m_LocalControls;
+    int m_LocalCountdown;
+    bool m_LocalPanelMoved;
+    Pose m_LocalPanelPose = Pose.identity;
 
     TunnelContainer m_Container;
     TunnelMoviePanel m_Panel;
     MovieSnapshot m_StartingState;
-    float m_NextCheck;
+    Coroutine m_Restarting;
     string m_Message = "";
     Vector3 m_Facing;
+    bool m_PanelPlacedAtShared;
 
     public State state => IsSpawned ? (State)m_State.Value : m_LocalState;
     public bool isPlaying => state == State.Playing;
     public bool isPaused => state == State.Paused;
+    public bool isRestarting => state == State.Restarting;
     public bool showSites => IsSpawned ? m_ShowSites.Value : m_LocalShowSites;
     public bool controlsShown => IsSpawned ? m_Controls.Value : m_LocalControls;
 
@@ -72,7 +109,33 @@ public class TunnelMovie : NetworkBehaviour
     /// <see cref="k_MaxSiteDiameter"/>; a tenth at first). Set from the panel's slider, for everyone.
     /// </summary>
     public float siteDiameter => IsSpawned ? m_SiteDiameter.Value : m_LocalSiteDiameter;
+
+    /// <summary>
+    /// How long each antibody stays bound, from when it binds (10 s to 1 min; half a minute at first), counted only
+    /// while the movie plays. Set from the menu's Binding time slider, for everyone; a change applies to antibodies
+    /// that bind from then on.
+    /// </summary>
+    public float bindingTime => Mathf.Clamp(IsSpawned ? m_BindingTime.Value : m_LocalBindingTime, k_MinBindingTime, k_MaxBindingTime);
+
+    /// <summary>Seconds left before Play again starts it again (0 when it isn't counting down).</summary>
+    public int countdown => IsSpawned ? m_Countdown.Value : m_LocalCountdown;
+
+    /// <summary>Whether Play again can be pressed: it has been started (and isn't already starting again).</summary>
+    public bool canPlayAgain => state == State.Playing || state == State.Paused || state == State.Ended;
+
+    /// <summary>Whether someone has moved its menu (it then stays where they put it, for everyone, instead of beside the container).</summary>
+    public bool panelMoved => IsSpawned ? m_PanelMoved.Value : m_LocalPanelMoved;
+
+    /// <summary>Where its menu was put (meaningful once <see cref="panelMoved"/>).</summary>
+    public Pose panelPose => IsSpawned ? new Pose(m_PanelPosition.Value, m_PanelRotation.Value) : m_LocalPanelPose;
+
     public TunnelContainer container => m_Container;
+
+    /// <summary>Its menu on this headset, once it has been shown.</summary>
+    public TunnelMoviePanel panel => m_Panel;
+
+    /// <summary>The starting state Play again goes back to (kept when it started), or null.</summary>
+    public MovieSnapshot startingState => m_StartingState;
 
     /// <summary>The latest message, shown on everyone's panel.</summary>
     public string message => m_Message;
@@ -102,7 +165,7 @@ public class TunnelMovie : NetworkBehaviour
 
     void StateChanged(State previous, State current)
     {
-        // Just before the sites go live, everyone keeps the starting state, to save.
+        // Just before the sites first go live, everyone keeps the starting state, to save (and the host, to play again).
         if (current == State.Playing && (previous == State.Ready || previous == State.Ended))
             m_StartingState = Capture();
         Debug.Log($"[Movie] {name}: {previous} -> {current}");
@@ -115,11 +178,21 @@ public class TunnelMovie : NetworkBehaviour
         if (IsSpawned)
             SetControlsRpc(on);
         else
+        {
             m_LocalControls = on;
+            if (!on)
+                m_LocalPanelMoved = false;
+        }
     }
 
+    // Hidden, its menu goes back beside the container next time it's shown.
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    void SetControlsRpc(bool on) => m_Controls.Value = on;
+    void SetControlsRpc(bool on)
+    {
+        m_Controls.Value = on;
+        if (!on)
+            m_PanelMoved.Value = false;
+    }
 
     public void SetShowSites(bool on)
     {
@@ -144,21 +217,33 @@ public class TunnelMovie : NetworkBehaviour
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     void SetSiteDiameterRpc(float fraction) => m_SiteDiameter.Value = Mathf.Clamp(fraction, k_MinSiteDiameter, k_MaxSiteDiameter);
 
+    /// <summary>Sets how long antibodies that bind from now on stay bound (10 to 60 s, whole seconds), for everyone.</summary>
+    public void SetBindingTime(float seconds)
+    {
+        seconds = Mathf.Clamp(Mathf.Round(seconds), k_MinBindingTime, k_MaxBindingTime);
+        if (IsSpawned)
+            SetBindingTimeRpc(seconds);
+        else
+            m_LocalBindingTime = seconds;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void SetBindingTimeRpc(float seconds) => m_BindingTime.Value = Mathf.Clamp(Mathf.Round(seconds), k_MinBindingTime, k_MaxBindingTime);
+
     /// <summary>Makes the binding sites live, if there is anything in the container for them to do.</summary>
     public void StartMovie()
     {
-        if (state == State.Playing || state == State.Paused)
+        if (state != State.Ready && state != State.Ended)
             return;
         int capsids = CountCapsids();
         if (capsids == 0)
         {
-            Announce(CountNeutralized() > 0
-                ? "Every capsid in the container is neutralized: put in a fresh one (TBSV, 2PLV or Zika)."
-                : "Put a capsid (TBSV, 2PLV or Zika) and some IGG antibodies in the container first.");
+            Announce("Put a virus (TBSV, 2PLV, Zika or SARS-CoV-2) and some IGG antibodies in the container first.");
             return;
         }
         SetState(State.Playing);
-        Announce($"Playing: {capsids} capsid{(capsids == 1 ? "" : "s")}, {CountAntibodies()} antibod{(CountAntibodies() == 1 ? "y" : "ies")}.");
+        int antibodies = CountAntibodies();
+        Announce($"Playing: {Viruses(capsids)}, {antibodies} antibod{(antibodies == 1 ? "y" : "ies")}; each stays bound {bindingTime:0} s.");
     }
 
     public void Pause()
@@ -177,11 +262,159 @@ public class TunnelMovie : NetworkBehaviour
         Announce("Playing again.");
     }
 
+    /// <summary>
+    /// Play again: every bound antibody lets go at once; after a 5 second countdown everything in the container is put
+    /// back as it was when it started (the same molecules where they were, moving as they were, and the container's
+    /// viscosity, heat and motion), and it plays again. The host does it, for everyone.
+    /// </summary>
+    public void PlayAgain()
+    {
+        if (!canPlayAgain)
+            return;
+        Debug.Log($"[Movie] {name}: Play again pressed ({(IsSpawned ? (IsServer ? "for everyone" : "asking the host") : "not connected, here only")})");
+        if (IsSpawned)
+            PlayAgainRpc();
+        else
+            BeginPlayAgain();
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void PlayAgainRpc() => BeginPlayAgain();
+
+    // On the host (or here, not connected).
+    void BeginPlayAgain()
+    {
+        if (!canPlayAgain || m_Restarting != null)
+            return;
+        int released = ReleaseAll("Play again");
+        SetState(State.Restarting);
+        Announce($"Play again: {released} antibod{(released == 1 ? "y" : "ies")} let go. Starting again in {Mathf.CeilToInt(m_RestartDelay)} s.");
+        m_Restarting = StartCoroutine(Restart());
+    }
+
+    /// <summary>On the host (or here, not connected): every antibody bound to a virus in the container lets go. Returns how many.</summary>
+    public int ReleaseAll(string why)
+    {
+        int released = 0;
+        foreach (var capsid in CapsidSites.all.ToArray())
+            if (capsid != null && Inside(capsid.body))
+                released += capsid.ReleaseAll(why);
+        return released;
+    }
+
+    IEnumerator Restart()
+    {
+        for (int left = Mathf.CeilToInt(m_RestartDelay); left > 0; left--)
+        {
+            SetCountdown(left);
+            yield return new WaitForSeconds(Mathf.Min(1f, m_RestartDelay));
+        }
+        SetCountdown(0);
+        int restored = RestoreStartingState();
+        m_Restarting = null;
+        SetState(State.Playing);
+        Announce(restored >= 0
+            ? $"Playing again from the start: {restored} molecule{(restored == 1 ? "" : "s")} as they were; each antibody stays bound {bindingTime:0} s."
+            : "Playing again (no starting state was kept, so the container is as it was).");
+    }
+
+    void SetCountdown(int seconds)
+    {
+        if (IsSpawned)
+            m_Countdown.Value = (byte)Mathf.Clamp(seconds, 0, 255);
+        else
+            m_LocalCountdown = seconds;
+    }
+
+    /// <summary>
+    /// On the host (or here, not connected): takes the molecules now in the container away and makes those of the
+    /// starting state in their places (in the container's own frame, so it works wherever the container is now),
+    /// with their sizes, motion and spin, and sets the container's viscosity, heat and motion as they were. Returns
+    /// how many molecules it made, or -1 if no starting state was kept.
+    /// </summary>
+    public int RestoreStartingState()
+    {
+        var snapshot = m_StartingState;
+        if (snapshot == null || m_Container == null)
+            return -1;
+        foreach (var molecule in MoleculeGravity.all.ToArray())
+            if (molecule != null && molecule.isActiveAndEnabled && Inside(molecule.body))
+                TunnelContainer.RemoveForEveryone(molecule.gameObject);
+
+        var c = snapshot.container;
+        m_Container.SetViscosity(c.viscosity);
+        m_Container.SetTemperature(c.temperatureSetting);
+        if (Enum.TryParse(c.motion, out TunnelContainer.Motion motion))
+            m_Container.SetMotion(motion);
+
+        // Kept in the container's own frame, turned with it but not scaled (see Capture).
+        var t = m_Container.transform;
+        int made = 0;
+        foreach (var m in snapshot.molecules)
+        {
+            var prefab = PrefabFor(m.molecule);
+            if (prefab == null)
+            {
+                Debug.LogWarning($"[Movie] {name}: no {m.molecule} in the Molecules list to put back");
+                continue;
+            }
+            Make(prefab, t.position + t.rotation * m.position, t.rotation * m.rotation, m.scale,
+                t.rotation * m.velocity, t.rotation * m.spin, m.parked);
+            made++;
+        }
+        Debug.Log($"[Movie] {name}: starting state put back, {made} of {snapshot.molecules.Count} molecules");
+        return made;
+    }
+
+    // The prefab the Molecules list makes a molecule of this name from.
+    GameObject PrefabFor(string molecule)
+    {
+        if (m_Prefabs == null)
+            return null;
+        foreach (var entry in m_Prefabs.molecules)
+            if (entry != null && entry.prefab != null && string.Equals(entry.name, molecule, StringComparison.OrdinalIgnoreCase))
+                return entry.prefab;
+        foreach (var entry in m_Prefabs.molecules)
+            if (entry != null && entry.prefab != null && string.Equals(CapsidSites.MoleculeName(entry.prefab), molecule, StringComparison.OrdinalIgnoreCase))
+                return entry.prefab;
+        return null;
+    }
+
+    // One molecule, made as the Molecules list makes one: sized and placed before it wakes (its network transform
+    // takes its pose when it's created), then spawned for everyone, moving (or parked, if it was).
+    GameObject Make(GameObject prefab, Vector3 position, Quaternion rotation, float scale, Vector3 velocity, Vector3 spin, bool parked)
+    {
+        var holder = new GameObject("Movie Molecule Holder");
+        holder.SetActive(false);
+        var molecule = Instantiate(prefab, holder.transform);
+        if (scale > 0f)
+            molecule.transform.localScale = Vector3.one * scale;
+        molecule.transform.SetPositionAndRotation(position, rotation);
+        if (molecule.TryGetComponent(out XRMultiplayer.NetworkPhysicsInteractable networkPhysics))
+            networkPhysics.spawnLocked = parked;
+        molecule.transform.SetParent(null, true);
+        Destroy(holder);
+
+        if (IsSpawned && molecule.TryGetComponent(out NetworkObject networkObject))
+            networkObject.Spawn(true);
+        if (!parked && molecule.TryGetComponent(out Rigidbody body))
+        {
+            body.constraints = RigidbodyConstraints.None;
+            body.isKinematic = false;
+            body.linearVelocity = velocity;
+            body.angularVelocity = spin;
+        }
+        return molecule;
+    }
+
     void SetState(State value)
     {
         if (IsSpawned)
         {
-            SetStateRpc((byte)value);
+            if (IsServer)
+                m_State.Value = (byte)value;
+            else
+                SetStateRpc((byte)value);
             return;
         }
         var previous = m_LocalState;
@@ -211,28 +444,30 @@ public class TunnelMovie : NetworkBehaviour
         Debug.Log($"[Movie] {name}: {text}");
     }
 
+    static string Viruses(int count) => count == 1 ? "1 virus" : $"{count} viruses";
+
     #endregion
 
     #region Cast
 
     bool Inside(Rigidbody body) => body != null && m_Container != null && m_Container.Contains(body.worldCenterOfMass);
 
-    /// <summary>The capsids still in the movie: in the container and not neutralized.</summary>
+    /// <summary>The viruses (capsids and virions with binding sites) in the container.</summary>
     public int CountCapsids()
     {
         int count = 0;
         foreach (var capsid in CapsidSites.all)
-            if (capsid != null && !capsid.neutralized && Inside(capsid.body))
+            if (capsid != null && Inside(capsid.body))
                 count++;
         return count;
     }
 
-    /// <summary>Neutralized capsids in the container.</summary>
-    public int CountNeutralized()
+    /// <summary>Viruses in the container with every site taken (fully green).</summary>
+    public int CountCovered()
     {
         int count = 0;
         foreach (var capsid in CapsidSites.all)
-            if (capsid != null && capsid.neutralized && Inside(capsid.body))
+            if (capsid != null && capsid.fullyCovered && Inside(capsid.body))
                 count++;
         return count;
     }
@@ -247,7 +482,7 @@ public class TunnelMovie : NetworkBehaviour
         return count;
     }
 
-    /// <summary>Antibodies bound to the capsids in the container.</summary>
+    /// <summary>Antibodies bound to the viruses in the container.</summary>
     public int CountBound()
     {
         int count = 0;
@@ -259,22 +494,7 @@ public class TunnelMovie : NetworkBehaviour
 
     #endregion
 
-    void Update()
-    {
-        // The host (or this headset, alone) ends the movie when every capsid in the container is neutralized (or gone).
-        bool decides = !IsSpawned || IsServer;
-        if (decides && (state == State.Playing || state == State.Paused) && Time.time >= m_NextCheck)
-        {
-            m_NextCheck = Time.time + 0.5f;
-            if (CountCapsids() == 0)
-            {
-                SetState(State.Ended);
-                Announce("The end: every capsid is neutralized.");
-            }
-        }
-
-        ShowPanel();
-    }
+    void Update() => ShowPanel();
 
     #region Panel
 
@@ -291,26 +511,107 @@ public class TunnelMovie : NetworkBehaviour
             if (m_PanelPrefab == null)
                 return;
             m_Panel = Instantiate(m_PanelPrefab);
-            m_Panel.name = $"{name.Replace("(Clone)", "")} Movie Panel";
+            m_Panel.name = $"{name.Replace("(Clone)", "")} {k_Title} Menu";
             m_Panel.Bind(this);
         }
         if (!m_Panel.gameObject.activeSelf)
+        {
             m_Panel.gameObject.SetActive(true);
+            m_PanelPlacedAtShared = false;
+            if (!panelMoved)
+                PlacePanel(true);
+        }
     }
 
     void LateUpdate()
     {
-        if (m_Panel != null && m_Panel.gameObject.activeSelf)
+        if (m_Panel == null || !m_Panel.gameObject.activeSelf || m_Panel.ownPose)
+            return;
+        if (panelMoved)
+            FollowSharedPose();
+        else
+        {
+            m_PanelPlacedAtShared = false;
             PlacePanel(false);
+        }
+    }
+
+    // Moved by someone: the menu goes where they put it (gliding there while it's being carried).
+    void FollowSharedPose()
+    {
+        var pose = panelPose;
+        var t = m_Panel.transform;
+        if (!m_PanelPlacedAtShared || (t.position - pose.position).sqrMagnitude > 1f)
+        {
+            m_PanelPlacedAtShared = true;
+            t.SetPositionAndRotation(pose.position, pose.rotation);
+        }
+        else
+        {
+            float k = 1f - Mathf.Exp(-15f * Time.deltaTime);
+            t.SetPositionAndRotation(Vector3.Lerp(t.position, pose.position, k), Quaternion.Slerp(t.rotation, pose.rotation, k));
+        }
+        m_Panel.PlaceKeyboard(0.12f);
+    }
+
+    /// <summary>
+    /// Shares where its menu is now, for everyone: while it's carried (often, and it may be skipped) and where it's
+    /// let go (always arrives). From then on it stays there instead of beside the container, until the controls are
+    /// hidden.
+    /// </summary>
+    public void SetPanelPose(Pose pose, bool final)
+    {
+        if (!IsSpawned)
+        {
+            m_LocalPanelMoved = true;
+            m_LocalPanelPose = pose;
+            return;
+        }
+        if (final)
+            PanelPoseRpc(pose.position, pose.rotation);
+        else
+            PanelPoseMovingRpc(pose.position, pose.rotation);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void PanelPoseRpc(Vector3 position, Quaternion rotation) => StorePanelPose(position, rotation);
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone, Delivery = RpcDelivery.Unreliable)]
+    void PanelPoseMovingRpc(Vector3 position, Quaternion rotation) => StorePanelPose(position, rotation);
+
+    void StorePanelPose(Vector3 position, Quaternion rotation)
+    {
+        m_PanelPosition.Value = position;
+        m_PanelRotation.Value = rotation;
+        m_PanelMoved.Value = true;
+    }
+
+    /// <summary>
+    /// Where its menu, let go of here, lies: flat on a tunnel wall if its middle is within reach of one (see
+    /// <see cref="TunnelWallSnap"/>), else where it is. True if it went onto a wall.
+    /// </summary>
+    public bool SnapPanel(out Pose pose)
+    {
+        var t = m_Panel.transform;
+        pose = new Pose(t.position, t.rotation);
+        // The canvas's middle isn't the whole menu's (the bar is above it): the whole menu, bar too, goes on the wall.
+        var middle = t.TransformPoint(new Vector3(0f, m_Panel.centreOffset, 0f));
+        if (!TunnelWallSnap.TryFind(middle, new Vector2(m_Panel.width * 0.5f, m_Panel.totalHeight * 0.5f), m_Panel.back, m_PanelSnapDistance, out var onWall, out var wall))
+            return false;
+        pose = new Pose(onWall.position - onWall.rotation * new Vector3(0f, m_Panel.centreOffset, 0f), onWall.rotation);
+        Debug.Log($"[Movie] {name}: menu set flat on the wall of {wall.name} at {pose.position.y:F2} m");
+        return true;
     }
 
     /// <summary>
     /// Beside the container, on its left as whoever looks at it sees it, half way up, facing them; it turns (and moves
     /// round) to face them only while they aren't typing. On a mixed reality box set into a wall it lies flat on the
-    /// wall, left of the box's front, facing into the tunnel.
+    /// wall, left of the box's front, facing into the tunnel. (Once someone moves it, it stays where they put it.)
     /// </summary>
     public void PlacePanel(bool snap)
     {
+        if (m_Panel == null)
+            return;
         var t = m_Container != null ? m_Container.transform : transform;
         var half = t.lossyScale * 0.5f;
         float Extent(Vector3 direction) => m_Container != null && m_Container.shape == TunnelContainer.Shape.Sphere
@@ -352,7 +653,13 @@ public class TunnelMovie : NetworkBehaviour
     /// <summary>The container and every molecule in it, as they are now.</summary>
     public MovieSnapshot Capture()
     {
-        var snapshot = new MovieSnapshot { savedFrom = Application.version };
+        var snapshot = new MovieSnapshot
+        {
+            savedFrom = Application.version,
+            scenario = k_Title,
+            bindingTime = bindingTime,
+            siteDiameter = siteDiameter,
+        };
         if (m_Container == null)
             return snapshot;
         var t = m_Container.transform;
@@ -423,12 +730,12 @@ public class TunnelMovie : NetworkBehaviour
         return name.Length > 60 ? name.Substring(0, 60).Trim() : name;
     }
 
-    /// <summary>A name not yet used in the 3D Movies folder: Movie 1, Movie 2, ...</summary>
+    /// <summary>A name not yet used in the 3D Movies folder: Antibody action 1, Antibody action 2, ...</summary>
     public static string NextName()
     {
         for (int i = 1; ; i++)
         {
-            string name = $"Movie {i}";
+            string name = $"{k_Title} {i}";
             if (!File.Exists(Path.Combine(folder, name + ".json")))
                 return name;
         }
@@ -446,6 +753,11 @@ public class MovieSnapshot
     public string name;
     public string saved;
     public string savedFrom; // the app's version
+    [Tooltip("Which movie it is for: \"Antibody action\" (empty in states saved before it had a name).")]
+    public string scenario;
+    [Tooltip("The Antibody action's binding time (seconds) and binding site diameter (fraction of a capsid's); 0 in older states.")]
+    public float bindingTime;
+    public float siteDiameter;
     public ContainerState container = new();
     [Tooltip("Positions, rotations, velocities and spins in the container's own frame (meters, not scaled with it).")]
     public List<MoleculeState> molecules = new();
