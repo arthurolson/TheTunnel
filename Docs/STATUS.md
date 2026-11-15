@@ -30,6 +30,24 @@ What has been built, what is in progress, and where each build is. Updated as wo
 ### Molecules
 - Molecule toys built from Assets/Molecules, chosen from the TS Menu's Molecules list. A slider magnifies them
   from 1x to 10x, and new molecules don't overlap.
+- Sorted into category folders (15.11.2026): Assets/Molecules/viral capsids (2PLV, SARS, TBSV, Zika), proteins (EGFR,
+  IGG), ligands (EGFR ligand), chemicals and nucleic acids (empty, each with a README). The Molecules list shows them
+  under headings in that order, skipping empty categories; names, network ids and prefab references are unchanged
+  (moved with AssetDatabase). Adding a molecule is still dropping a folder with a model into a category folder.
+  Builders find molecules by name wherever they are (MoleculeLibraryBuilder.ToyPath / FolderOf). Editor test:
+  Tunnel > Molecules > Test Molecule Library (Edit or Play mode). The SARS model's .gitignore line follows the move.
+- EGFR (proteins; egfr.glb from Mol*, PDB 9S3X): true scale, 1.24 x 0.98 x 1.16 cm at x1; surface merged on a 2 A
+  grid, 61,984 to 8,409 triangles (IgG has 18,996); coloured like the other surfaces (2PLV's first chain colour, as
+  the GLB's own colour is a single grey). Its body collider is 8 convex pieces of its surface with its ligand's
+  pocket left open within 14 Å (Tunnel > Movie > Build Ligand Binding), not one ellipsoid: a single convex shape
+  fills the cleft, putting the pocket 19 Å inside it, out of reach of a 10 Å capture sphere.
+- EGFR ligand (ligands; 9S3X-ligand.glb from Mol*, the inhibitor NCL-26007 in PDB coordinates; the older OBJ and zip
+  are in Source~): the free ligand is the inhibitor alone, spacefill in Mol*'s atom colours (carbon grey, nitrogen
+  blue, oxygen red), 42,240 triangles, 0.16 x 0.21 x 0.32 cm at x1 (about 18 Å long). Ligands and chemicals keep the
+  model's own atom colours; a model's tiny atoms-and-bonds toy keeps its collider at least 2 cm across in the headset
+  until magnified past that (MoleculeGrabSize), drawn at true size; while a 3D movie plays round it, the collider fits
+  the molecule instead.
+- The spawn nozzle sprays them like any other (budget: EGFR 100, ligand 60 per spray).
 - Physics:
   - each molecule's mass comes from its volume;
   - molecules bounce, and drift when pushed;
@@ -89,6 +107,22 @@ What has been built, what is in progress, and where each build is. Updated as wo
   made by Tunnel > Containers > Build Splats (also run by Build Containers). Log tag [Splat].
 - The container, splat and movie builders work in a scratch scene, so running them leaves the open scene unchanged.
 
+### Ligand binding (the second 3D movie in a container)
+- Chosen on the movie's menu (top row, Movie: Antibody action / Ligand binding, only before it starts); the Containers
+  list's row now reads 3D movie controls.
+- EGFR carries one binding site: a capture sphere centred on its ligand's bound place (from the two GLBs, both in
+  9S3X's coordinates; no rotation), radius set by the Capture radius slider, 2 to 30 Å at the molecules' true scale
+  (10 Å at first), shown by Show capture spheres. A free EGFR ligand touching it glides (0.6 s) into its exact pose
+  in the crystal structure, at EGFR's size, and stays for the binding time (10 s to 1 min); then it is pushed out of
+  the pocket and rests 3 s. While bound, EGFR is light blue, and Cys775 (the cysteine the inhibitor is covalently
+  bonded to) shows once the ligand has settled, hidden again the moment it leaves. IgGs don't bind in the pocket;
+  ligands don't bind to viruses.
+- Play again, pause, saving ("Ligand binding N") and the movable menu work as in Antibody action. Built by Tunnel >
+  Movie > Build Ligand Binding (also part of Build 3D Movie); Editor test: Tunnel > Movie > Test Ligand Binding (in
+  Play mode).
+- In Editor runs at x10 (EGFR 12 cm): with 40 ligands in a 22 cm box, warm, about one binding every two minutes at
+  10 Å; at 20 to 30 Å with 20 ligands in a 35 cm box, a new ligand bound soon after each release.
+
 ### Antibody action (the 3D movie in a container)
 - Capsids carry invisible antibody binding sites, found from each capsid's surface: TBSV on its 2-folds, poliovirus
   on its 5-folds, Zika on its 3-folds.
@@ -100,7 +134,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
     antibodies leave (everyone sees it from the shared bindings);
   - each IgG stays bound for the binding time (slider, 10 s to 1 min, counted only while playing; applies to new
     bindings), then lets go: pushed off along the site's axis, resting 3 s before it can bind again.
-- Its menu (Antibody action controls in the Containers list), beside the container or flat on the wall next to a
+- Its menu (3D movie controls in the Containers list), beside the container or flat on the wall next to a
   mixed reality box:
   - Start, Pause and Play; Play again lets every IgG go at once, counts down 5 s on the menu, then puts back the
     starting state (the same molecules where and as they were, the container's viscosity, heat and motion) and plays;
@@ -180,17 +214,18 @@ What has been built, what is in progress, and where each build is. Updated as wo
 | Co-location (floor QR) | Two-player test: after aligning to the floor QR, the joining headset's AR-marker sighting sat 23–24 cm (briefly 30 cm) from the host's. 12.11.2026.4: the floor QR is read by both cameras through the AR marker's verified camera path (corner squares refined, floor height measured from the code; Editor: under 1 mm and 0.05°), and whenever a joining player and the host both see the AR marker held still, the player's view glides onto the host's (Editor: a 24 cm / 3° error corrected to within 3 mm). Next: two-player headset test. 13.11.2026.1 test: the floor QR left the player ~5 cm off; the marker alignment then corrected 29 mm and 7 mm, leaving under 1 cm. But it ran only because the canvas took a minute to lock: tracking stopped at the lock, so normally it never would. 13.11.2026.2: with other players present, tracking stays on for up to 15 s after the lock until each player's room is lined up with the host's by the marker; the logs say whether alignment ran, each correction and the totals. |
 | Headset checks still owed | SARS-CoV-2 in the 3D movie (09.11.2026.1); the movie panel's placement on the wall beside a mixed reality box; transparent Viewer images (09.11.2026.2); Viewer Content only with two players and the backdrop fix (10.11.2026.2); the virtual marker following the hand instantly (09.11.2026.3). |
 | Antibody action, Clear contents, eraser | Built and passing its Editor test, not connected (14.11.2026.5). Next: headset (the menu's bar by hand and ray, its wall snap; the eraser in the hand, haptics and sound; the green shift on each virus) and two players (bindings, releases and colour the same for both; Play again's countdown and restore from a client; menu position shared while carried; a client erasing something another player holds; late joiner). |
+| Molecule categories, EGFR, EGFR ligand, Ligand binding | Built and passing their Editor tests, not connected (15.11.2026.1, starts on a headset). Next: headset (the Molecules list's headings and scrolling; grabbing EGFR at x1, 1.2 cm, and the ligand, whose 2 cm grab collider is far larger than it at x1; Ligand binding at x5 to x10 with 10 to 20 ligands: how often they bind at 10 Å, the glide, Cys775 appearing, the light blue; frame rate with many 42k-triangle ligands on Quest 3S) and two players (scenario choice, capture radius, bindings, colour and Cys775 the same for both; late joiner). |
 | Grab diagnostics | Every grab and release is logged (since 08.11.2026.1), to track down grabs that don't take. Still on. |
 
 ## Builds and headsets
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 14.11.2026.5 |
+| Latest build (Builds/TheTunnelDev.apk) | 15.11.2026.1 |
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |
 | Quest 3S 3497C10HC4041K | 13.11.2026.4 |
 | Quest 3S 3497C10HC4004X | 13.11.2026.4 |
-| Quest 3 2G0YC1ZF760BMQ | 14.11.2026.5 |
+| Quest 3 2G0YC1ZF760BMQ | 15.11.2026.1 |
 | Quest 3 2G0YC1ZF7X0DTC | 14.11.2026.5 |

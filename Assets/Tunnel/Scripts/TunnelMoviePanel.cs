@@ -7,11 +7,14 @@ using UnityEngine.XR.Interaction.Toolkit.Interactables;
 using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 
 /// <summary>
-/// A container's Antibody action menu (see <see cref="TunnelMovie"/>), shown beside the container: Start, Pause,
-/// Play, Play again (every antibody lets go, and after a 5 second countdown it starts again from the starting state),
-/// Show binding sites, the binding sites' diameter (2% to 30% of each capsid's), the binding time (10 s to 1 min,
-/// how long each antibody stays bound) and Save starting state (which asks for a name on its keyboard, then saves).
-/// Its status shows what is happening, how many viruses and antibodies are in the container, and the latest message.
+/// A container's 3D movie menu (see <see cref="TunnelMovie"/>), shown beside the container. Its top row chooses the
+/// movie before it starts: Antibody action or Ligand binding (tap to switch). Then Start, Pause, Play, Play again
+/// (everything bound lets go, and after a 5 second countdown it starts again from the starting state), Show binding
+/// sites (the capture spheres, in Ligand binding), a slider for the binding sites' diameter (2% to 30% of each
+/// capsid's) in Antibody action or the capture radius (2 to 30 Å) in Ligand binding, the binding time (10 s to 1 min,
+/// how long each antibody or ligand stays bound) and Save starting state (which asks for a name on its keyboard,
+/// then saves; the name offered is the movie's). Its status shows what is happening, what is in the container (viruses
+/// and antibodies, or EGFRs and ligands), and the latest message.
 /// Anyone can take it by the bar along its top and move it, for everyone; let go of within 25 cm of a flat tunnel
 /// wall, it lies flat on the wall, like a sign. Hiding the controls (TS Menu > Containers) and showing them again
 /// puts it back beside the container.
@@ -19,6 +22,10 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 /// </summary>
 public class TunnelMoviePanel : MonoBehaviour
 {
+    [SerializeField]
+    [Tooltip("Chooses the movie: Antibody action or Ligand binding (only before it starts).")]
+    Button m_ScenarioRow;
+
     [SerializeField]
     Button m_StartRow;
 
@@ -81,6 +88,7 @@ public class TunnelMoviePanel : MonoBehaviour
     float m_NextRefresh;
     float m_DiameterShown = -1f;
     float m_BindingTimeShown = -1f;
+    int m_ScenarioShown = -1;
     bool m_Holding;
     float m_OwnPoseUntil;
     float m_NextShare;
@@ -118,6 +126,8 @@ public class TunnelMoviePanel : MonoBehaviour
 
     void Awake()
     {
+        m_ScenarioRow?.onClick.AddListener(() => m_Movie?.SetScenario(m_Movie.scenario == TunnelMovie.Scenario.LigandBinding
+            ? TunnelMovie.Scenario.AntibodyAction : TunnelMovie.Scenario.LigandBinding));
         m_StartRow?.onClick.AddListener(() => m_Movie?.StartMovie());
         m_PauseRow?.onClick.AddListener(() => m_Movie?.Pause());
         m_PlayRow?.onClick.AddListener(() => m_Movie?.Play());
@@ -233,7 +243,7 @@ public class TunnelMoviePanel : MonoBehaviour
         m_Movie.SetPanelPose(pose, true);
         m_OwnPoseUntil = Time.unscaledTime + 1f;
         if (onWall)
-            XRMultiplayer.PlayerHudNotification.Instance?.ShowText($"{TunnelMovie.k_Title} menu on the wall: take it by its bar to move it", 2f);
+            XRMultiplayer.PlayerHudNotification.Instance?.ShowText($"{m_Movie.title} menu on the wall: take it by its bar to move it", 2f);
         return onWall;
     }
 
@@ -248,13 +258,40 @@ public class TunnelMoviePanel : MonoBehaviour
 
     #endregion
 
-    void OnDiameterMoved(float percent)
+    bool ligands => m_Movie != null && m_Movie.scenario == TunnelMovie.Scenario.LigandBinding;
+
+    // The slider sets the sites' diameter (whole percent) or, in Ligand binding, the capture radius (whole ångströms).
+    float SliderSetting => m_Movie == null ? 0f : ligands ? m_Movie.captureRadius : m_Movie.siteDiameter * 100f;
+
+    void OnDiameterMoved(float value)
     {
         if (m_Movie == null)
             return;
-        m_DiameterShown = percent / 100f;
-        m_Movie.SetSiteDiameter(percent / 100f);
+        m_DiameterShown = value;
+        if (ligands)
+            m_Movie.SetCaptureRadius(value);
+        else
+            m_Movie.SetSiteDiameter(value / 100f);
         ShowDiameter();
+    }
+
+    // The slider's range and its tick labels for the movie chosen (both run 2 to 30: percent, or ångströms).
+    void ShowScenario()
+    {
+        if (m_DiameterSlider == null)
+            return;
+        bool ligand = ligands;
+        m_DiameterSlider.minValue = ligand ? TunnelMovie.k_MinCaptureRadius : TunnelMovie.k_MinSiteDiameter * 100f;
+        m_DiameterSlider.maxValue = ligand ? TunnelMovie.k_MaxCaptureRadius : TunnelMovie.k_MaxSiteDiameter * 100f;
+        var ticks = m_DiameterSlider.transform.parent != null ? m_DiameterSlider.transform.parent.Find("Ticks") : null;
+        if (ticks != null)
+            foreach (Transform tick in ticks)
+                if (tick.TryGetComponent(out TMP_Text label))
+                {
+                    string number = label.text.Replace("%", "").Replace(" Å", "").Trim();
+                    label.text = ligand ? $"{number} Å" : $"{number}%";
+                }
+        m_DiameterShown = -1f; // shows the new setting
     }
 
     void OnBindingTimeMoved(float seconds)
@@ -272,7 +309,7 @@ public class TunnelMoviePanel : MonoBehaviour
             return;
         float seconds = m_BindingTimeSlider.value;
         string time = seconds >= 60f ? "1 min" : $"{seconds:0} s";
-        string text = $"Binding time: {time}  <color=#AAA>each antibody stays bound</color>";
+        string text = $"Binding time: {time}  <color=#AAA>each {(ligands ? "ligand" : "antibody")} stays bound</color>";
         if (m_BindingTimeText.text != text)
             m_BindingTimeText.text = text;
     }
@@ -281,7 +318,9 @@ public class TunnelMoviePanel : MonoBehaviour
     {
         if (m_DiameterText == null || m_DiameterSlider == null)
             return;
-        string text = $"Binding site diameter: {m_DiameterSlider.value:0}%  <color=#AAA>of each capsid's</color>";
+        string text = ligands
+            ? $"Capture radius: {m_DiameterSlider.value:0} Å  <color=#AAA>round each EGFR's pocket</color>"
+            : $"Binding site diameter: {m_DiameterSlider.value:0}%  <color=#AAA>of each capsid's</color>";
         if (m_DiameterText.text != text)
             m_DiameterText.text = text;
     }
@@ -289,11 +328,18 @@ public class TunnelMoviePanel : MonoBehaviour
     void Update()
     {
         ShareWhileHeld();
-        // The sliders follow a change made by another player, not their own.
-        if (m_Movie != null && m_DiameterSlider != null && !Mathf.Approximately(m_Movie.siteDiameter, m_DiameterShown))
+        if (m_Movie != null && (int)m_Movie.scenario != m_ScenarioShown)
         {
-            m_DiameterShown = m_Movie.siteDiameter;
-            m_DiameterSlider.SetValueWithoutNotify(Mathf.Round(m_DiameterShown * 100f));
+            m_ScenarioShown = (int)m_Movie.scenario;
+            ShowScenario();
+            m_BindingTimeShown = -1f;
+            m_NextRefresh = 0f;
+        }
+        // The sliders follow a change made by another player, not their own.
+        if (m_Movie != null && m_DiameterSlider != null && !Mathf.Approximately(SliderSetting, m_DiameterShown))
+        {
+            m_DiameterShown = SliderSetting;
+            m_DiameterSlider.SetValueWithoutNotify(Mathf.Round(m_DiameterShown));
             ShowDiameter();
         }
         if (m_Movie != null && m_BindingTimeSlider != null && !Mathf.Approximately(m_Movie.bindingTime, m_BindingTimeShown))
@@ -306,6 +352,9 @@ public class TunnelMoviePanel : MonoBehaviour
             return;
         m_NextRefresh = Time.unscaledTime + 0.2f;
         var state = m_Movie.state;
+        bool canChoose = state == TunnelMovie.State.Ready || state == TunnelMovie.State.Ended;
+        string other = TunnelMovie.TitleOf(ligands ? TunnelMovie.Scenario.AntibodyAction : TunnelMovie.Scenario.LigandBinding);
+        SetRow(m_ScenarioRow, $"Movie: <b>{m_Movie.title}</b>  <color=#AAA>{(canChoose ? $"tap for {other}" : "(chosen before it starts)")}</color>", canChoose);
         SetRow(m_StartRow, state == TunnelMovie.State.Ended ? "Start again" : "Start", state == TunnelMovie.State.Ready || state == TunnelMovie.State.Ended);
         SetRow(m_PauseRow, "Pause", state == TunnelMovie.State.Playing);
         SetRow(m_PlayRow, "Play", state == TunnelMovie.State.Paused);
@@ -315,7 +364,7 @@ public class TunnelMoviePanel : MonoBehaviour
                 ? "Play again  <color=#AAA>(once it has started)</color>"
                 : "Play again  <color=#AAA>all let go, then from the start</color>",
             m_Movie.canPlayAgain);
-        SetRow(m_SitesRow, (m_Movie.showSites ? "■" : "□") + "  Show binding sites", true);
+        SetRow(m_SitesRow, (m_Movie.showSites ? "■" : "□") + (ligands ? "  Show capture spheres" : "  Show binding sites"), true);
         SetRow(m_SaveRow, state == TunnelMovie.State.Ready ? "Save starting state..." : "Save starting state...  <color=#AAA>as it was at the start</color>", m_Saving == null);
 
         string stateText = state switch
@@ -328,16 +377,20 @@ public class TunnelMoviePanel : MonoBehaviour
         };
         if (m_Title != null)
         {
-            string title = $"{TunnelMovie.k_Title}  <size=70%>{stateText}</size>";
+            string title = $"{m_Movie.title}  <size=70%>{stateText}</size>";
             if (m_Title.text != title)
                 m_Title.text = title;
         }
         if (m_Status != null)
         {
             int capsids = m_Movie.CountCapsids(), covered = m_Movie.CountCovered(), antibodies = m_Movie.CountAntibodies(), bound = m_Movie.CountBound();
-            string text = $"<color=#AAA>In the container:</color> {capsids} {(capsids == 1 ? "virus" : "viruses")}{(covered > 0 ? $" ({covered} fully covered)" : "")}, "
-                + $"{antibodies} free antibod{(antibodies == 1 ? "y" : "ies")}, {bound} bound\n"
-                + (m_Note.Length > 0 ? m_Note : m_Movie.message);
+            string text = ligands
+                ? $"<color=#AAA>In the container:</color> {capsids} EGFR{(covered > 0 ? $" ({covered} with its ligand bound)" : "")}, "
+                    + $"{antibodies} free ligand{(antibodies == 1 ? "" : "s")}, {bound} bound\n"
+                    + (m_Note.Length > 0 ? m_Note : m_Movie.message)
+                : $"<color=#AAA>In the container:</color> {capsids} {(capsids == 1 ? "virus" : "viruses")}{(covered > 0 ? $" ({covered} fully covered)" : "")}, "
+                    + $"{antibodies} free antibod{(antibodies == 1 ? "y" : "ies")}, {bound} bound\n"
+                    + (m_Note.Length > 0 ? m_Note : m_Movie.message);
             if (m_Status.text != text)
                 m_Status.text = text;
         }
@@ -364,10 +417,10 @@ public class TunnelMoviePanel : MonoBehaviour
         m_Saving = m_Movie.StateToSave(out m_SavingAtStart);
         if (m_Keyboard == null)
         {
-            Save(TunnelMovie.NextName());
+            Save(TunnelMovie.NextName(m_Movie.title));
             return;
         }
-        m_Keyboard.Open(TunnelMovie.NextName());
+        m_Keyboard.Open(TunnelMovie.NextName(m_Movie.title));
         ShowTyped(m_Keyboard.text);
     }
 
@@ -456,8 +509,9 @@ public class TunnelMoviePanel : MonoBehaviour
     /// <summary>Set by Tunnel > Movie > Build 3D Movie.</summary>
     public void Configure(Button start, Button pause, Button play, Button sites, Button save, Slider diameter, TMP_Text diameterText,
         TMP_Text title, TMP_Text status, XRKeyboard keyboard, float width, float height,
-        Button playAgain, Slider bindingTime, TMP_Text bindingTimeText, XRGrabInteractable grab, float barSpace)
+        Button playAgain, Slider bindingTime, TMP_Text bindingTimeText, XRGrabInteractable grab, float barSpace, Button scenario)
     {
+        m_ScenarioRow = scenario;
         m_PlayAgainRow = playAgain;
         m_BindingTimeSlider = bindingTime;
         m_BindingTimeText = bindingTimeText;

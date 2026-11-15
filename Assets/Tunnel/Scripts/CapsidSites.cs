@@ -26,6 +26,13 @@ using UnityEngine.XR.Interaction.Toolkit.Interactables;
 /// A virion's sites can instead be its protrusions (the spikes of SARS-CoV-2): each site is then the cylinder that
 /// encloses one spike (its collider, a little larger), the antibody is drawn to the middle of the spike's outer end
 /// and binds there, and the movie's slider leaves those sites the size of their spikes.
+/// A protein's site can instead be a ligand's pocket (EGFR's, for the Ligand binding movie): one capture sphere
+/// centred where the ligand sits when bound, its radius in ångströms at the molecules' true scale set by the movie's
+/// Capture radius slider (see <see cref="TunnelMovie.captureRadius"/>). A free ligand that touches it glides into its
+/// bound pose (see <see cref="boundPosition"/>), and while it is bound the protein is light blue. A residue the ligand
+/// bonds to (EGFR's Cys775, covalently bonded to its inhibitor in the crystal) is shown only once the ligand has settled
+/// in its pocket, and hidden the moment it lets go (see <see cref="shownWhileBound"/>). Pocket sites are live only in
+/// the Ligand binding movie, the others only in the Antibody action.
 /// </summary>
 public class CapsidSites : NetworkBehaviour
 {
@@ -39,6 +46,7 @@ public class CapsidSites : NetworkBehaviour
         public Quaternion rotation;
         public float scale;           // its size relative to the capsid's
         public float volume;          // its volume, in the capsid's units
+        public float startScale;      // its size relative to the capsid's when it touched (a ligand grows or shrinks to fit)
 
         public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
         {
@@ -49,6 +57,7 @@ public class CapsidSites : NetworkBehaviour
             serializer.SerializeValue(ref rotation);
             serializer.SerializeValue(ref scale);
             serializer.SerializeValue(ref volume);
+            serializer.SerializeValue(ref startScale);
         }
 
         public bool Equals(Binding other) => site == other.site && position == other.position && rotation == other.rotation;
@@ -127,6 +136,27 @@ public class CapsidSites : NetworkBehaviour
     [Tooltip("Seconds a bound antibody takes to settle into its place.")]
     float m_SettleTime = 0.3f;
 
+    [Header("Ligand pocket (a protein's)")]
+    [SerializeField]
+    [Tooltip("Whether its one site is a ligand's pocket with a capture sphere (EGFR's), rather than antibody sites.")]
+    bool m_Pocket;
+
+    [SerializeField]
+    [Tooltip("Where the bound ligand's own origin goes (its own coordinates): the ligand's pose in the crystal structure.")]
+    Vector3 m_BoundPosition;
+
+    [SerializeField]
+    [Tooltip("How the bound ligand is turned (its own coordinates).")]
+    Quaternion m_BoundRotation = Quaternion.identity;
+
+    [SerializeField]
+    [Tooltip("Its own units per ångström (the molecules' true scale), for the capture radius.")]
+    float m_UnitsPerAngstrom = 0.2f / 167f;
+
+    [SerializeField]
+    [Tooltip("Shown only while a ligand is bound and settled in its pocket: the residue it bonds to (EGFR's Cys775).")]
+    GameObject m_ShownWhileBound;
+
     /// <summary>Every capsid with binding sites in the scene.</summary>
     public static readonly List<CapsidSites> all = new();
 
@@ -149,16 +179,56 @@ public class CapsidSites : NetworkBehaviour
     float m_FractionShown;
     float m_DiameterShown;
     static Mesh s_Cylinder;
+    static Mesh s_Sphere;
 
     public Rigidbody body => m_Body;
 
     /// <summary>The movie of the container the capsid is in, if any.</summary>
     public TunnelMovie movie { get; private set; }
 
-    /// <summary>Whether its sites are live: the movie of the container it's in is playing.</summary>
-    public bool sitesActive => movie != null && movie.isPlaying;
+    /// <summary>
+    /// Whether its sites are live: the movie of the container it's in is playing, and it is that movie's kind (pockets
+    /// in Ligand binding, antibody sites in Antibody action).
+    /// </summary>
+    public bool sitesActive => movie != null && movie.isPlaying
+        && movie.scenario == (m_Pocket ? TunnelMovie.Scenario.LigandBinding : TunnelMovie.Scenario.AntibodyAction);
 
     public int siteCount => m_Axes.Length;
+
+    /// <summary>Whether its one site is a ligand's pocket with a capture sphere (EGFR's, in the Ligand binding movie).</summary>
+    public bool pocket => m_Pocket;
+
+    /// <summary>Where a bound ligand's origin goes, in its own coordinates (the ligand's pose in the crystal structure).</summary>
+    public Vector3 boundPosition => m_BoundPosition;
+
+    /// <summary>How a bound ligand is turned, in its own coordinates.</summary>
+    public Quaternion boundRotation => m_BoundRotation;
+
+    /// <summary>What is shown only while a ligand sits bound in its pocket (EGFR's Cys775), if anything.</summary>
+    public GameObject shownWhileBound => m_ShownWhileBound;
+
+    /// <summary>The molecule that binds to its sites (as the Molecules list names it): IGG, or EGFR's ligand.</summary>
+    public string binds => m_AntibodyPrefab != null ? MoleculeName(m_AntibodyPrefab) : "";
+
+    /// <summary>
+    /// Whether this molecule is the kind that binds to its sites: made from the same toy (same network prefab), or,
+    /// for one without a network id, of the same name.
+    /// </summary>
+    public bool Binds(GameObject molecule)
+    {
+        if (molecule == null || m_AntibodyPrefab == null)
+            return false;
+        if (molecule.TryGetComponent(out NetworkObject own) && m_AntibodyPrefab.TryGetComponent(out NetworkObject prefab)
+            && own.PrefabIdHash != 0 && prefab.PrefabIdHash != 0)
+            return own.PrefabIdHash == prefab.PrefabIdHash;
+        return MoleculeName(molecule) == binds;
+    }
+
+    /// <summary>
+    /// The capture sphere's radius (world), from the movie's Capture radius in ångströms at the molecules' true scale,
+    /// times its magnification.
+    /// </summary>
+    public float captureRadius => (movie != null ? movie.captureRadius : TunnelMovie.k_DefaultCaptureRadius) * m_UnitsPerAngstrom * transform.lossyScale.x;
 
     public int bindingCount => IsSpawned ? m_Bindings.Count : m_LocalBindings.Count;
 
@@ -188,7 +258,7 @@ public class CapsidSites : NetworkBehaviour
     public string symmetry => m_Symmetry;
 
     /// <summary>Whether its sites are protrusions (spikes) the antibody binds to the outer end of.</summary>
-    public bool protrusions => m_Points.Length == m_Axes.Length && m_Points.Length > 0;
+    public bool protrusions => !m_Pocket && m_Points.Length == m_Axes.Length && m_Points.Length > 0;
 
     Binding BindingAt(int i) => IsSpawned ? m_Bindings[i] : m_LocalBindings[i];
 
@@ -239,13 +309,13 @@ public class CapsidSites : NetworkBehaviour
     }
 
     /// <summary>Where site i stands on the capsid's surface (world).</summary>
-    public Vector3 SiteBase(int i) => transform.TransformPoint(protrusions ? m_Points[i] : m_Axes[i] * m_BaseRadius[i]);
+    public Vector3 SiteBase(int i) => transform.TransformPoint(m_Pocket || protrusions ? m_Points[i] : m_Axes[i] * m_BaseRadius[i]);
 
     /// <summary>The direction site i points out of the capsid (world).</summary>
     public Vector3 SiteAxis(int i) => transform.TransformDirection(m_Axes[i]).normalized;
 
     /// <summary>Site i's length (world).</summary>
-    public float SiteLength(int i) => (protrusions && i < m_Lengths.Length ? m_Lengths[i] : m_Radius * m_LengthFraction) * transform.lossyScale.x;
+    public float SiteLength(int i) => m_Pocket ? 2f * captureRadius : (protrusions && i < m_Lengths.Length ? m_Lengths[i] : m_Radius * m_LengthFraction) * transform.lossyScale.x;
 
     /// <summary>
     /// Whether an antibody touching it, with its Fab tip here (world), has reached site i: any touch for a capsid site
@@ -254,7 +324,7 @@ public class CapsidSites : NetworkBehaviour
     /// </summary>
     public bool Reached(int i, Vector3 tip)
     {
-        if (!protrusions)
+        if (!protrusions || m_Pocket)
             return true;
         float across = (i < m_Diameters.Length ? m_Diameters[i] : 2f * m_Radius * m_DiameterFraction) * transform.lossyScale.x;
         return (tip - SiteBase(i)).magnitude < 0.5f * across;
@@ -265,13 +335,22 @@ public class CapsidSites : NetworkBehaviour
         var container = m_Body != null ? TunnelContainer.At(m_Body.worldCenterOfMass) : null;
         movie = container != null ? container.movie : null;
         bool active = sitesActive;
-        bool visible = movie != null && movie.showSites;
+        bool visible = movie != null && movie.showSites
+            && movie.scenario == (m_Pocket ? TunnelMovie.Scenario.LigandBinding : TunnelMovie.Scenario.AntibodyAction);
         if ((active || visible) && m_Sites == null)
             BuildSites();
         if (m_Sites != null)
         {
-            float diameter = movie != null ? movie.siteDiameter : m_DiameterFraction;
-            if (diameter != m_DiameterShown && !protrusions)
+            float diameter = m_Pocket ? (movie != null ? movie.captureRadius : TunnelMovie.k_DefaultCaptureRadius)
+                : movie != null ? movie.siteDiameter : m_DiameterFraction;
+            if (m_Pocket && diameter != m_DiameterShown)
+            {
+                // The capture sphere: its radius in ångströms (the sphere mesh is 1 across).
+                m_DiameterShown = diameter;
+                foreach (var site in m_Sites)
+                    site.localScale = Vector3.one * 2f * diameter * m_UnitsPerAngstrom;
+            }
+            else if (diameter != m_DiameterShown && !protrusions)
             {
                 m_DiameterShown = diameter;
                 float across = 2f * m_Radius * diameter;
@@ -305,6 +384,11 @@ public class CapsidSites : NetworkBehaviour
         m_SiteRenderers = new Renderer[count];
         float diameter = 2f * m_Radius * m_DiameterFraction;
         float length = m_Radius * m_LengthFraction;
+        if (m_Pocket)
+        {
+            BuildPocket();
+            return;
+        }
         for (int i = 0; i < count; i++)
         {
             var go = new GameObject($"Binding Site {i + 1}");
@@ -347,6 +431,42 @@ public class CapsidSites : NetworkBehaviour
         Debug.Log(protrusions
             ? $"[Movie] {name}: {count} binding sites, one on each of its {m_Symmetry}"
             : $"[Movie] {name}: {count} binding sites on its {m_Symmetry} axes, {length * transform.lossyScale.x * 100f:0.0} cm long");
+    }
+
+    // The pocket's capture sphere, centred where the ligand sits when bound; sized by the movie's capture radius.
+    void BuildPocket()
+    {
+        if (s_Sphere == null)
+        {
+            var primitive = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            s_Sphere = primitive.GetComponent<MeshFilter>().sharedMesh;
+            Destroy(primitive);
+        }
+        var go = new GameObject("Capture Sphere");
+        go.layer = k_IgnoreRaycastLayer;
+        var t = go.transform;
+        t.SetParent(transform, false);
+        t.localPosition = m_Points[0];
+        float radius = movie != null ? movie.captureRadius : TunnelMovie.k_DefaultCaptureRadius;
+        t.localScale = Vector3.one * 2f * radius * m_UnitsPerAngstrom;
+        m_DiameterShown = radius;
+        var collider = go.AddComponent<SphereCollider>();
+        collider.radius = 0.5f;
+        collider.isTrigger = true;
+        collider.enabled = false;
+        go.AddComponent<MeshFilter>().sharedMesh = s_Sphere;
+        var renderer = go.AddComponent<MeshRenderer>();
+        renderer.sharedMaterial = m_SiteMaterial;
+        renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        renderer.receiveShadows = false;
+        renderer.enabled = false;
+        var site = go.AddComponent<CapsidSite>();
+        site.capsid = this;
+        site.index = 0;
+        m_Sites = new[] { t };
+        m_SiteColliders = new Collider[] { collider };
+        m_SiteRenderers = new Renderer[] { renderer };
+        Debug.Log($"[Movie] {name}: a capture sphere of {radius:0} Å radius ({radius * m_UnitsPerAngstrom * transform.lossyScale.x * 100f:0.00} cm) on its ligand's pocket");
     }
 
     // A cylinder of diameter 1 along +z from 0 to 1, closed at both ends.
@@ -420,10 +540,12 @@ public class CapsidSites : NetworkBehaviour
         float time = movie != null ? movie.bindingTime : TunnelMovie.k_DefaultBindingTime;
         m_TimeLeft[binding.site] = time;
         int count = bindingCount;
-        Debug.Log($"[Movie] {antibody.name} bound to {name} at {(protrusions ? "" : m_Symmetry + " ")}site {binding.site + 1} for {time:0} s: " +
+        Debug.Log(m_Pocket
+            ? $"[Movie] {antibody.name} bound in {name}'s pocket for {time:0} s: it turns light blue"
+            : $"[Movie] {antibody.name} bound to {name} at {(protrusions ? "" : m_Symmetry + " ")}site {binding.site + 1} for {time:0} s: " +
             $"{count} of {siteCount} sites taken");
         Remove(antibody);
-        if (fullyCovered && !m_AnnouncedCovered && movie != null)
+        if (fullyCovered && !m_AnnouncedCovered && movie != null && !m_Pocket)
         {
             m_AnnouncedCovered = true;
             movie.Announce($"Every site on a {MoleculeName(gameObject)} {m_Kind} is taken ({count} antibodies): it is fully green.");
@@ -486,9 +608,13 @@ public class CapsidSites : NetworkBehaviour
             return null;
         var binding = BindingAt(index);
         var axis = SiteAxis(site);
-        var position = transform.TransformPoint(binding.position) + axis * m_ReleaseGap;
+        // An antibody comes off just out from its site; a ligand out of its pocket, just past the protein's surface.
+        var position = m_Pocket
+            ? transform.position + axis * (m_Radius * transform.lossyScale.x + m_ReleaseGap)
+            : transform.TransformPoint(binding.position) + axis * m_ReleaseGap;
         var rotation = transform.rotation * binding.rotation;
-        float scale = binding.scale * transform.lossyScale.x;
+        // At the size it came in at (a ligand was shown at the protein's while bound).
+        float scale = (binding.startScale > 0f ? binding.startScale : binding.scale) * transform.lossyScale.x;
         var velocity = (m_Body != null && !m_Body.isKinematic ? m_Body.GetPointVelocity(position) : Vector3.zero) + axis * m_ReleaseSpeed;
 
         if (IsSpawned)
@@ -499,7 +625,9 @@ public class CapsidSites : NetworkBehaviour
         m_BindingsChanged = true;
         if (!fullyCovered)
             m_AnnouncedCovered = false;
-        Debug.Log($"[Movie] {name} let go of the antibody at site {site + 1}: {why}; {bindingCount} of {siteCount} sites taken");
+        Debug.Log(m_Pocket
+            ? $"[Movie] {name} let go of its ligand: {why}"
+            : $"[Movie] {name} let go of the antibody at site {site + 1}: {why}; {bindingCount} of {siteCount} sites taken");
         return MakeFree(position, rotation, scale, velocity);
     }
 
@@ -646,29 +774,35 @@ public class CapsidSites : NetworkBehaviour
             Tint(coveredFraction);
         }
 
-        // Each slides into its place.
+        // Each slides into its place; a pocket's residue shows once its ligand has settled (from everyone's shared list
+        // of bindings, so every headset agrees).
+        bool settled = false;
         for (int i = 0; i < m_Bound.Count; i++)
         {
             var (root, binding, since) = m_Bound[i];
             if (root == null)
                 continue;
             float t = m_SettleTime > 0f ? Mathf.Clamp01((Time.time - since) / m_SettleTime) : 1f;
-            if (root.localPosition == binding.position && root.localRotation == binding.rotation)
+            settled |= t >= 1f;
+            if (root.localPosition == binding.position && root.localRotation == binding.rotation && root.localScale.x == binding.scale)
                 continue;
             float s = t * t * (3f - 2f * t);
             root.localPosition = Vector3.Lerp(binding.startPosition, binding.position, s);
             root.localRotation = Quaternion.Slerp(binding.startRotation, binding.rotation, s);
+            root.localScale = Vector3.one * Mathf.Lerp(binding.startScale > 0f ? binding.startScale : binding.scale, binding.scale, s);
         }
+        if (m_ShownWhileBound != null && m_ShownWhileBound.activeSelf != settled)
+            m_ShownWhileBound.SetActive(settled);
     }
 
     // A bound antibody: the antibody toy's meshes and collider, as part of the capsid.
     Transform MakeAntibody(Binding binding)
     {
-        var root = new GameObject($"Bound Antibody {binding.site + 1}").transform;
+        var root = new GameObject(m_Pocket ? "Bound Ligand" : $"Bound Antibody {binding.site + 1}").transform;
         root.SetParent(transform, false);
         root.localPosition = binding.startPosition;
         root.localRotation = binding.startRotation;
-        root.localScale = Vector3.one * binding.scale;
+        root.localScale = Vector3.one * (binding.startScale > 0f ? binding.startScale : binding.scale);
         if (m_AntibodyPrefab == null)
             return root;
 
@@ -702,7 +836,8 @@ public class CapsidSites : NetworkBehaviour
             part.gameObject.AddComponent<MeshFilter>().sharedMesh = filter.sharedMesh;
             part.gameObject.AddComponent<MeshRenderer>().sharedMaterials = sourceRenderer.sharedMaterials;
         }
-        foreach (var source in m_AntibodyPrefab.GetComponentsInChildren<Collider>(true))
+        // A ligand sits inside its pocket: the protein's own collider already holds it.
+        foreach (var source in m_Pocket ? new Collider[0] : m_AntibodyPrefab.GetComponentsInChildren<Collider>(true))
         {
             if (source.isTrigger)
                 continue;
@@ -743,7 +878,8 @@ public class CapsidSites : NetworkBehaviour
         return root;
     }
 
-    // The capsid's own colours (not its bound antibodies'), shifted toward green by the share of its sites taken.
+    // The capsid's own colours (not its bound antibodies'), shifted toward green by the share of its sites taken (a
+    // protein's toward light blue while its ligand is bound).
     void Tint(float fraction)
     {
         if (Mathf.Approximately(fraction, m_FractionShown))
@@ -754,7 +890,7 @@ public class CapsidSites : NetworkBehaviour
             foreach (var renderer in GetComponentsInChildren<MeshRenderer>(true))
             {
                 if (renderer.GetComponentInParent<CapsidSite>() != null || renderer.transform.parent == null
-                    || renderer.transform.parent.name.StartsWith("Bound Antibody"))
+                    || renderer.transform.parent.name.StartsWith("Bound "))
                     continue;
                 foreach (var material in renderer.materials) // its own copies
                     if (material.HasProperty("_BaseColor"))
@@ -786,6 +922,9 @@ public class CapsidSites : NetworkBehaviour
         m_Lengths = new float[0];
         m_Diameters = new float[0];
         m_Kind = "capsid";
+        m_Pocket = false;
+        m_ShownWhileBound = null;
+        m_CoveredColour = new Color(0.18f, 0.85f, 0.25f);
     }
 
     /// <summary>
@@ -800,6 +939,28 @@ public class CapsidSites : NetworkBehaviour
         m_Lengths = lengths;
         m_Diameters = diameters;
         m_Kind = kind;
+    }
+
+    /// <summary>
+    /// Set by Tunnel > Movie > Build Ligand Binding for a protein with a ligand's pocket (EGFR): the capture sphere's
+    /// centre and the bound ligand's pose (its own coordinates), its outer radius, the ligand toy, how a shown site
+    /// looks, how light blue it turns while bound, and its units per ångström.
+    /// </summary>
+    public void ConfigurePocket(Vector3 centre, Vector3 boundPosition, Quaternion boundRotation, float radius, GameObject ligand,
+        Material siteMaterial, Color boundColour, float unitsPerAngstrom, GameObject shownWhileBound)
+    {
+        var axis = centre.sqrMagnitude > 1e-12f ? centre.normalized : Vector3.up;
+        Configure("pocket", new[] { axis }, new[] { centre.magnitude }, radius, ligand, siteMaterial);
+        m_ShownWhileBound = shownWhileBound;
+        m_Points = new[] { centre };
+        m_Pocket = true;
+        m_Kind = "protein";
+        m_BoundPosition = boundPosition;
+        m_BoundRotation = boundRotation;
+        m_CoveredColour = boundColour;
+        m_UnitsPerAngstrom = unitsPerAngstrom;
+        m_SettleTime = 0.6f;
+        m_ReleaseGap = 0.005f;
     }
 #endif
 }

@@ -16,13 +16,16 @@ using UnityEngine.XR.Interaction.Toolkit.Transformers;
 /// (<see cref="AntibodyBinder"/>) found from its chains; the movie's menu (<see cref="TunnelMoviePanel"/>, from the
 /// TS Menu's rows and the browser's keyboard, with a bar along its top to carry it by); and then the containers again,
 /// which carry the movie (Tunnel > Containers > Build Containers).
-/// Runs from Tunnel > Movie > Build 3D Movie.
+/// It also makes the Ligand binding movie's parts (see <see cref="BuildLigandBinding"/>): EGFR's capture sphere and its
+/// ligand's bound pose, from the crystal structure 9S3X, and the ligand's binder.
+/// Runs from Tunnel > Movie > Build 3D Movie (everything) or Tunnel > Movie > Build Ligand Binding (EGFR, its ligand
+/// and the menu only).
 /// </summary>
 static class MovieBuilder
 {
     const string k_Folder = "Assets/Tunnel/Movie";
     const string k_PanelPath = k_Folder + "/Movie_Panel.prefab";
-    const string k_AntibodyPath = "Assets/Molecules/IGG/Toy_IGG_Networked.prefab";
+    static string k_AntibodyPath => MoleculeLibraryBuilder.ToyPath("IGG"); // in Assets/Molecules/proteins
     const string k_SegmentPath = "Assets/Tunnel/TG_TunnelSegment.prefab";
     const string k_BrowserPath = "Assets/Tunnel/BrowserPanel.prefab";
 
@@ -33,7 +36,7 @@ static class MovieBuilder
     const float k_SiteDiameterFraction = 0.1f;   // of the capsid's diameter
 
     const float k_CanvasScale = 0.0004f;                   // meters per canvas unit, as the palette
-    static readonly Vector2 k_CanvasSize = new(620f, 920f); // 25 x 37 cm
+    static readonly Vector2 k_CanvasSize = new(620f, 990f); // 25 x 40 cm
 
     // The bar along the menu's top that hands take it by (meters): its size, and the room it takes above the canvas.
     static readonly Vector3 k_BarSize = new(0.16f, 0.018f, 0.01f);
@@ -41,6 +44,17 @@ static class MovieBuilder
 
     [MenuItem("Tunnel/Movie/Build 3D Movie")]
     public static string Build() => BuilderScratchScene.Run(BuildAll);
+
+    [MenuItem("Tunnel/Movie/Build Ligand Binding")]
+    public static string BuildLigandMovie() => BuilderScratchScene.Run(() =>
+    {
+        if (!AssetDatabase.IsValidFolder(k_Folder))
+            AssetDatabase.CreateFolder("Assets/Tunnel", "Movie");
+        string log = $"[Movie] {BuildLigandBinding(SiteMaterial())}; {BuildPanel()}";
+        AssetDatabase.SaveAssets();
+        Debug.Log(log);
+        return log;
+    });
 
     static string BuildAll()
     {
@@ -53,6 +67,7 @@ static class MovieBuilder
             log.Append(BuildCapsid(name, fold, antibody, siteMaterial)).Append("; ");
         log.Append(BuildVirion(antibody, siteMaterial)).Append("; ");
         log.Append(BuildAntibody()).Append("; ");
+        log.Append(BuildLigandBinding(siteMaterial)).Append("; ");
         log.Append(BuildPanel()).Append("; ");
         AssetDatabase.SaveAssets();
         log.Append(ContainerBuilder.Build());
@@ -102,8 +117,8 @@ static class MovieBuilder
 
     static string BuildCapsid(string name, int fold, GameObject antibody, Material siteMaterial)
     {
-        string path = $"Assets/Molecules/{name}/Toy_{name}_Networked.prefab";
-        var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+        string path = MoleculeLibraryBuilder.ToyPath(name);
+        var prefab = path != null ? AssetDatabase.LoadAssetAtPath<GameObject>(path) : null;
         if (prefab == null)
             return $"{name}: no toy";
         var points = Vertices(prefab);
@@ -148,7 +163,7 @@ static class MovieBuilder
             $"site bases {bases.Min() / k_UnitsPerAngstrom:0}-{bases.Max() / k_UnitsPerAngstrom:0} Å";
     }
 
-    const string k_VirionPath = "Assets/Molecules/SARS/Toy_SARS_Networked.prefab";
+    static string k_VirionPath => MoleculeLibraryBuilder.ToyPath("SARS"); // in Assets/Molecules/viral capsids
 
     /// <summary>
     /// SARS-CoV-2's binding sites: its spikes, from the cylinders that enclose them (its "Spike N" colliders, made by
@@ -452,6 +467,249 @@ static class MovieBuilder
 
     #endregion
 
+    #region Ligand binding
+
+    const string k_Protein = "EGFR";
+    const string k_Ligand = "EGFR ligand";
+
+    // Both models come from Mol* as GLB files of PDB entry 9S3X (EGFR T790M/L858R with the covalent inhibitor
+    // NCL-26007, which Mol* exports with the cysteine it is bonded to): their vertices are in the structure's own
+    // coordinates, so the ligand's place on EGFR is where the two meshes already are (each file's node matrix only
+    // re-centres it, and the library centres each toy on its own bounds instead).
+
+    // The ligand model's part that is the cysteine its inhibitor bonds to (the first of 9S3X-ligand.glb's two meshes;
+    // the second is the inhibitor, NCL-26007), and what it is called.
+    const int k_BondedResiduePart = 0;
+    const string k_BondedResidue = "Cys775";
+
+    // Light blue: an EGFR with its ligand bound.
+    static readonly Color k_BoundBlue = new(0.55f, 0.82f, 1f);
+
+    // EGFR's body collider: this many convex pieces of its surface (a single convex shape fills the cleft the ligand
+    // binds in, so its pocket would lie 19 Å inside it and no free ligand could reach a 10 Å capture sphere), leaving
+    // out the surface within this distance of where the ligand sits (Å), so its pocket stays open.
+    const int k_BodyPieces = 8;
+    const float k_PocketOpening = 14f;
+
+    /// <summary>
+    /// The Ligand binding movie's parts. EGFR's toy gets one binding site, its ligand's pocket: the pose a bound ligand
+    /// takes, which is the ligand toy placed as in the crystal structure, and a capture sphere centred on that bound
+    /// ligand (the middle of its mesh). Both models' meshes (egfr.glb and 9S3X-ligand.glb, from Mol*) are in the
+    /// structure's coordinates, and each is mapped into its toy as the molecule library did (see
+    /// <see cref="MoleculeLibraryBuilder.ModelToToy"/>), so the pose is one toy's frame in the other's. Its body
+    /// collider follows its surface and leaves the pocket open (see <see cref="BuildOpenPocketBody"/>). The ligand's toy
+    /// gets a binder with no Fab arms (it glides straight into its pose).
+    /// </summary>
+    static string BuildLigandBinding(Material siteMaterial)
+    {
+        string proteinFolder = MoleculeLibraryBuilder.FolderOf(k_Protein);
+        string ligandFolder = MoleculeLibraryBuilder.FolderOf(k_Ligand);
+        string proteinPath = MoleculeLibraryBuilder.ToyPath(k_Protein);
+        if (proteinPath == null || ligandFolder == null)
+            return "ligand binding: no EGFR toy or EGFR ligand folder (Tunnel > Molecules > Update Molecule Library)";
+        if (!MoleculeLibraryBuilder.ModelToToy(ligandFolder, out _, out string ligandModel))
+            return "ligand binding: no ligand model";
+        if (!ligandModel.EndsWith(".glb", System.StringComparison.OrdinalIgnoreCase) && !ligandModel.EndsWith(".gltf", System.StringComparison.OrdinalIgnoreCase))
+            return $"ligand binding: {ligandModel} is not a GLB from Mol* (only those keep the structure's coordinates)";
+
+        // The free ligand is the inhibitor alone: its toy is made again without the cysteine it is bonded to in the
+        // crystal, which goes on EGFR instead, shown only while a ligand sits bound.
+        var model = AssetDatabase.LoadAssetAtPath<GameObject>(ligandModel);
+        var parts = model.GetComponentsInChildren<MeshFilter>(true).Where(f => f.sharedMesh != null).ToList();
+        var residue = parts.Count > 1 ? parts.FirstOrDefault(f => f.transform.GetSiblingIndex() == k_BondedResiduePart) : null;
+        bool Inhibitor(MeshFilter f) => f != residue;
+        var ligandPrefab = MoleculeLibraryBuilder.RebuildToy(ligandFolder, "ligands", Inhibitor);
+        if (ligandPrefab == null)
+            return "ligand binding: couldn't make the ligand's toy";
+        string ligandPath = AssetDatabase.GetAssetPath(ligandPrefab);
+        if (!MoleculeLibraryBuilder.ModelToToy(proteinFolder, out var proteinMeshToToy, out _)
+            || !MoleculeLibraryBuilder.ModelToToy(ligandFolder, out var ligandMeshToToy, out _, Inhibitor))
+            return "ligand binding: no EGFR or ligand model";
+
+        // A point of the structure goes into each model's meshes the same way (Unity's glTF import mirrors x), so the
+        // ligand toy's frame in the protein toy's is one mapping after the other's inverse.
+        var pose = proteinMeshToToy * ligandMeshToToy.inverse;
+        var poseScale = pose.lossyScale;
+        if (Mathf.Abs(poseScale.x - 1f) > 1e-3f || Mathf.Abs(poseScale.y - 1f) > 1e-3f || Mathf.Abs(poseScale.z - 1f) > 1e-3f)
+            return $"ligand binding: the two toys aren't at one scale ({poseScale})";
+        // The capture sphere is centred on the bound ligand: its toy's origin is the middle of its mesh.
+        var captureCentre = pose.GetPosition();
+
+        var protein = PrefabUtility.LoadPrefabContents(proteinPath);
+        float radius;
+        string body;
+        string bonded = "";
+        try
+        {
+            radius = Vertices(protein).Max(p => p.magnitude);
+            body = BuildOpenPocketBody(protein, proteinPath, captureCentre);
+            var shown = residue != null ? BuildBondedResidue(protein, residue, proteinMeshToToy, out bonded) : null;
+            var sites = protein.GetComponent<CapsidSites>() ?? protein.AddComponent<CapsidSites>();
+            sites.ConfigurePocket(captureCentre, pose.GetPosition(), pose.rotation, radius, ligandPrefab, siteMaterial, k_BoundBlue,
+                k_UnitsPerAngstrom, shown);
+            EditorUtility.SetDirty(sites);
+            PrefabUtility.SaveAsPrefabAsset(protein, proteinPath);
+        }
+        finally
+        {
+            PrefabUtility.UnloadPrefabContents(protein);
+        }
+
+        var ligand = PrefabUtility.LoadPrefabContents(ligandPath);
+        try
+        {
+            var binder = ligand.GetComponent<AntibodyBinder>() ?? ligand.AddComponent<AntibodyBinder>();
+            binder.Configure(new Vector3[0], new Vector3[0]);
+            EditorUtility.SetDirty(binder);
+            PrefabUtility.SaveAsPrefabAsset(ligand, ligandPath);
+        }
+        finally
+        {
+            PrefabUtility.UnloadPrefabContents(ligand);
+        }
+
+        var offset = pose.GetPosition() / k_UnitsPerAngstrom;
+        return $"ligand binding: the free ligand is the inhibitor alone ({SpawnNozzle.Triangles(ligandPrefab):N0} triangles); {body}; {bonded}; " +
+            $"the bound ligand (and its capture sphere's centre) at ({offset.x:0.00}, {offset.y:0.00}, {offset.z:0.00}) Å in EGFR's toy, " +
+            $"{offset.magnitude:0.0} Å from its centre, turned {Quaternion.Angle(Quaternion.identity, pose.rotation):0.00}°";
+    }
+
+    /// <summary>
+    /// The residue the ligand is bonded to (Cys775), in its atoms' colours, as a hidden part of the protein's toy
+    /// ("Bound Cys775", not tinted with it), placed as in the crystal: shown only while a ligand sits bound. Its meshes
+    /// and materials go in the protein's meshes asset. No collider: it lies inside the protein.
+    /// </summary>
+    static GameObject BuildBondedResidue(GameObject protein, MeshFilter residue, Matrix4x4 proteinMeshToToy, out string report)
+    {
+        foreach (Transform child in protein.transform.Cast<Transform>().ToList())
+            if (child.name.StartsWith("Bound Cys"))
+                Object.DestroyImmediate(child.gameObject);
+        string meshPath = AssetDatabase.GetAssetPath(protein.GetComponentsInChildren<MeshFilter>(true)
+            .First(f => f.sharedMesh != null && f.transform.IsChildOf(protein.transform.GetChild(0))).sharedMesh);
+        foreach (var old in AssetDatabase.LoadAllAssetsAtPath(meshPath).Where(o => o != null && o.name.StartsWith(k_BondedResidue + "_")).ToList())
+            Object.DestroyImmediate(old, true);
+
+        // Its mesh is in the structure's coordinates, as EGFR's own mesh is: the same mapping takes it into EGFR's toy.
+        var parts = MoleculeLibraryBuilder.ColouredParts(new List<MeshFilter> { residue }, f => proteinMeshToToy, k_BondedResidue);
+        var holder = new GameObject($"Bound {k_BondedResidue}");
+        holder.transform.SetParent(protein.transform, false);
+        holder.layer = protein.transform.GetChild(0).gameObject.layer;
+        int triangles = 0;
+        foreach (var (mesh, material) in parts)
+        {
+            AssetDatabase.AddObjectToAsset(mesh, meshPath);
+            AssetDatabase.AddObjectToAsset(material, meshPath);
+            var part = new GameObject(mesh.name, typeof(MeshFilter), typeof(MeshRenderer));
+            part.layer = holder.layer;
+            part.transform.SetParent(holder.transform, false);
+            part.GetComponent<MeshFilter>().sharedMesh = mesh;
+            part.GetComponent<MeshRenderer>().sharedMaterial = material;
+            triangles += mesh.triangles.Length / 3;
+        }
+        holder.SetActive(false);
+        report = $"{k_BondedResidue} ({triangles:N0} triangles, {parts.Count} colours) shown on EGFR only while a ligand is bound";
+        return holder;
+    }
+
+    /// <summary>
+    /// Gives a protein a body collider that follows its surface and leaves its ligand's pocket open: its surface split
+    /// into <see cref="k_BodyPieces"/> patches (k-means on its vertices, the same every time), each patch's convex hull a
+    /// collider, without the surface within <see cref="k_PocketOpening"/> Å of the pocket. Replaces the one convex
+    /// shape the molecule library gave it; the pieces' meshes go in its meshes asset.
+    /// </summary>
+    static string BuildOpenPocketBody(GameObject protein, string proteinPath, Vector3 pocket)
+    {
+        var holder = protein.transform.Find("Collider");
+        var surface = protein.GetComponentsInChildren<MeshFilter>(true).Where(f => f.sharedMesh != null && f.transform.IsChildOf(protein.transform.GetChild(0))).ToList();
+        if (holder == null || surface.Count == 0)
+            return "no collider holder or surface";
+        var toRoot = protein.transform.worldToLocalMatrix;
+        var points = new List<Vector3>();
+        var triangles = new List<int>();
+        foreach (var filter in surface)
+        {
+            var m = toRoot * filter.transform.localToWorldMatrix;
+            int start = points.Count;
+            points.AddRange(filter.sharedMesh.vertices.Select(v => m.MultiplyPoint3x4(v)));
+            triangles.AddRange(filter.sharedMesh.triangles.Select(t => t + start));
+        }
+
+        // k-means, seeded by farthest points from the centre outward, so it comes out the same every time.
+        var centres = new List<Vector3> { points.OrderByDescending(p => p.sqrMagnitude).First() };
+        while (centres.Count < k_BodyPieces)
+            centres.Add(points.OrderByDescending(p => centres.Min(c => (p - c).sqrMagnitude)).First());
+        var patch = new int[points.Count];
+        for (int round = 0; round < 30; round++)
+        {
+            for (int i = 0; i < points.Count; i++)
+            {
+                float nearest = float.MaxValue;
+                for (int c = 0; c < centres.Count; c++)
+                {
+                    float d = (points[i] - centres[c]).sqrMagnitude;
+                    if (d < nearest)
+                    {
+                        nearest = d;
+                        patch[i] = c;
+                    }
+                }
+            }
+            for (int c = 0; c < centres.Count; c++)
+            {
+                var members = Enumerable.Range(0, points.Count).Where(i => patch[i] == c).ToList();
+                if (members.Count > 0)
+                    centres[c] = members.Aggregate(Vector3.zero, (sum, i) => sum + points[i]) / members.Count;
+            }
+        }
+
+        // The old collider and pieces go; the holder sits at the toy's origin.
+        string meshPath = AssetDatabase.GetAssetPath(surface[0].sharedMesh);
+        foreach (var old in AssetDatabase.LoadAllAssetsAtPath(meshPath).OfType<Mesh>().Where(m => m.name.Contains("_Body ") || m.name.EndsWith("_Collider")).ToList())
+            Object.DestroyImmediate(old, true);
+        foreach (var collider in holder.GetComponentsInChildren<Collider>(true))
+        {
+            if (collider.gameObject == holder.gameObject)
+                Object.DestroyImmediate(collider);
+            else
+                Object.DestroyImmediate(collider.gameObject);
+        }
+        holder.localPosition = Vector3.zero;
+        holder.localRotation = Quaternion.identity;
+        holder.localScale = Vector3.one;
+
+        float opening = k_PocketOpening * k_UnitsPerAngstrom;
+        string name = CapsidSites.MoleculeName(protein);
+        int made = 0;
+        for (int c = 0; c < centres.Count; c++)
+        {
+            var keep = Enumerable.Range(0, points.Count).Where(i => patch[i] == c && (points[i] - pocket).magnitude > opening).ToList();
+            var index = new Dictionary<int, int>();
+            for (int i = 0; i < keep.Count; i++)
+                index[keep[i]] = i;
+            var kept = new List<int>();
+            for (int t = 0; t < triangles.Count; t += 3)
+                if (index.TryGetValue(triangles[t], out int a) && index.TryGetValue(triangles[t + 1], out int b) && index.TryGetValue(triangles[t + 2], out int d))
+                    kept.AddRange(new[] { a, b, d });
+            if (kept.Count < 12)
+                continue;
+            var mesh = new Mesh { name = $"{name}_Body {made + 1}" };
+            mesh.SetVertices(keep.Select(i => points[i]).ToList());
+            mesh.SetTriangles(kept, 0);
+            mesh.RecalculateBounds();
+            AssetDatabase.AddObjectToAsset(mesh, meshPath);
+            var piece = new GameObject($"Body {made + 1}");
+            piece.layer = holder.gameObject.layer;
+            piece.transform.SetParent(holder, false);
+            var collider = piece.AddComponent<MeshCollider>();
+            collider.sharedMesh = mesh;
+            collider.convex = true;
+            made++;
+        }
+        return $"{name}'s body: {made} convex pieces, its pocket open within {k_PocketOpening:0} Å";
+    }
+
+    #endregion
+
     #region Panel
 
     static string BuildPanel()
@@ -485,7 +743,7 @@ static class MovieBuilder
             background.color = menuPanel.color;
 
             var titleTemplate = control.Find("Container List/Title").gameObject;
-            var title = Text(titleTemplate, canvas, "Title", TunnelMovie.k_Title, new Vector2(0f, 408f), new Vector2(560f, 64f));
+            var title = Text(titleTemplate, canvas, "Title", TunnelMovie.k_Title, new Vector2(0f, 443f), new Vector2(560f, 64f));
             title.alignment = TextAlignmentOptions.Left;
 
             var rowTemplate = control.Find("Container List/Box Row").gameObject;
@@ -509,17 +767,18 @@ static class MovieBuilder
                 }
                 return button;
             }
-            var start = Row("Start Row", new Vector2(0f, 335f), 560f, "Start", true);
-            var pause = Row("Pause Row", new Vector2(-142f, 270f), 276f, "Pause", true);
-            var play = Row("Play Row", new Vector2(142f, 270f), 276f, "Play", true);
-            var playAgain = Row("Play Again Row", new Vector2(0f, 205f), 560f, "Play again", false);
-            var sites = Row("Sites Row", new Vector2(0f, 135f), 560f, "□  Show binding sites", false);
+            var scenario = Row("Scenario Row", new Vector2(0f, 370f), 560f, $"Movie: {TunnelMovie.k_Title}", false);
+            var start = Row("Start Row", new Vector2(0f, 300f), 560f, "Start", true);
+            var pause = Row("Pause Row", new Vector2(-142f, 235f), 276f, "Pause", true);
+            var play = Row("Play Row", new Vector2(142f, 235f), 276f, "Play", true);
+            var playAgain = Row("Play Again Row", new Vector2(0f, 170f), 560f, "Play again", false);
+            var sites = Row("Sites Row", new Vector2(0f, 100f), 560f, "□  Show binding sites", false);
 
             // The sites' diameter: the Containers list's viscosity slider, 2% to 30% of the capsid's diameter.
             var diameterGroup = Object.Instantiate(control.Find("Container List/Viscosity").gameObject, canvas, false);
             diameterGroup.name = "Site Diameter";
             var diameterRect = (RectTransform)diameterGroup.transform;
-            diameterRect.anchoredPosition = new Vector2(0f, 40f);
+            diameterRect.anchoredPosition = new Vector2(0f, 5f);
             diameterRect.sizeDelta = new Vector2(540f, 60f);
             var diameter = diameterGroup.GetComponentInChildren<Slider>(true);
             diameter.name = "Site Diameter Slider";
@@ -554,7 +813,7 @@ static class MovieBuilder
             var timeGroup = Object.Instantiate(control.Find("Container List/Viscosity").gameObject, canvas, false);
             timeGroup.name = "Binding Time";
             var timeRect = (RectTransform)timeGroup.transform;
-            timeRect.anchoredPosition = new Vector2(0f, -100f);
+            timeRect.anchoredPosition = new Vector2(0f, -135f);
             timeRect.sizeDelta = new Vector2(540f, 60f);
             var bindingTime = timeGroup.GetComponentInChildren<Slider>(true);
             bindingTime.name = "Binding Time Slider";
@@ -585,8 +844,8 @@ static class MovieBuilder
                 tick.GetComponent<TMP_Text>().text = $"{timeValues[i]} s";
             }
 
-            var save = Row("Save Row", new Vector2(0f, -215f), 560f, "Save starting state...", false);
-            var status = Text(titleTemplate, canvas, "Status", "", new Vector2(0f, -360f), new Vector2(560f, 170f));
+            var save = Row("Save Row", new Vector2(0f, -250f), 560f, "Save starting state...", false);
+            var status = Text(titleTemplate, canvas, "Status", "", new Vector2(0f, -395f), new Vector2(560f, 170f));
             status.fontSize = 22f;
             status.fontStyle = FontStyles.Normal;
             status.alignment = TextAlignmentOptions.TopLeft;
@@ -613,7 +872,7 @@ static class MovieBuilder
 
             var component = panel.AddComponent<TunnelMoviePanel>();
             component.Configure(start, pause, play, sites, save, diameter, diameterText, title, status, keyboard,
-                k_CanvasSize.x * k_CanvasScale, k_CanvasSize.y * k_CanvasScale, playAgain, bindingTime, bindingTimeText, grab, k_BarSpace);
+                k_CanvasSize.x * k_CanvasScale, k_CanvasSize.y * k_CanvasScale, playAgain, bindingTime, bindingTimeText, grab, k_BarSpace, scenario);
             PrefabUtility.SaveAsPrefabAsset(panel, k_PanelPath);
             Object.DestroyImmediate(panel);
             return $"panel {k_PanelPath}";

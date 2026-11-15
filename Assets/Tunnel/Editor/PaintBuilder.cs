@@ -20,7 +20,7 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// </summary>
 static class PaintBuilder
 {
-    const string k_TemplatePath = "Assets/Molecules/2PLV/Toy_2PLV_Networked.prefab";
+    static string k_TemplatePath => MoleculeLibraryBuilder.TemplatePath; // 2PLV's toy, wherever its category folder is
     const string k_Folder = "Assets/Tunnel/Paint";
     const string k_RegistryPath = "Assets/Tunnel/TunnelPrefabs.asset";
     const string k_SegmentPath = "Assets/Tunnel/TG_TunnelSegment.prefab";

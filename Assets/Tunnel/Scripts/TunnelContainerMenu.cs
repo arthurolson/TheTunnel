@@ -13,8 +13,8 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// sets itself into a tunnel wall (see <see cref="TunnelContainer.isMixedReality"/>),
 /// and Unsnap from wall pulls it back out into the tunnel (see <see cref="TunnelContainer.Unsnap"/>);
 /// Random motion / Ballistic motion and the thermometer (absolute zero to 100 °C, continuous, read in °C) show and set
-/// the heat inside it (see <see cref="TunnelContainer.temperature"/>); Antibody action controls shows or hides the
-/// menu of its Antibody action (see <see cref="TunnelMovie"/>); Clear contents deletes everything inside it for
+/// the heat inside it (see <see cref="TunnelContainer.temperature"/>); 3D movie controls shows or hides the menu of
+/// its 3D movie, Antibody action or Ligand binding, chosen on that menu (see <see cref="TunnelMovie"/>); Clear contents deletes everything inside it for
 /// everyone, leaving the container (see <see cref="TunnelContainer.ClearContents"/>).
 /// A splat-box (see <see cref="SplatBox"/>) is only a frame for a 3D portrait, chosen on its own menu beside it: it can
 /// be a mixed reality box, but the medium, heat and movie rows don't apply to it.
@@ -183,13 +183,13 @@ public class TunnelContainerMenu : NetworkBehaviour
     void ShowMovie(TunnelContainer container)
     {
         var movie = container != null ? container.movie : null;
-        string title = $"{TunnelMovie.k_Title} controls";
+        const string title = "3D movie controls";
         if (container != null && !container.hasMedium)
             SetRow(m_MovieRow, $"□  {title}  <color=#AAA>(not for a splat-box)</color>", false);
         else if (movie == null)
             SetRow(m_MovieRow, $"□  {title}  <color=#AAA>(place a container first)</color>", false);
         else
-            SetRow(m_MovieRow, (movie.controlsShown ? "■" : "□") + $"  {title}  <color=#AAA>on the container</color>", true);
+            SetRow(m_MovieRow, (movie.controlsShown ? "■" : "□") + $"  {title}  <color=#AAA>{movie.title}, on the container</color>", true);
     }
 
     void ShowClear(TunnelContainer container)

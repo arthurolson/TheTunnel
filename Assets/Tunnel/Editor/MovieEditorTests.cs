@@ -171,7 +171,7 @@ static class MovieEditorTests
         movie.SetControls(true);
         Call(movie, "Update");
         var panel = movie.panel;
-        Check(panel != null && panel.gameObject.activeSelf, "Antibody action controls shows its menu");
+        Check(panel != null && panel.gameObject.activeSelf, "3D movie controls shows its menu");
         if (panel != null)
         {
             Call(panel, "Update");
@@ -196,7 +196,7 @@ static class MovieEditorTests
         Call(containerMenu, "Update");
         var movieRow = Field<Button>(containerMenu, "m_MovieRow");
         var clearRow = Field<Button>(containerMenu, "m_ClearRow");
-        Check(movieRow.GetComponentInChildren<TMP_Text>(true).text.Contains("Antibody action controls"), "the Containers list's row reads Antibody action controls");
+        Check(movieRow.GetComponentInChildren<TMP_Text>(true).text.Contains("3D movie controls"), "the Containers list's row reads 3D movie controls");
         Check(clearRow != null && clearRow.interactable, "the Containers list has Clear contents");
 
         // Play again: all let go at once, a 5 s countdown, then the starting state.

@@ -6,7 +6,10 @@ using UnityEngine.UI;
 using UnityEngine.XR.Templates.MRTTabletopAssets;
 
 /// <summary>
-/// The TS Menu's "Molecules" list: one row per molecule in Assets/Molecules (see <see cref="TunnelPrefabRegistry"/>).
+/// The TS Menu's "Molecules" list: one row per molecule in Assets/Molecules (see <see cref="TunnelPrefabRegistry"/>),
+/// grouped under a heading for each category that has any (Viral capsids, Proteins, Ligands, Chemicals, Nucleic
+/// acids, in that order: the category folders in Assets/Molecules). Headings are only labels; a category with nothing
+/// in it yet has no heading.
 /// Tapping a name places that molecule for everyone inside the tunnel, beside the list's far edge at the list's height,
 /// a little out from the wall the menu is on. It stays there until someone grabs it.
 /// The Magnification slider (1 to 10) under the list sets how large new molecules are: every molecule keeps its true
@@ -39,6 +42,14 @@ public class TunnelMoleculeMenu : NetworkBehaviour
 
     [SerializeField]
     float m_RowSpacing = 58f;
+
+    [SerializeField]
+    [Tooltip("Height of a category heading in the list (it is shorter than a molecule's row).")]
+    float m_HeadingSpacing = 40f;
+
+    [SerializeField]
+    [Tooltip("Colour of the category headings' text.")]
+    Color m_HeadingColor = new(0.62f, 0.83f, 1f, 1f);
 
     [SerializeField]
     [Tooltip("Gap between the list's far edge and a new molecule (meters).")]
@@ -177,20 +188,52 @@ public class TunnelMoleculeMenu : NetworkBehaviour
             Destroy(m_ListContent.GetChild(i).gameObject);
 
         var molecules = m_Prefabs != null ? m_Prefabs.molecules : new List<TunnelPrefabRegistry.Molecule>();
+        float y = 0f;
+        string category = null;
         for (int i = 0; i < molecules.Count; i++)
         {
+            // A heading where a new category starts (the library keeps each category's molecules together).
+            string next = molecules[i].category ?? "";
+            if (next != category)
+            {
+                category = next;
+                AddHeading(TunnelPrefabRegistry.CategoryHeading(category), ref y);
+            }
+
             int index = i;
             var row = Instantiate(m_RowTemplate, m_ListContent);
+            row.name = $"Row {molecules[i].name}";
             row.gameObject.SetActive(true);
-            ((RectTransform)row.transform).anchoredPosition = new Vector2(0f, -i * m_RowSpacing);
+            ((RectTransform)row.transform).anchoredPosition = new Vector2(0f, -y);
             row.GetComponentInChildren<TMP_Text>(true).text = molecules[i].name;
             row.onClick.AddListener(() => Choose(index));
+            y += m_RowSpacing;
         }
 
-        m_ListContent.sizeDelta = new Vector2(m_ListContent.sizeDelta.x, Mathf.Max(1, molecules.Count) * m_RowSpacing);
+        m_ListContent.sizeDelta = new Vector2(m_ListContent.sizeDelta.x, Mathf.Max(m_RowSpacing, y));
         SetStatus(molecules.Count == 0
-            ? "No molecules yet. Add a folder with a model to Assets/Molecules and rebuild the app."
+            ? "No molecules yet. Add a folder with a model to a category folder in Assets/Molecules and rebuild the app."
             : "Set the magnification, then tap a molecule to place it beside this list.");
+    }
+
+    // A category's heading: the row template as a plain label (no button, no background), shorter than a row.
+    void AddHeading(string text, ref float y)
+    {
+        var heading = Instantiate(m_RowTemplate, m_ListContent);
+        heading.name = $"Heading {text}";
+        heading.gameObject.SetActive(true);
+        heading.interactable = false;
+        heading.transition = Selectable.Transition.None;
+        if (heading.targetGraphic != null)
+            heading.targetGraphic.enabled = false;
+        var rect = (RectTransform)heading.transform;
+        rect.sizeDelta = new Vector2(rect.sizeDelta.x, m_HeadingSpacing - 4f);
+        rect.anchoredPosition = new Vector2(0f, -y);
+        var label = heading.GetComponentInChildren<TMP_Text>(true);
+        label.text = $"<b>{text}</b>";
+        label.color = m_HeadingColor;
+        label.alignment = TextAlignmentOptions.BottomLeft;
+        y += m_HeadingSpacing;
     }
 
     void Choose(int index)
@@ -297,28 +340,44 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         return false;
     }
 
-    /// <summary>The radius of a sphere around the molecule's collider (read from the collider's own settings: it is
-    /// still inactive while it's placed, so it has no bounds yet).</summary>
+    /// <summary>The radius of a sphere around the molecule's colliders, from its middle (read from the colliders' own
+    /// settings: it is still inactive while it's placed, so it has no bounds yet).</summary>
     public static float WorldRadius(GameObject molecule)
     {
-        // Molecules carry one collider: a sphere at their outer radius, or an oriented box or ellipsoid around their
-        // surface (see Tunnel > Molecules > Update Molecule Library).
-        var collider = molecule.GetComponentInChildren<Collider>(true);
-        if (collider != null)
+        // Molecules carry a sphere at their outer radius, an oriented box or ellipsoid round their surface (see Tunnel >
+        // Molecules > Update Molecule Library), or several pieces (SARS-CoV-2's membrane and spikes, EGFR's body): the
+        // sphere that holds them all.
+        float radius = 0f;
+        bool any = false;
+        foreach (var collider in molecule.GetComponentsInChildren<Collider>(true))
         {
+            if (collider.isTrigger)
+                continue;
             var scale = collider.transform.lossyScale;
-            float offset = (collider.transform.position - molecule.transform.position).magnitude;
+            float reach;
             switch (collider)
             {
                 case SphereCollider sphere:
-                    return offset + sphere.radius * Mathf.Max(scale.x, Mathf.Max(scale.y, scale.z));
+                    reach = (collider.transform.TransformPoint(sphere.center) - molecule.transform.position).magnitude
+                        + sphere.radius * Mathf.Max(scale.x, Mathf.Max(scale.y, scale.z));
+                    break;
                 case BoxCollider box:
-                    return offset + Vector3.Scale(box.size, scale).magnitude * 0.5f;
+                    reach = (collider.transform.TransformPoint(box.center) - molecule.transform.position).magnitude
+                        + Vector3.Scale(box.size, scale).magnitude * 0.5f;
+                    break;
                 case MeshCollider mesh when mesh.sharedMesh != null:
                     var extents = Vector3.Scale(mesh.sharedMesh.bounds.extents, scale);
-                    return offset + Mathf.Max(extents.x, Mathf.Max(extents.y, extents.z));
+                    reach = (collider.transform.TransformPoint(mesh.sharedMesh.bounds.center) - molecule.transform.position).magnitude
+                        + Mathf.Max(extents.x, Mathf.Max(extents.y, extents.z));
+                    break;
+                default:
+                    continue;
             }
+            radius = Mathf.Max(radius, reach);
+            any = true;
         }
+        if (any)
+            return radius;
 
         var renderer = molecule.GetComponentInChildren<Renderer>(true);
         return renderer != null ? renderer.bounds.extents.magnitude : 0.05f;

@@ -11,6 +11,11 @@ using UnityEngine;
 /// A spike's site (SARS-CoV-2) draws it up to the middle of the spike's outer end, and it binds there, pointing
 /// out along the spike. Only the headset that moves it (its owner) draws it; the host decides the binding.
 /// The Fab tips are found from its chains by Tunnel > Movie > Build 3D Movie.
+/// A ligand (EGFR's, in the Ligand binding movie) carries one too, with no Fab arms: when it touches a free capture
+/// sphere of a protein it binds to (see <see cref="CapsidSites.pocket"/>), it glides straight into its pose in the
+/// crystal structure, shown at the protein's size, for the movie's binding time; then it is let go out of the pocket
+/// and rests a few seconds, like an antibody. Each binds only to its own kind of site: an antibody to a virus's, a
+/// ligand to its protein's pocket.
 /// </summary>
 [RequireComponent(typeof(MoleculeGravity))]
 public class AntibodyBinder : MonoBehaviour
@@ -51,6 +56,9 @@ public class AntibodyBinder : MonoBehaviour
     float m_AskedAt = -1f;
     float m_RestUntil = -1f;
 
+    /// <summary>Whether it is a ligand (no Fab arms): it binds in a protein's pocket rather than on a virus.</summary>
+    public bool ligand => m_Tips.Length == 0;
+
     /// <summary>The capsid it is drawn to, if any.</summary>
     public CapsidSites target => m_Target;
 
@@ -74,10 +82,19 @@ public class AntibodyBinder : MonoBehaviour
 
     void OnTriggerStay(Collider other)
     {
-        if (m_Target != null || m_AskedAt >= 0f || m_Tips.Length == 0 || resting || !other.TryGetComponent(out CapsidSite site))
+        if (m_Target != null || m_AskedAt >= 0f || resting || !other.TryGetComponent(out CapsidSite site))
             return;
         var capsid = site.capsid;
         if (capsid == null || !capsid.sitesActive || !capsid.SiteOpen(site.index) || !m_Physics.simulatedHere || m_Physics.isHeld)
+            return;
+        if (!capsid.Binds(gameObject))
+            return; // not its kind of site
+        if (capsid.pocket)
+        {
+            BindInPocket(capsid, site.index);
+            return;
+        }
+        if (m_Tips.Length == 0)
             return;
 
         m_Target = capsid;
@@ -157,6 +174,31 @@ public class AntibodyBinder : MonoBehaviour
         m_Target = null;
     }
 
+    // A ligand in a capture sphere: it glides from where it is into its pose in the pocket, at the protein's size.
+    void BindInPocket(CapsidSites protein, int site)
+    {
+        var frame = protein.transform;
+        var inverse = Quaternion.Inverse(frame.rotation);
+        float startScale = transform.lossyScale.x / frame.lossyScale.x;
+        // Shown at the protein's own magnification: the pose is in toy units, which both toys share (one
+        // ångström-to-meter scale), so it is 1 in the protein's frame.
+        const float scale = 1f;
+        var binding = new CapsidSites.Binding
+        {
+            site = (byte)site,
+            startPosition = frame.InverseTransformPoint(transform.position),
+            startRotation = inverse * transform.rotation,
+            position = protein.boundPosition,
+            rotation = protein.boundRotation,
+            scale = scale,
+            startScale = startScale,
+            volume = m_Physics.volume * scale * scale * scale,
+        };
+        Debug.Log($"[Movie] {name} touched {protein.name}'s capture sphere: gliding into its pocket");
+        m_AskedAt = Time.time;
+        protein.RequestBind(gameObject, binding);
+    }
+
     // It has reached the capsid: bound with its Fab tip on the site's base, the arm pointing out along the axis.
     void Reach()
     {
@@ -181,6 +223,7 @@ public class AntibodyBinder : MonoBehaviour
             position = frame.InverseTransformPoint(position),
             rotation = inverse * rotation,
             scale = scale,
+            startScale = scale,
             volume = m_Physics.volume * scale * scale * scale,
         };
         m_AskedAt = Time.time;

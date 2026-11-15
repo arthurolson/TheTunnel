@@ -24,7 +24,7 @@ using UnityEngine.XR.Interaction.Toolkit.Transformers;
 /// </summary>
 static class SignageBuilder
 {
-    const string k_TemplatePath = "Assets/Molecules/2PLV/Toy_2PLV_Networked.prefab";
+    static string k_TemplatePath => MoleculeLibraryBuilder.TemplatePath; // 2PLV's toy, wherever its category folder is
     public const string k_Folder = "Assets/Tunnel/Signage";
     const string k_FontFolder = k_Folder + "/Fonts";
     const string k_PresetFolder = k_FontFolder + "/Presets";

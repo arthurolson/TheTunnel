@@ -22,8 +22,15 @@ using UnityEngine;
 /// <see cref="siteDiameter"/>) and the binding time; Save starting state saves the container and every molecule in
 /// it as they were just before it started (or as they are, before it has), under a name typed on the menu's keyboard,
 /// as a file in the 3D Movies folder (see <see cref="folder"/>).
-/// In a session everyone shares its state, the sliders, the sites' visibility, the menu's place and its messages; the
-/// host decides bindings, releases and the restart; each player saves to their own headset.
+/// Its other movie is Ligand binding (<see cref="Scenario"/>, chosen on its menu before it starts): EGFR proteins and
+/// many free EGFR ligands move in the container; each EGFR has an invisible capture sphere on its ligand's pocket (its
+/// radius set by the Capture radius slider, 2 to 30 Å at the molecules' true scale, 10 Å at first; see
+/// <see cref="captureRadius"/>), and a free ligand that touches it glides into its pose in the crystal structure
+/// (9S3X), stays bound for the binding time, and is then let go out of the pocket, resting briefly before it can bind
+/// again. An EGFR with its ligand bound is light blue. Play again, pausing, showing the sites (the capture spheres)
+/// and saving work the same way, and its saved states are named after it.
+/// In a session everyone shares its state, the movie chosen, the sliders, the sites' visibility, the menu's place and
+/// its messages; the host decides bindings, releases and the restart; each player saves to their own headset.
 /// </summary>
 public class TunnelMovie : NetworkBehaviour
 {
@@ -39,8 +46,21 @@ public class TunnelMovie : NetworkBehaviour
         Restarting,
     }
 
-    /// <summary>What people see this movie called, on its menu, the Containers list and its saved states.</summary>
+    /// <summary>Which story it plays: antibodies binding viruses, or ligands binding their protein's pocket.</summary>
+    public enum Scenario : byte
+    {
+        AntibodyAction,
+        LigandBinding,
+    }
+
+    /// <summary>What people see the antibody movie called, on its menu, the Containers list and its saved states.</summary>
     public const string k_Title = "Antibody action";
+
+    /// <summary>What people see the ligand movie called.</summary>
+    public const string k_LigandTitle = "Ligand binding";
+
+    /// <summary>A movie's name as people see it.</summary>
+    public static string TitleOf(Scenario scenario) => scenario == Scenario.LigandBinding ? k_LigandTitle : k_Title;
 
     [SerializeField]
     [Tooltip("The movie's controls, shown on the container.")]
@@ -68,6 +88,9 @@ public class TunnelMovie : NetworkBehaviour
     /// <summary>How long an antibody stays bound (seconds): the Binding time slider's range.</summary>
     public const float k_MinBindingTime = 10f, k_MaxBindingTime = 60f, k_DefaultBindingTime = 30f;
 
+    /// <summary>The capture sphere's radius in Ligand binding (ångströms at the molecules' true scale): the slider's range.</summary>
+    public const float k_MinCaptureRadius = 2f, k_MaxCaptureRadius = 30f, k_DefaultCaptureRadius = 10f;
+
     /// <summary>Where saved starting states go: the 3D Movies folder in the app's own storage.</summary>
     public static string folder => Path.Combine(Application.persistentDataPath, "3D Movies");
 
@@ -76,12 +99,16 @@ public class TunnelMovie : NetworkBehaviour
     readonly NetworkVariable<bool> m_Controls = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<float> m_SiteDiameter = new(k_DefaultSiteDiameter, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<float> m_BindingTime = new(k_DefaultBindingTime, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<byte> m_Scenario = new((byte)Scenario.AntibodyAction, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<float> m_CaptureRadius = new(k_DefaultCaptureRadius, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<byte> m_Countdown = new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<bool> m_PanelMoved = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<Vector3> m_PanelPosition = new(Vector3.zero, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<Quaternion> m_PanelRotation = new(Quaternion.identity, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     float m_LocalSiteDiameter = k_DefaultSiteDiameter;
     float m_LocalBindingTime = k_DefaultBindingTime;
+    Scenario m_LocalScenario;
+    float m_LocalCaptureRadius = k_DefaultCaptureRadius;
     State m_LocalState;
     bool m_LocalShowSites;
     bool m_LocalControls;
@@ -116,6 +143,18 @@ public class TunnelMovie : NetworkBehaviour
     /// that bind from then on.
     /// </summary>
     public float bindingTime => Mathf.Clamp(IsSpawned ? m_BindingTime.Value : m_LocalBindingTime, k_MinBindingTime, k_MaxBindingTime);
+
+    /// <summary>Which movie it plays (chosen on its menu before it starts), for everyone.</summary>
+    public Scenario scenario => IsSpawned ? (Scenario)m_Scenario.Value : m_LocalScenario;
+
+    /// <summary>What people see it called: Antibody action or Ligand binding.</summary>
+    public string title => TitleOf(scenario);
+
+    /// <summary>
+    /// In Ligand binding, each EGFR's capture sphere radius in ångströms at the molecules' true scale (2 to 30 Å;
+    /// 10 Å at first), so it grows with the protein's magnification. Set from the menu's slider, for everyone.
+    /// </summary>
+    public float captureRadius => Mathf.Clamp(IsSpawned ? m_CaptureRadius.Value : m_LocalCaptureRadius, k_MinCaptureRadius, k_MaxCaptureRadius);
 
     /// <summary>Seconds left before Play again starts it again (0 when it isn't counting down).</summary>
     public int countdown => IsSpawned ? m_Countdown.Value : m_LocalCountdown;
@@ -230,21 +269,63 @@ public class TunnelMovie : NetworkBehaviour
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     void SetBindingTimeRpc(float seconds) => m_BindingTime.Value = Mathf.Clamp(Mathf.Round(seconds), k_MinBindingTime, k_MaxBindingTime);
 
+    /// <summary>Chooses the movie (only before it starts, or after it has ended), for everyone.</summary>
+    public void SetScenario(Scenario value)
+    {
+        if (state != State.Ready && state != State.Ended)
+            return;
+        if (IsSpawned)
+            SetScenarioRpc((byte)value);
+        else
+            m_LocalScenario = value;
+        Debug.Log($"[Movie] {name}: {TitleOf(value)} chosen");
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void SetScenarioRpc(byte value)
+    {
+        if (state == State.Ready || state == State.Ended)
+            m_Scenario.Value = (byte)Mathf.Clamp(value, 0, 1);
+    }
+
+    /// <summary>Sets the capture spheres' radius in ångströms (2 to 30, whole ångströms), for everyone.</summary>
+    public void SetCaptureRadius(float angstroms)
+    {
+        angstroms = Mathf.Clamp(Mathf.Round(angstroms), k_MinCaptureRadius, k_MaxCaptureRadius);
+        if (IsSpawned)
+            SetCaptureRadiusRpc(angstroms);
+        else
+            m_LocalCaptureRadius = angstroms;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void SetCaptureRadiusRpc(float angstroms) => m_CaptureRadius.Value = Mathf.Clamp(Mathf.Round(angstroms), k_MinCaptureRadius, k_MaxCaptureRadius);
+
     /// <summary>Makes the binding sites live, if there is anything in the container for them to do.</summary>
     public void StartMovie()
     {
         if (state != State.Ready && state != State.Ended)
             return;
         int capsids = CountCapsids();
+        bool ligands = scenario == Scenario.LigandBinding;
         if (capsids == 0)
         {
-            Announce("Put a virus (TBSV, 2PLV, Zika or SARS-CoV-2) and some IGG antibodies in the container first.");
+            Announce(ligands
+                ? "Put an EGFR and some EGFR ligands in the container first."
+                : "Put a virus (TBSV, 2PLV, Zika or SARS-CoV-2) and some IGG antibodies in the container first.");
             return;
         }
         SetState(State.Playing);
-        int antibodies = CountAntibodies();
-        Announce($"Playing: {Viruses(capsids)}, {antibodies} antibod{(antibodies == 1 ? "y" : "ies")}; each stays bound {bindingTime:0} s.");
+        int free = CountAntibodies();
+        Announce(ligands
+            ? $"Playing: {capsids} EGFR, {free} free ligand{(free == 1 ? "" : "s")}; capture radius {captureRadius:0} Å, each stays bound {bindingTime:0} s."
+            : $"Playing: {Viruses(capsids)}, {free} antibod{(free == 1 ? "y" : "ies")}; each stays bound {bindingTime:0} s.");
     }
+
+    // What binds in this movie, for its messages.
+    string Binders(int count) => scenario == Scenario.LigandBinding
+        ? (count == 1 ? "1 ligand" : $"{count} ligands")
+        : (count == 1 ? "1 antibody" : $"{count} antibodies");
 
     public void Pause()
     {
@@ -288,11 +369,11 @@ public class TunnelMovie : NetworkBehaviour
             return;
         int released = ReleaseAll("Play again");
         SetState(State.Restarting);
-        Announce($"Play again: {released} antibod{(released == 1 ? "y" : "ies")} let go. Starting again in {Mathf.CeilToInt(m_RestartDelay)} s.");
+        Announce($"Play again: {Binders(released)} let go. Starting again in {Mathf.CeilToInt(m_RestartDelay)} s.");
         m_Restarting = StartCoroutine(Restart());
     }
 
-    /// <summary>On the host (or here, not connected): every antibody bound to a virus in the container lets go. Returns how many.</summary>
+    /// <summary>On the host (or here, not connected): every antibody bound to a virus (and ligand bound to a protein) in the container lets go. Returns how many.</summary>
     public int ReleaseAll(string why)
     {
         int released = 0;
@@ -314,7 +395,7 @@ public class TunnelMovie : NetworkBehaviour
         m_Restarting = null;
         SetState(State.Playing);
         Announce(restored >= 0
-            ? $"Playing again from the start: {restored} molecule{(restored == 1 ? "" : "s")} as they were; each antibody stays bound {bindingTime:0} s."
+            ? $"Playing again from the start: {restored} molecule{(restored == 1 ? "" : "s")} as they were; each {(scenario == Scenario.LigandBinding ? "ligand" : "antibody")} stays bound {bindingTime:0} s."
             : "Playing again (no starting state was kept, so the container is as it was).");
     }
 
@@ -452,42 +533,46 @@ public class TunnelMovie : NetworkBehaviour
 
     bool Inside(Rigidbody body) => body != null && m_Container != null && m_Container.Contains(body.worldCenterOfMass);
 
-    /// <summary>The viruses (capsids and virions with binding sites) in the container.</summary>
+    // Whether a molecule with sites plays in this movie: viruses in Antibody action, proteins with a pocket in Ligand binding.
+    bool InThisMovie(CapsidSites capsid) => capsid.pocket == (scenario == Scenario.LigandBinding);
+
+    /// <summary>The molecules with sites for this movie in the container: viruses (Antibody action) or EGFRs (Ligand binding).</summary>
     public int CountCapsids()
     {
         int count = 0;
         foreach (var capsid in CapsidSites.all)
-            if (capsid != null && Inside(capsid.body))
+            if (capsid != null && InThisMovie(capsid) && Inside(capsid.body))
                 count++;
         return count;
     }
 
-    /// <summary>Viruses in the container with every site taken (fully green).</summary>
+    /// <summary>Those with every site taken: fully green viruses, or light blue EGFRs (their ligand bound).</summary>
     public int CountCovered()
     {
         int count = 0;
         foreach (var capsid in CapsidSites.all)
-            if (capsid != null && capsid.fullyCovered && Inside(capsid.body))
+            if (capsid != null && InThisMovie(capsid) && capsid.fullyCovered && Inside(capsid.body))
                 count++;
         return count;
     }
 
-    /// <summary>Free antibodies in the container.</summary>
+    /// <summary>Free binders for this movie in the container: antibodies (Antibody action) or ligands (Ligand binding).</summary>
     public int CountAntibodies()
     {
         int count = 0;
         foreach (var molecule in MoleculeGravity.all)
-            if (molecule != null && molecule.isActiveAndEnabled && molecule.TryGetComponent(out AntibodyBinder binder) && binder.enabled && Inside(molecule.body))
+            if (molecule != null && molecule.isActiveAndEnabled && molecule.TryGetComponent(out AntibodyBinder binder) && binder.enabled
+                && binder.ligand == (scenario == Scenario.LigandBinding) && Inside(molecule.body))
                 count++;
         return count;
     }
 
-    /// <summary>Antibodies bound to the viruses in the container.</summary>
+    /// <summary>Binders bound in the container: antibodies on viruses, or ligands in EGFR pockets.</summary>
     public int CountBound()
     {
         int count = 0;
         foreach (var capsid in CapsidSites.all)
-            if (capsid != null && Inside(capsid.body))
+            if (capsid != null && InThisMovie(capsid) && Inside(capsid.body))
                 count += capsid.bindingCount;
         return count;
     }
@@ -511,7 +596,7 @@ public class TunnelMovie : NetworkBehaviour
             if (m_PanelPrefab == null)
                 return;
             m_Panel = Instantiate(m_PanelPrefab);
-            m_Panel.name = $"{name.Replace("(Clone)", "")} {k_Title} Menu";
+            m_Panel.name = $"{name.Replace("(Clone)", "")} 3D Movie Menu";
             m_Panel.Bind(this);
         }
         if (!m_Panel.gameObject.activeSelf)
@@ -656,9 +741,10 @@ public class TunnelMovie : NetworkBehaviour
         var snapshot = new MovieSnapshot
         {
             savedFrom = Application.version,
-            scenario = k_Title,
+            scenario = title,
             bindingTime = bindingTime,
             siteDiameter = siteDiameter,
+            captureRadius = captureRadius,
         };
         if (m_Container == null)
             return snapshot;
@@ -730,12 +816,12 @@ public class TunnelMovie : NetworkBehaviour
         return name.Length > 60 ? name.Substring(0, 60).Trim() : name;
     }
 
-    /// <summary>A name not yet used in the 3D Movies folder: Antibody action 1, Antibody action 2, ...</summary>
-    public static string NextName()
+    /// <summary>A name not yet used in the 3D Movies folder, after the movie: Antibody action 1, Ligand binding 2, ...</summary>
+    public static string NextName(string title = k_Title)
     {
         for (int i = 1; ; i++)
         {
-            string name = $"{k_Title} {i}";
+            string name = $"{title} {i}";
             if (!File.Exists(Path.Combine(folder, name + ".json")))
                 return name;
         }
@@ -753,11 +839,12 @@ public class MovieSnapshot
     public string name;
     public string saved;
     public string savedFrom; // the app's version
-    [Tooltip("Which movie it is for: \"Antibody action\" (empty in states saved before it had a name).")]
+    [Tooltip("Which movie it is for: \"Antibody action\" or \"Ligand binding\" (empty in states saved before it had a name).")]
     public string scenario;
-    [Tooltip("The Antibody action's binding time (seconds) and binding site diameter (fraction of a capsid's); 0 in older states.")]
+    [Tooltip("The movie's binding time (seconds), binding site diameter (fraction of a capsid's) and capture radius (Å); 0 in older states.")]
     public float bindingTime;
     public float siteDiameter;
+    public float captureRadius;
     public ContainerState container = new();
     [Tooltip("Positions, rotations, velocities and spins in the container's own frame (meters, not scaled with it).")]
     public List<MoleculeState> molecules = new();

@@ -15,7 +15,7 @@ using UnityEngine.XR.Interaction.Toolkit.Transformers;
 /// </summary>
 static class ContainerBuilder
 {
-    const string k_TemplatePath = "Assets/Molecules/2PLV/Toy_2PLV_Networked.prefab";
+    static string k_TemplatePath => MoleculeLibraryBuilder.TemplatePath; // 2PLV's toy, wherever its category folder is
     const string k_Folder = "Assets/Tunnel/Containers";
     const string k_EdgeMaterialPath = "Assets/Tunnel/Materials/ContainerEdge.mat";
     const string k_GlassMaterialPath = "Assets/Tunnel/Materials/ContainerMRGlass.mat";
@@ -309,7 +309,7 @@ static class ContainerBuilder
             var unsnapRow = Row("Unsnap Row", -35f, "Unsnap from wall");
             var randomRow = Row("Random Row", -125f, "■  Random motion");
             var ballisticRow = Row("Ballistic Row", -190f, "□  Ballistic motion");
-            var movieRow = Row("Movie Row", -385f, $"□  {TunnelMovie.k_Title} controls");
+            var movieRow = Row("Movie Row", -385f, "□  3D movie controls");
             var clearRow = Row("Clear Row", -450f, "Clear contents");
 
             // Viscosity: the molecule list's Magnification slider, 0 to 1 in tenths.

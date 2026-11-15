@@ -19,7 +19,7 @@ using UnityEngine.XR.Interaction.Toolkit.Transformers;
 /// </summary>
 static class NozzleBuilder
 {
-    const string k_TemplatePath = "Assets/Molecules/2PLV/Toy_2PLV_Networked.prefab";
+    static string k_TemplatePath => MoleculeLibraryBuilder.TemplatePath; // 2PLV's toy, wherever its category folder is
     public const string k_Folder = "Assets/Tunnel/Nozzle";
     public const string k_PrefabPath = k_Folder + "/SpawnNozzle_Networked.prefab";
     const string k_PanelPath = k_Folder + "/SpawnNozzle_Menu.prefab";

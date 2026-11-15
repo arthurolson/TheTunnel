@@ -6,7 +6,7 @@ using UnityEngine;
 using UnityEngine.Rendering;
 
 /// <summary>
-/// Makes the SARS-CoV-2 virion's toy (Assets/Molecules/SARS) light enough for the headset and gives it colliders that
+/// Makes the SARS-CoV-2 virion's toy (Assets/Molecules/viral capsids/SARS) light enough for the headset and gives it colliders that
 /// follow its shape. The model is a bead model (every group of atoms a small sphere, some 39,000 of them in three
 /// parts: the lipid membrane, the membrane proteins and the spikes), millions of triangles as it is. From the beads
 /// each part gets a smooth surface like the other molecules' (a Gaussian surface, contoured on a grid of 10 to 12 Å,
@@ -17,10 +17,11 @@ using UnityEngine.Rendering;
 /// </summary>
 static class VirionBuilder
 {
-    const string k_Folder = "Assets/Molecules/SARS";
-    const string k_ModelPath = k_Folder + "/SARS-COV-2_VIRION.glb";
-    const string k_ToyPath = k_Folder + "/Toy_SARS_Networked.prefab";
-    const string k_MeshPath = k_Folder + "/SARS_Meshes.asset";
+    // SARS's folder, wherever its category folder is (Assets/Molecules/viral capsids/SARS).
+    static string k_Folder => MoleculeLibraryBuilder.FolderOf("SARS") ?? MoleculeLibraryBuilder.k_Root + "/viral capsids/SARS";
+    static string k_ModelPath => k_Folder + "/SARS-COV-2_VIRION.glb";
+    static string k_ToyPath => k_Folder + "/Toy_SARS_Networked.prefab";
+    static string k_MeshPath => k_Folder + "/SARS_Meshes.asset";
 
     const float k_UnitsPerAngstrom = 0.2f / 167f; // as the molecule library
     // Each part's surface: Å between grid points, and the smallest a bead counts as for it (the membrane's lipids are
