@@ -186,11 +186,11 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 14.11.2026.5 (not yet launch-tested on a headset) |
+| Latest build (Builds/TheTunnelDev.apk) | 14.11.2026.5 |
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |
 | Quest 3S 3497C10HC4041K | 13.11.2026.4 |
 | Quest 3S 3497C10HC4004X | 13.11.2026.4 |
-| Quest 3 2G0YC1ZF760BMQ | 14.11.2026.4 |
-| Quest 3 2G0YC1ZF7X0DTC | 14.11.2026.4 |
+| Quest 3 2G0YC1ZF760BMQ | 14.11.2026.5 |
+| Quest 3 2G0YC1ZF7X0DTC | 14.11.2026.5 |
