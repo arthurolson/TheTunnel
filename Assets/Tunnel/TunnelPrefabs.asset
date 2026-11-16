@@ -36,6 +36,9 @@ MonoBehaviour:
   - name: E. coli 50S ribosome
     prefab: {fileID: 3878826823719969803, guid: 2c4f1e0d98e65471fb071dd3a56fd231, type: 3}
     category: assemblies
+  - name: Hi-res Ribosome
+    prefab: {fileID: 971680482346567718, guid: 860a1b72502154768828c3617e5e6bf0, type: 3}
+    category: assemblies
   - name: EGFR
     prefab: {fileID: 8241264543411327899, guid: 0016aeb6c8c81417c816b8ab218bbcd0, type: 3}
     category: proteins

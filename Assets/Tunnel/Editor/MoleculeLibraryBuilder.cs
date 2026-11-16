@@ -26,7 +26,8 @@ using UnityEngine.XR.Interaction.Toolkit.AffordanceSystem.Rendering;
 /// take them.
 /// A model too detailed for the headset (more than <see cref="k_MaxVertices"/> vertices in all, such as a whole virion)
 /// is simplified first: its vertices are merged on a grid just coarse enough to bring it under that (see
-/// <see cref="Simplify"/>), which keeps a molecular surface's shape down to a few ångströms.
+/// <see cref="Simplify"/>), which keeps a molecular surface's shape down to a few ångströms. Molecules named in
+/// <see cref="k_FullDetail"/> (Hi-res Ribosome) are the exception: they keep every vertex of their model.
 /// The new toys are added to the network prefab list and to the molecule list in TunnelPrefabs.asset.
 /// Runs from Tunnel > Molecules > Update Molecule Library, and by itself when a model is added under Assets/Molecules.
 /// </summary>
@@ -56,6 +57,11 @@ static class MoleculeLibraryBuilder
     // Categories of surfaces drawn in the model's own colours (one per chain, as Mol* exports them), not 2PLV's: an
     // assembly has too many different chains for 2PLV's few colours to tell apart.
     static readonly string[] k_OwnColourCategories = { "assemblies" };
+
+    // Molecules shown with every vertex of their model, never merged on the surface-detail grid or held to the vertex
+    // budget: a high-resolution version kept beside its everyday one (Hi-res Ribosome beside E. coli 50S ribosome, the
+    // same Gaussian-surface export at about 563k vertices), for looking closely at a few copies at a time.
+    static readonly string[] k_FullDetail = { "Hi-res Ribosome" };
 
     // The smallest a toy's collider is across at ×1 (meters in the headset) before it gets a minimum grab size.
     const float k_MinGrabSize = 0.02f;
@@ -319,7 +325,8 @@ static class MoleculeLibraryBuilder
         string simplified = "";
         int totalVertices = meshes.Sum(m => m.vertexCount);
         int totalTriangles = meshes.Sum(m => m.triangles.Length / 3);
-        if (!atoms)
+        bool fullDetail = k_FullDetail.Contains(name);
+        if (!atoms && !fullDetail)
         {
             // No finer than the library's surface detail, and under the vertex budget: the finest grid that does both,
             // all its parts alike (a surface's vertices go as one over the cell's area, so start a little finer than

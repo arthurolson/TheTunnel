@@ -45,6 +45,10 @@ What has been built, what is in progress, and where each build is. Updated as wo
   the first, coarse export is in Source~. An
   assembly is a surface (simplified like the others) but keeps the model's own colours, one per chain, since 2PLV's
   few colours can't tell dozens of chains apart. Editor test: Test Molecule Library passes with it.
+- Hi-res Ribosome (16.11.2026.3, assemblies, after E. coli 50S ribosome): the same Gaussian-surface export at full
+  detail, 563k vertices / 1.13M triangles, never merged (MoleculeLibraryBuilder.k_FullDetail), for a close look at one
+  or two at a time (the spawn nozzle's 3M-triangle budget allows 2). Its model is kept out of git; its meshes
+  (49 MB) are in git. Not yet looked at on a headset.
   Builders find molecules by name wherever they are (MoleculeLibraryBuilder.ToyPath / FolderOf). Editor test:
   Tunnel > Molecules > Test Molecule Library (Edit or Play mode). The SARS model's .gitignore line follows the move.
 - EGFR (proteins; egfr.glb from Mol*, PDB 9S3X): true scale, 1.24 x 0.98 x 1.16 cm at x1; surface merged on a 2 A
@@ -298,11 +302,11 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 16.11.2026.2 |
+| Latest build (Builds/TheTunnelDev.apk) | 16.11.2026.3 |
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |
-| Quest 3S 3497C10HC4041K | 16.11.2026.2 |
+| Quest 3S 3497C10HC4041K | 16.11.2026.3 |
 | Quest 3S 3497C10HC4004X | 16.11.2026.1 |
 | Quest 3 2G0YC1ZF760BMQ | 15.11.2026.2 |
 | Quest 3 2G0YC1ZF7X0DTC | 15.11.2026.2 |

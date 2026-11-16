@@ -66,3 +66,4 @@ crashlytics-build.properties
 # ---- Molecule models too large for the repo: the toy keeps its own (simplified) meshes ----
 /Assets/Molecules/viral capsids/SARS/*.glb
 /Assets/Molecules/assemblies/E. coli 50S ribosome/10QM-gaussian.glb
+/Assets/Molecules/assemblies/Hi-res Ribosome/10QM-gaussian.glb
