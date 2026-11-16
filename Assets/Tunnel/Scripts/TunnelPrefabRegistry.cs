@@ -26,7 +26,7 @@ public class TunnelPrefabRegistry : ScriptableObject
     /// The molecule categories, in the order the Molecules list shows them: each is a folder in Assets/Molecules.
     /// Any other category folder comes after these, in alphabetical order, and molecules with no category last.
     /// </summary>
-    public static readonly string[] categories = { "viral capsids", "proteins", "ligands", "chemicals", "nucleic acids" };
+    public static readonly string[] categories = { "viral capsids", "assemblies", "proteins", "ligands", "chemicals", "nucleic acids" };
 
     /// <summary>Where a category comes in the Molecules list (see <see cref="categories"/>).</summary>
     public static int CategoryOrder(string category)

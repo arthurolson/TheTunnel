@@ -33,7 +33,7 @@ static class MoleculeLibraryEditorTests
     static readonly (string name, string category, uint hash)[] k_Expected =
     {
         ("2PLV", "viral capsids", 1475192683u), ("SARS", "viral capsids", 914121012u), ("TBSV", "viral capsids", 2067459049u),
-        ("Zika", "viral capsids", 2427790562u), ("EGFR", "proteins", 0u), ("IGG", "proteins", 271599631u),
+        ("Zika", "viral capsids", 2427790562u), ("E. coli 50S ribosome", "assemblies", 0u), ("EGFR", "proteins", 0u), ("IGG", "proteins", 271599631u),
         ("EGFR ligand", "ligands", 0u),
     };
 
@@ -56,11 +56,11 @@ static class MoleculeLibraryEditorTests
             return Finish(report, failures);
         var molecules = registry.molecules;
 
-        // The folders: the five categories, with exactly the user's names.
+        // The folders: the six categories, with exactly the user's names.
         foreach (string category in TunnelPrefabRegistry.categories)
             Check(AssetDatabase.IsValidFolder($"{MoleculeLibraryBuilder.k_Root}/{category}"), $"folder Assets/Molecules/{category} exists");
-        Check(TunnelPrefabRegistry.categories.SequenceEqual(new[] { "viral capsids", "proteins", "ligands", "chemicals", "nucleic acids" }),
-            "categories in order: viral capsids, proteins, ligands, chemicals, nucleic acids");
+        Check(TunnelPrefabRegistry.categories.SequenceEqual(new[] { "viral capsids", "assemblies", "proteins", "ligands", "chemicals", "nucleic acids" }),
+            "categories in order: viral capsids, assemblies, proteins, ligands, chemicals, nucleic acids");
         Check(TunnelPrefabRegistry.CategoryHeading("viral capsids") == "Viral capsids" && TunnelPrefabRegistry.CategoryHeading("nucleic acids") == "Nucleic acids",
             "headings read Viral capsids ... Nucleic acids");
 
@@ -195,7 +195,7 @@ static class MoleculeLibraryEditorTests
                 .ToList();
             string shown = string.Join(" | ", lines.Select(l => l.heading ? $"[{l.text}]" : l.text));
             report.AppendLine($"       the list reads: {shown}");
-            Check(shown == "[Viral capsids] | 2PLV | SARS | TBSV | Zika | [Proteins] | EGFR | IGG | [Ligands] | EGFR ligand",
+            Check(shown == "[Viral capsids] | 2PLV | SARS | TBSV | Zika | [Assemblies] | E. coli 50S ribosome | [Proteins] | EGFR | IGG | [Ligands] | EGFR ligand",
                 "the Molecules list shows each molecule under its heading, in category order, with no empty headings");
             Check(lines.Where(l => !l.heading).Select(l => l.text).SequenceEqual(registry.molecules.Select(m => m.name)),
                 "every molecule has a row, with the name people already know");

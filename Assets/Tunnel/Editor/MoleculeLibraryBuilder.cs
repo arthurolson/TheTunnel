@@ -10,7 +10,7 @@ using UnityEngine.XR.Interaction.Toolkit.AffordanceSystem.Rendering;
 /// <summary>
 /// Keeps the TS Menu's Molecules list in step with Assets/Molecules. The molecules are sorted into category folders,
 /// Assets/Molecules/<category>/<molecule>, and the list shows them under a heading per category, in the order of
-/// <see cref="TunnelPrefabRegistry.categories"/> (viral capsids, proteins, ligands, chemicals, nucleic acids). Each
+/// <see cref="TunnelPrefabRegistry.categories"/> (viral capsids, assemblies, proteins, ligands, chemicals, nucleic acids). Each
 /// folder in a category folder is one molecule, named after its folder; a folder directly in Assets/Molecules that
 /// holds a model itself is a molecule with no category (listed last, under "Other"). Loose files in Assets/Molecules
 /// are never molecules. Adding a molecule is dropping a folder with a model into a category folder.
@@ -18,7 +18,8 @@ using UnityEngine.XR.Interaction.Toolkit.AffordanceSystem.Rendering;
 /// ångström) gets a toy made for it from the 2PLV one, so every molecule behaves the same: weightless and heavily
 /// damped, grabbable and scalable with the same gestures, shared over the network, at the same ångström-to-meter scale
 /// as 2PLV. A surface (viral capsids, proteins, nucleic acids) is coloured by subunit type with 2PLV's chain colours
-/// and kept no finer than <see cref="k_SurfaceDetail"/> Å; atoms and bonds (ligands, chemicals) keep the model's own
+/// and kept no finer than <see cref="k_SurfaceDetail"/> Å; an assembly (such as a ribosome, with dozens of different
+/// chains) is a surface too, but keeps the model's own colours, one per chain as Mol* exported them; atoms and bonds (ligands, chemicals) keep the model's own
 /// colours, one per element (CPK), and all their detail. Its collider is the smallest that encloses the whole surface:
 /// an oriented box or an ellipsoid, whichever has less volume (see <see cref="MoleculeColliderFit"/>); atoms and bonds
 /// under <see cref="k_MinGrabSize"/> across at ×1 also get <see cref="MoleculeGrabSize"/>, so a hand or ray can still
@@ -51,6 +52,10 @@ static class MoleculeLibraryBuilder
 
     // Categories whose models are atoms and bonds, drawn in the model's own (element) colours at full detail.
     static readonly string[] k_AtomCategories = { "ligands", "chemicals" };
+
+    // Categories of surfaces drawn in the model's own colours (one per chain, as Mol* exports them), not 2PLV's: an
+    // assembly has too many different chains for 2PLV's few colours to tell apart.
+    static readonly string[] k_OwnColourCategories = { "assemblies" };
 
     // The smallest a toy's collider is across at ×1 (meters in the headset) before it gets a minimum grab size.
     const float k_MinGrabSize = 0.02f;
@@ -281,13 +286,14 @@ static class MoleculeLibraryBuilder
         // Centred and scaled like 2PLV.
         var normalize = Matrix4x4.Scale(Vector3.one * k_UnitsPerAngstrom) * Matrix4x4.Translate(-bounds.center);
         bool atoms = k_AtomCategories.Contains((category ?? "").ToLowerInvariant());
+        bool ownColours = atoms || k_OwnColourCategories.Contains((category ?? "").ToLowerInvariant());
         var templateMaterials = template.transform.GetChild(0).GetComponentsInChildren<MeshRenderer>(true).Select(r => r.sharedMaterial).ToArray();
         List<Mesh> meshes;
         List<Material> materials;
-        if (atoms)
+        if (ownColours)
         {
-            // Atoms and bonds: one mesh per colour in the model (an element each, in CPK colours), each drawn in the
-            // template's material in that colour.
+            // Atoms and bonds, or an assembly: one mesh per colour in the model (an element each in CPK colours, or a
+            // chain each), each drawn in the template's material in that colour.
             var colours = SplitByColour(filters, f => normalize * toRoot(f.transform), name, MtlColours(modelPath));
             meshes = colours.Select(c => c.mesh).ToList();
             materials = colours.Select(c => ColouredMaterial(templateMaterials[0], c.colour, $"{name}_{ColorUtility.ToHtmlStringRGB(c.colour)}")).ToList();

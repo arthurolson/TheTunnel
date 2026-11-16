@@ -33,6 +33,9 @@ MonoBehaviour:
   - name: Zika
     prefab: {fileID: 1938404238223173257, guid: 4a2f1ac51deaa48a398047da089e2ca0, type: 3}
     category: viral capsids
+  - name: E. coli 50S ribosome
+    prefab: {fileID: 3878826823719969803, guid: 2c4f1e0d98e65471fb071dd3a56fd231, type: 3}
+    category: assemblies
   - name: EGFR
     prefab: {fileID: 8241264543411327899, guid: 0016aeb6c8c81417c816b8ab218bbcd0, type: 3}
     category: proteins

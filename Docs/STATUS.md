@@ -38,6 +38,10 @@ What has been built, what is in progress, and where each build is. Updated as wo
   IGG), ligands (EGFR ligand), chemicals and nucleic acids (empty, each with a README). The Molecules list shows them
   under headings in that order, skipping empty categories; names, network ids and prefab references are unchanged
   (moved with AssetDatabase). Adding a molecule is still dropping a folder with a model into a category folder.
+- Assemblies (16.11.2026.1): a sixth category, Assets/Molecules/assemblies, listed after Viral capsids, with the
+  E. coli 50S ribosome (PDB 10QM, from Mol*): 31 chains, 8,500 vertices, 3.7 cm across at x1, a box collider. An
+  assembly is a surface (simplified like the others) but keeps the model's own colours, one per chain, since 2PLV's
+  few colours can't tell dozens of chains apart. Editor test: Test Molecule Library passes with it.
   Builders find molecules by name wherever they are (MoleculeLibraryBuilder.ToyPath / FolderOf). Editor test:
   Tunnel > Molecules > Test Molecule Library (Edit or Play mode). The SARS model's .gitignore line follows the move.
 - EGFR (proteins; egfr.glb from Mol*, PDB 9S3X): true scale, 1.24 x 0.98 x 1.16 cm at x1; surface merged on a 2 A
@@ -291,11 +295,11 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 15.11.2026.3 |
+| Latest build (Builds/TheTunnelDev.apk) | 16.11.2026.1 |
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |
 | Quest 3S 3497C10HC4041K | 13.11.2026.4 |
-| Quest 3S 3497C10HC4004X | 13.11.2026.4 |
+| Quest 3S 3497C10HC4004X | 16.11.2026.1 |
 | Quest 3 2G0YC1ZF760BMQ | 15.11.2026.2 |
 | Quest 3 2G0YC1ZF7X0DTC | 15.11.2026.2 |
