@@ -39,7 +39,7 @@ static class MovieBuilder
 
     const float k_CanvasScale = 0.0004f;                   // meters per canvas unit, as the palette
     static readonly Vector2 k_CanvasSize = new(620f, 1060f); // 25 x 42 cm
-    static readonly Vector2 k_NewMovieCanvasSize = new(1200f, 880f); // 48 x 35 cm, two columns
+    static readonly Vector2 k_NewMovieCanvasSize = new(1200f, 1000f); // 48 x 40 cm, two columns
 
     // The bar along the menu's top that hands take it by (meters): its size, and the room it takes above the canvas.
     static readonly Vector3 k_BarSize = new(0.16f, 0.018f, 0.01f);
@@ -874,8 +874,9 @@ static class MovieBuilder
             var previousMovie = Row("Previous Movie", new Vector2(-250f, 410f), 60f, "◄", true);
             var scenario = Row("Scenario Row", new Vector2(0f, 410f), 420f, $"<b>{TunnelMovie.k_Title}</b>", false);
             var nextMovie = Row("Next Movie", new Vector2(250f, 410f), 60f, "►", true);
-            var newMovie = Row("New Movie Row", new Vector2(-142f, 345f), 276f, "New movie...", true);
-            var deleteMovie = Row("Delete Movie Row", new Vector2(142f, 345f), 276f, "Delete movie", true);
+            var newMovie = Row("New Movie Row", new Vector2(-188f, 345f), 184f, "New movie...", true);
+            var matchSize = Row("Match Size Row", new Vector2(0f, 345f), 184f, "Match size", true);
+            var deleteMovie = Row("Delete Movie Row", new Vector2(188f, 345f), 184f, "Delete", true);
             var start = Row("Start Row", new Vector2(0f, 280f), 560f, "Start", true);
             var pause = Row("Pause Row", new Vector2(-142f, 215f), 276f, "Pause", true);
             var play = Row("Play Row", new Vector2(142f, 215f), 276f, "Play", true);
@@ -981,7 +982,7 @@ static class MovieBuilder
             var component = panel.AddComponent<TunnelMoviePanel>();
             component.Configure(start, pause, play, sites, save, diameter, diameterText, title, status, keyboard,
                 k_CanvasSize.x * k_CanvasScale, k_CanvasSize.y * k_CanvasScale, playAgain, bindingTime, bindingTimeText, grab, k_BarSpace, scenario,
-                previousMovie, nextMovie, newMovie, deleteMovie, AssetDatabase.LoadAssetAtPath<TunnelNewMoviePanel>(k_NewMoviePath));
+                previousMovie, nextMovie, newMovie, deleteMovie, AssetDatabase.LoadAssetAtPath<TunnelNewMoviePanel>(k_NewMoviePath), matchSize);
             PrefabUtility.SaveAsPrefabAsset(panel, k_PanelPath);
             Object.DestroyImmediate(panel);
             return $"panel {k_PanelPath}";
@@ -996,7 +997,7 @@ static class MovieBuilder
     /// <summary>
     /// The New movie menu (see <see cref="TunnelNewMoviePanel"/>): two columns, from the TS Menu's rows and the
     /// Containers list's slider, the browser's keyboard under it, and a bar along its top to carry it by. Left: name,
-    /// receptor and binder (◄ ►), how many of each, the capture radius or sites' size, and the binding time. Right: the
+    /// receptor and binder (◄ ►), magnification, how many of each, the capture radius or sites' size, and the binding time. Right: the
     /// colour effect and colour, viscosity, heat and motion, Create and Close, and its status.
     /// </summary>
     static string BuildNewMoviePanel()
@@ -1109,10 +1110,13 @@ static class MovieBuilder
             var binderPrev = Row("Binder Previous", new Vector2(left - 250f, top - 240f), 60f, "◄", true);
             var binderRow = Row("Binder Row", new Vector2(left, top - 240f), 420f, "Binder:", false);
             var binderNext = Row("Binder Next", new Vector2(left + 250f, top - 240f), 60f, "►", true);
-            var receptors = SliderGroup("Receptors", new Vector2(left, top - 335f), 1f, TunnelMovie.k_MaxReceptors, true, Ticks(1, 2, 4, 6, 8, 10), out var receptorsText);
-            var binders = SliderGroup("Binders", new Vector2(left, top - 475f), 1f, TunnelMovie.k_MaxBinders, true, Ticks(1, 25, 50, 75, 100), out var bindersText);
-            var strength = SliderGroup("Strength", new Vector2(left, top - 615f), 2f, 30f, true, Ticks(2, 5, 10, 15, 20, 25, 30), out var strengthText);
-            var time = SliderGroup("Binding Time", new Vector2(left, top - 755f), TunnelMovie.k_MinBindingTime, TunnelMovie.k_MaxBindingTime, true,
+            var steps = TunnelMoleculeMenu.k_Steps;
+            var magnification = SliderGroup("Magnification", new Vector2(left, top - 335f), 0f, steps.Length - 1, true,
+                steps.Select((m, i) => ((float)i, m.ToString())).ToArray(), out var magnificationText);
+            var receptors = SliderGroup("Receptors", new Vector2(left, top - 475f), 1f, TunnelMovie.k_MaxReceptors, true, Ticks(1, 2, 4, 6, 8, 10), out var receptorsText);
+            var binders = SliderGroup("Binders", new Vector2(left, top - 615f), 1f, TunnelMovie.k_MaxBinders, true, Ticks(1, 25, 50, 75, 100), out var bindersText);
+            var strength = SliderGroup("Strength", new Vector2(left, top - 755f), 2f, 30f, true, Ticks(2, 5, 10, 15, 20, 25, 30), out var strengthText);
+            var time = SliderGroup("Binding Time", new Vector2(left, top - 895f), TunnelMovie.k_MinBindingTime, TunnelMovie.k_MaxBindingTime, true,
                 new[] { 10f, 20f, 30f, 40f, 50f, 60f }.Select(v => (v, $"{v:0} s")).ToArray(), out var timeText);
 
             // Right: how it looks, and how it starts.
@@ -1167,7 +1171,7 @@ static class MovieBuilder
             var grab = BuildBar(panel, title.font, size.y);
             var component = panel.AddComponent<TunnelNewMoviePanel>();
             component.Configure(title, status, nameRow, keyboard, receptorPrev, receptorRow, receptorNext, binderPrev, binderRow, binderNext,
-                receptors, receptorsText, binders, bindersText, strength, strengthText, time, timeText, shift, solid, swatches,
+                magnification, magnificationText, receptors, receptorsText, binders, bindersText, strength, strengthText, time, timeText, shift, solid, swatches,
                 viscosity, viscosityText, heat, heatText, motion, create, close, grab,
                 size.x * k_CanvasScale, size.y * k_CanvasScale, k_BarSpace);
             panel.SetActive(true);

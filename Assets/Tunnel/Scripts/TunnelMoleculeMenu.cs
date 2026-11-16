@@ -175,6 +175,33 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         base.OnNetworkDespawn();
     }
 
+    /// <summary>
+    /// Sets the Magnification slider on every Molecules list (a 3D movie chosen sets it to its own), as if someone had
+    /// moved it: shared with everyone in a session (the host's value is everyone's), here only when not connected.
+    /// </summary>
+    public static void SetMagnification(int magnification)
+    {
+        magnification = MagnificationAt(StepOf(Mathf.Clamp(magnification, k_MinMagnification, k_MaxMagnification)));
+        foreach (var menu in s_Menus)
+            if (menu != null)
+                menu.ApplyMagnification(magnification);
+    }
+
+    void ApplyMagnification(int value)
+    {
+        if (IsSpawned)
+        {
+            if (IsServer)
+                m_SharedMagnification.Value = (byte)value;
+            else
+                SetMagnificationRpc((byte)value);
+        }
+        if (m_MagnificationSlider != null)
+            m_MagnificationSlider.SetValueWithoutNotify(StepOf(value));
+        ShowMagnification();
+        Debug.Log($"[Molecules] magnification set to ×{value} by a 3D movie");
+    }
+
     void OnEnable() => s_Menus.Add(this);
 
     void OnDisable() => s_Menus.Remove(this);

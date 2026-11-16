@@ -18,8 +18,9 @@ public enum MovieColourEffect : byte
 /// <summary>
 /// One 3D movie a container can play (see <see cref="TunnelMovie"/>): which molecules bind (a receptor that carries
 /// binding sites and the binder that binds to them), how strongly (the capture radius or binding sites' size, and the
-/// binding time), how a receptor shows what is bound to it (its colour), and, for a movie someone made with the New
-/// movie menu, how many of each fill the container and the container's medium and heat to start with.
+/// binding time), how a receptor shows what is bound to it (its colour), the magnification its molecules are made at
+/// (choosing it sets the Molecules list's Magnification to it), and, for a movie someone made with the New movie menu,
+/// how many of each fill the container and the container's medium and heat to start with.
 /// The two built in (Antibody action and Ligand binding) are always there; the ones people make are stored on the
 /// host (see <see cref="MovieLibrary"/>) and shared with everyone.
 /// </summary>
@@ -44,6 +45,9 @@ public class MovieDefinition
     [Tooltip("How many receptors and binders Create puts in the container.")]
     public int receptors = 1;
     public int binders = 15;
+
+    [Tooltip("The magnification its molecules are made at (×1 to ×20, on the Molecules list's stops); 0 in movies saved before it had one: the Molecules list's own value.")]
+    public int magnification;
 
     [Tooltip("The capture sphere's radius (Å at true scale), the binding sites' diameter (fraction of a capsid's) and the binding time (s).")]
     public float captureRadius = TunnelMovie.k_DefaultCaptureRadius;
@@ -72,6 +76,9 @@ public class MovieDefinition
         receptor = "",
         binder = "IGG",
         pocket = false,
+        // At ×1 the capsids are 6 to 8 cm across (2PLV, TBSV, Zika), SARS-CoV-2 32 cm with its spikes, and an IgG
+        // 2.6 cm: large enough to watch, and the size the Antibody action has always been played at.
+        magnification = 1,
         colourEffect = MovieColourEffect.ShiftBySitesTaken,
         colour = new Color(0.18f, 0.85f, 0.25f, 1f),
     };
@@ -85,6 +92,8 @@ public class MovieDefinition
         receptor = "EGFR",
         binder = "EGFR ligand",
         pocket = true,
+        // EGFR is 1.2 cm at ×1 and its ligand 3 mm: at ×20 EGFR is 25 cm across and the ligand 6 cm, easy to watch.
+        magnification = 20,
         colourEffect = MovieColourEffect.SolidWhileBound,
         colour = new Color(0.55f, 0.82f, 1f, 1f),
     };
@@ -122,6 +131,17 @@ public class MovieDefinition
 
     public MovieDefinition Clone() => (MovieDefinition)MemberwiseClone();
 
+    /// <summary>
+    /// The magnification its molecules are made at: its own, on the Molecules list's stops, or (a movie saved before it
+    /// had one) the Molecules list's value now.
+    /// </summary>
+    public int sizeToUse => magnification > 0
+        ? TunnelMoleculeMenu.MagnificationAt(TunnelMoleculeMenu.StepOf(magnification))
+        : Mathf.Max(1, TunnelMoleculeMenu.currentMagnification);
+
+    /// <summary>"×20", or "" for a movie with no magnification of its own.</summary>
+    public string sizeLabel => magnification > 0 ? $"×{sizeToUse}" : "";
+
     public MovieEntry ToEntry() => new()
     {
         id = Fixed64(id),
@@ -131,6 +151,7 @@ public class MovieDefinition
         builtIn = builtIn,
         pocket = pocket,
         receptors = (byte)Mathf.Clamp(receptors, 0, 255),
+        magnification = (byte)Mathf.Clamp(magnification, 0, 255),
         binders = (byte)Mathf.Clamp(binders, 0, 255),
         captureRadius = captureRadius,
         siteDiameter = siteDiameter,
@@ -172,6 +193,7 @@ public struct MovieEntry : INetworkSerializable, IEquatable<MovieEntry>
     public bool pocket;
     public byte receptors;
     public byte binders;
+    public byte magnification;
     public float captureRadius;
     public float siteDiameter;
     public float bindingTime;
@@ -192,6 +214,7 @@ public struct MovieEntry : INetworkSerializable, IEquatable<MovieEntry>
         serializer.SerializeValue(ref pocket);
         serializer.SerializeValue(ref receptors);
         serializer.SerializeValue(ref binders);
+        serializer.SerializeValue(ref magnification);
         serializer.SerializeValue(ref captureRadius);
         serializer.SerializeValue(ref siteDiameter);
         serializer.SerializeValue(ref bindingTime);
@@ -205,7 +228,7 @@ public struct MovieEntry : INetworkSerializable, IEquatable<MovieEntry>
 
     public bool Equals(MovieEntry other) =>
         id.Equals(other.id) && name.Equals(other.name) && receptor.Equals(other.receptor) && binder.Equals(other.binder)
-        && builtIn == other.builtIn && pocket == other.pocket && receptors == other.receptors && binders == other.binders
+        && builtIn == other.builtIn && pocket == other.pocket && receptors == other.receptors && binders == other.binders && magnification == other.magnification
         && captureRadius == other.captureRadius && siteDiameter == other.siteDiameter && bindingTime == other.bindingTime
         && colourEffect == other.colourEffect && colour == other.colour && hasStart == other.hasStart
         && viscosity == other.viscosity && temperature == other.temperature && motion == other.motion;
@@ -224,6 +247,7 @@ public struct MovieEntry : INetworkSerializable, IEquatable<MovieEntry>
         pocket = pocket,
         receptors = receptors,
         binders = binders,
+        magnification = magnification,
         captureRadius = captureRadius,
         siteDiameter = siteDiameter,
         bindingTime = bindingTime,

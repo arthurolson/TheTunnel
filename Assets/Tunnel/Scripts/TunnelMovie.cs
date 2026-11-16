@@ -393,8 +393,9 @@ public class TunnelMovie : NetworkBehaviour
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     void SetMovieRpc(MovieEntry movie) => ChooseHere(movie.ToDefinition());
 
-    // On the host (or here, not connected).
-    void ChooseHere(MovieDefinition movie)
+    // On the host (or here, not connected). A movie with a magnification of its own sets the Molecules list's
+    // Magnification to it (for everyone), so molecules added by hand from then on come out at the movie's size.
+    void ChooseHere(MovieDefinition movie, bool setSize = true)
     {
         if (state != State.Ready && state != State.Ended)
         {
@@ -417,8 +418,11 @@ public class TunnelMovie : NetworkBehaviour
         SetBindingTime(movie.bindingTime > 0f ? movie.bindingTime : k_DefaultBindingTime);
         if (movie.hasStart)
             ApplyStart(movie);
-        Announce(movie.builtIn ? $"{movie.name} chosen. Press Start."
-            : $"{movie.name} chosen: {movie.receptors} {movie.ReceptorWord(movie.receptors)} and {movie.binders} {movie.BinderWord(movie.binders)}. Press Start.");
+        if (setSize && movie.magnification > 0)
+            TunnelMoleculeMenu.SetMagnification(movie.sizeToUse);
+        string size = movie.magnification > 0 ? $" at {movie.sizeLabel}" : "";
+        Announce(movie.builtIn ? $"{movie.name}{size} chosen: the Molecules list now makes molecules{size}. Press Start."
+            : $"{movie.name}{size} chosen: {movie.receptors} {movie.ReceptorWord(movie.receptors)} and {movie.binders} {movie.BinderWord(movie.binders)}. Press Start.");
     }
 
     // A movie someone made sets the container's medium and heat.
@@ -435,12 +439,15 @@ public class TunnelMovie : NetworkBehaviour
     /// <summary>
     /// Makes a new movie (from the New movie menu) for everyone: the host stores it (see <see cref="MovieLibrary"/>),
     /// lists it on every container's movie menu, chooses it here and fills this container with its receptors and
-    /// binders at this magnification, scattered and moving (what was in the container goes first).
+    /// binders at the movie's own magnification, scattered and moving (what was in the container goes first).
     /// </summary>
-    public void CreateMovie(MovieDefinition movie, float magnification)
+    public void CreateMovie(MovieDefinition movie)
     {
         if (movie == null)
             return;
+        movie = movie.Clone();
+        movie.magnification = movie.sizeToUse; // a movie always has one from now on
+        int magnification = movie.magnification;
         Debug.Log($"[Movie] {name}: New movie \"{movie.name}\": {movie.receptors} {movie.receptor} and {movie.binders} {movie.binder} at ×{magnification:0.#} " +
             $"({(IsSpawned ? (IsServer ? "for everyone" : "asking the host") : "not connected, here only")})");
         if (IsSpawned)
@@ -450,10 +457,10 @@ public class TunnelMovie : NetworkBehaviour
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    void CreateMovieRpc(MovieEntry movie, float magnification) => CreateHere(movie.ToDefinition(), magnification);
+    void CreateMovieRpc(MovieEntry movie, int magnification) => CreateHere(movie.ToDefinition(), magnification);
 
     // On the host (or here, not connected).
-    void CreateHere(MovieDefinition movie, float magnification)
+    void CreateHere(MovieDefinition movie, int magnification)
     {
         var stored = MovieLibrary.Add(movie);
         if (stored == null)
@@ -466,6 +473,134 @@ public class TunnelMovie : NetworkBehaviour
         string filled = Fill(stored, magnification);
         Announce($"New movie \"{stored.name}\" made and chosen: {filled} Press Start.");
     }
+
+    #region Size
+
+    /// <summary>
+    /// The magnification a molecule is at: its size over its toy's in the Molecules list (0 if it isn't one of them).
+    /// </summary>
+    public float MagnificationOf(GameObject molecule)
+    {
+        var prefab = molecule != null ? PrefabFor(CapsidSites.MoleculeName(molecule)) : null;
+        return prefab != null && prefab.transform.localScale.x > 0f ? molecule.transform.lossyScale.x / prefab.transform.localScale.x : 0f;
+    }
+
+    /// <summary>
+    /// The molecules in the container whose size isn't the movie's magnification, by name, with the magnification they
+    /// are at (rounded); empty when they all match, or the movie has none of its own.
+    /// </summary>
+    public List<(string name, int magnification)> SizesOff()
+    {
+        var off = new List<(string name, int magnification)>();
+        var movie = definition;
+        if (movie.magnification <= 0 || m_Container == null)
+            return off;
+        int wanted = movie.sizeToUse;
+        foreach (var molecule in m_Container.Contents(true))
+        {
+            float at = MagnificationOf(molecule);
+            if (at <= 0f || Mathf.Abs(at - wanted) < 0.05f * wanted)
+                continue;
+            string molecularName = CapsidSites.MoleculeName(molecule);
+            int rounded = Mathf.Max(1, Mathf.RoundToInt(at));
+            if (!off.Contains((molecularName, rounded)))
+                off.Add((molecularName, rounded));
+        }
+        return off;
+    }
+
+    /// <summary>"EGFR here is ×10; this movie is ×20", or "" when the container's molecules are at the movie's size.</summary>
+    public string sizeNote
+    {
+        get
+        {
+            var off = SizesOff();
+            if (off.Count == 0)
+                return "";
+            string here = off.Count == 1
+                ? $"{off[0].name} here is ×{off[0].magnification}"
+                : string.Join(", ", off.Take(3).Select(o => $"{o.name} ×{o.magnification}")) + (off.Count > 3 ? ", ..." : "") + " here";
+            return $"{here}; this movie is {definition.sizeLabel}.";
+        }
+    }
+
+    /// <summary>Whether Match size can be pressed: some molecules here aren't at the movie's size, and it isn't running.</summary>
+    public bool canMatchSize => (state == State.Ready || state == State.Ended) && SizesOff().Count > 0;
+
+    /// <summary>
+    /// Match size: every molecule in the container is made the movie's magnification, for everyone, staying where it is
+    /// in the container. If they would crowd it (as Create would judge), the container grows first, and their places
+    /// with it. Each headset resizes what it moves (its owner's), so everyone sees the same; only before Start.
+    /// </summary>
+    public void MatchSize()
+    {
+        if (!canMatchSize)
+            return;
+        int magnification = definition.sizeToUse;
+        float grow = GrowthFor(m_Container.Contents(true), magnification);
+        Debug.Log($"[Movie] {name}: Match size to ×{magnification} ({sizeNote}); container ×{grow:0.00} " +
+            $"({(IsSpawned ? "for everyone" : "not connected, here only")})");
+        if (IsSpawned)
+            MatchSizeRpc(magnification, grow);
+        else
+            MatchHere(magnification, grow);
+        Announce($"Match size: everything in the container is ×{magnification} now{(grow > 1.01f ? $"; the container grew to {m_Container.transform.lossyScale.x * (IsSpawned ? grow : 1f) * 100f:0} cm to hold them" : "")}.");
+    }
+
+    [Rpc(SendTo.Everyone, InvokePermission = RpcInvokePermission.Everyone)]
+    void MatchSizeRpc(int magnification, float grow) => MatchHere(magnification, grow);
+
+    // On each headset: resizes the molecules (and the container) it moves.
+    void MatchHere(int magnification, float grow)
+    {
+        if (m_Container == null)
+            return;
+        var t = m_Container.transform;
+        var centre = t.position;
+        var inside = m_Container.Contents(true);
+        if (grow > 1.001f && (!IsSpawned || IsOwner))
+            t.localScale *= grow;
+        int resized = 0;
+        foreach (var molecule in inside)
+        {
+            var prefab = PrefabFor(CapsidSites.MoleculeName(molecule));
+            if (prefab == null || !molecule.TryGetComponent(out MoleculeGravity physics) || !physics.simulatedHere)
+                continue;
+            var position = centre + (molecule.transform.position - centre) * Mathf.Max(1f, grow);
+            molecule.transform.localScale = Vector3.one * prefab.transform.localScale.x * magnification;
+            molecule.transform.position = position;
+            if (physics.body != null)
+                physics.body.position = position;
+            resized++;
+        }
+        Physics.SyncTransforms();
+        Debug.Log($"[Movie] {name}: {resized} molecule(s) made ×{magnification} here");
+    }
+
+    // How much larger the container must be for these molecules at this magnification (1 if it is large enough): room
+    // for the largest side by side with space to move, and the molecules taking up at most a tenth of it.
+    float GrowthFor(List<GameObject> molecules, float magnification)
+    {
+        if (m_Container == null || molecules.Count == 0)
+            return 1f;
+        float largest = 0f, volume = 0f;
+        foreach (var molecule in molecules)
+        {
+            var prefab = PrefabFor(CapsidSites.MoleculeName(molecule));
+            if (prefab == null)
+                continue;
+            float r = RadiusOf(prefab, magnification);
+            largest = Mathf.Max(largest, r);
+            volume += 4.19f * r * r * r;
+        }
+        var size = m_Container.transform.lossyScale;
+        float smallest = m_Container.isBox ? Mathf.Min(size.x, Mathf.Min(size.y, size.z)) : size.x;
+        float containerVolume = m_Container.isBox ? size.x * size.y * size.z : 0.5236f * size.x * size.x * size.x;
+        float grow = Mathf.Max(2f * largest * 1.6f / Mathf.Max(1e-4f, smallest), Mathf.Pow(volume * 10f / Mathf.Max(1e-6f, containerVolume), 1f / 3f));
+        return Mathf.Max(1f, grow);
+    }
+
+    #endregion
 
     /// <summary>Deletes a movie someone made, for everyone (never a built-in one). Containers that have it chosen and aren't playing it go back to Antibody action.</summary>
     public void DeleteMovie(string id)
@@ -494,7 +629,7 @@ public class TunnelMovie : NetworkBehaviour
         ShareLibrary();
         foreach (var container in FindObjectsByType<TunnelMovie>(FindObjectsInactive.Exclude))
             if (container != null && container.definition.id == id && (container.state == State.Ready || container.state == State.Ended))
-                container.ChooseHere(MovieDefinition.AntibodyAction);
+                container.ChooseHere(MovieDefinition.AntibodyAction, false);
         Announce($"Deleted the movie \"{movie.name}\".");
     }
 
@@ -1229,6 +1364,7 @@ public class TunnelMovie : NetworkBehaviour
             savedFrom = Application.version,
             scenario = title,
             movie = definition.id,
+            magnification = definition.magnification,
             bindingTime = bindingTime,
             siteDiameter = siteDiameter,
             captureRadius = captureRadius,
@@ -1330,6 +1466,8 @@ public class MovieSnapshot
     public string scenario;
     [Tooltip("The movie's id (see MovieDefinition.id; empty in older states).")]
     public string movie;
+    [Tooltip("The movie's own magnification (0 in older states, or for a movie without one); each molecule keeps its own size in scale.")]
+    public int magnification;
     [Tooltip("The movie's binding time (seconds), binding site diameter (fraction of a capsid's) and capture radius (Å); 0 in older states.")]
     public float bindingTime;
     public float siteDiameter;

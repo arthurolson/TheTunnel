@@ -84,6 +84,8 @@ static class LigandBindingEditorTests
         Check(egfr != null && egfr.pocket && egfr.siteCount == 1 && egfr.movie == movie && !egfr.sitesActive, "EGFR in the box has one pocket, not live before Start");
 
         movie.StartMovie();
+        Check(container.temperature > 0f, "Start warms a container with no heat (nothing would move)");
+        container.SetTemperature(0f); // still again for the rest of this test, so nothing drifts or spins
         Call(egfr, "Update");
         Check(movie.isPlaying && egfr.sitesActive, $"Start plays it and makes the capture sphere live (\"{movie.message}\")");
         Check(movie.startingState != null && movie.startingState.scenario == "Ligand binding" && movie.startingState.molecules.Count == 2,

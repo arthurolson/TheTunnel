@@ -11,7 +11,10 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 /// movie from every one there is (the two built in, Antibody action and Ligand binding, then those people made), with ◄
 /// and ► (or a tap on the name for the next); choosing another while one plays stops it. Under it, New movie... opens
 /// the New movie menu beside this one (see <see cref="TunnelNewMoviePanel"/>), and Delete movie deletes the movie
-/// chosen, for everyone, if someone made it (a second tap confirms; the built-in two can't be deleted). Then Start,
+/// chosen, for everyone, if someone made it (a second tap confirms; the built-in two can't be deleted). The picker shows
+/// each movie's magnification (Ligand binding ×20); choosing a movie sets the Molecules list's Magnification to it, and
+/// when molecules in the container are at another size the status says so ("EGFR here is ×10; this movie is ×20") and
+/// Match size, between New movie... and Delete, makes them the movie's size for everyone (before Start). Then Start,
 /// Pause, Play, Play again
 /// (everything bound lets go, and after a 5 second countdown it starts again from the starting state), Show binding
 /// sites (the capture spheres, in Ligand binding), a slider for the binding sites' diameter (2% to 30% of each
@@ -45,6 +48,10 @@ public class TunnelMoviePanel : MonoBehaviour
     [SerializeField]
     [Tooltip("Deletes the movie chosen, if someone made it (a second tap confirms).")]
     Button m_DeleteMovieRow;
+
+    [SerializeField]
+    [Tooltip("Match size: makes the molecules in the container the movie's magnification, for everyone.")]
+    Button m_MatchSizeRow;
 
     [SerializeField]
     [Tooltip("The New movie menu (made by Tunnel > Movie > Build 3D Movie).")]
@@ -175,6 +182,7 @@ public class TunnelMoviePanel : MonoBehaviour
         m_NextMovieButton?.onClick.AddListener(() => StepMovie(1));
         m_NewMovieRow?.onClick.AddListener(ToggleNewMovie);
         m_DeleteMovieRow?.onClick.AddListener(DeleteMovie);
+        m_MatchSizeRow?.onClick.AddListener(() => m_Movie?.MatchSize());
         m_StartRow?.onClick.AddListener(() => m_Movie?.StartMovie());
         m_PauseRow?.onClick.AddListener(() => m_Movie?.Pause());
         m_PlayRow?.onClick.AddListener(() => m_Movie?.Play());
@@ -483,13 +491,16 @@ public class TunnelMoviePanel : MonoBehaviour
         int at = list.FindIndex(m => m.id == movie.id);
         bool running = state == TunnelMovie.State.Playing || state == TunnelMovie.State.Paused || state == TunnelMovie.State.Restarting;
         string where = at >= 0 ? $"{at + 1} of {list.Count}" : "deleted";
-        SetRow(m_ScenarioRow, $"<b>{movie.name}</b>  <color=#AAA>{where}{(running ? ", ◄ ► stops it" : movie.builtIn ? "" : ", made here")}</color>", list.Count > 1);
+        string size = movie.magnification > 0 ? $" {movie.sizeLabel}" : "";
+        SetRow(m_ScenarioRow, $"<b>{movie.name}{size}</b>  <color=#AAA>· {where}{(running ? ", ◄ ► stops it" : "")}</color>", list.Count > 1);
         SetRow(m_PrevMovieButton, "◄", list.Count > 1);
         SetRow(m_NextMovieButton, "►", list.Count > 1);
         bool menuOpen = m_NewMovie != null && m_NewMovie.gameObject.activeSelf;
-        SetRow(m_NewMovieRow, menuOpen ? "New movie...  <color=#AAA>(open)</color>" : "New movie...", true);
+        SetRow(m_NewMovieRow, menuOpen ? "<color=#7F7>New movie...</color>" : "New movie...", true);
+        bool canMatch = m_Movie.canMatchSize;
+        SetRow(m_MatchSizeRow, canMatch ? $"Match {movie.sizeLabel}" : "Match size", canMatch);
         bool armed = m_DeleteArmedFor == movie.id && Time.unscaledTime <= m_DeleteArmedUntil;
-        SetRow(m_DeleteMovieRow, armed ? "<color=#F55>Tap to delete</color>" : "Delete movie", !movie.builtIn);
+        SetRow(m_DeleteMovieRow, armed ? "<color=#F55>Tap again</color>" : "Delete", !movie.builtIn);
         SetRow(m_StartRow, $"{(state == TunnelMovie.State.Ended ? "Start again" : "Start")}  <color=#AAA>{movie.name}</color>", state == TunnelMovie.State.Ready || state == TunnelMovie.State.Ended);
         SetRow(m_PauseRow, "Pause", state == TunnelMovie.State.Playing);
         SetRow(m_PlayRow, "Play", state == TunnelMovie.State.Paused);
@@ -520,8 +531,10 @@ public class TunnelMoviePanel : MonoBehaviour
         {
             int capsids = m_Movie.CountCapsids(), covered = m_Movie.CountCovered(), antibodies = m_Movie.CountAntibodies(), bound = m_Movie.CountBound();
             string coveredText = covered == 0 ? "" : ligands ? $" ({covered} with {movie.BinderWord(1)} bound)" : $" ({covered} fully covered)";
+            string sizeNote = m_Movie.sizeNote;
             string text = $"<color=#AAA>In the container:</color> {capsids} {movie.ReceptorWord(capsids)}{coveredText}, "
                 + $"{antibodies} free {movie.BinderWord(antibodies)}, {bound} bound\n"
+                + (sizeNote.Length > 0 ? $"<color=#FD6>{sizeNote}{(state == TunnelMovie.State.Ready || state == TunnelMovie.State.Ended ? " Match size resizes them." : "")}</color>\n" : "")
                 + (m_Note.Length > 0 ? m_Note : m_Movie.message);
             if (m_Status.text != text)
                 m_Status.text = text;
@@ -642,8 +655,9 @@ public class TunnelMoviePanel : MonoBehaviour
     public void Configure(Button start, Button pause, Button play, Button sites, Button save, Slider diameter, TMP_Text diameterText,
         TMP_Text title, TMP_Text status, XRKeyboard keyboard, float width, float height,
         Button playAgain, Slider bindingTime, TMP_Text bindingTimeText, XRGrabInteractable grab, float barSpace, Button scenario,
-        Button previousMovie, Button nextMovie, Button newMovie, Button deleteMovie, TunnelNewMoviePanel newMoviePrefab)
+        Button previousMovie, Button nextMovie, Button newMovie, Button deleteMovie, TunnelNewMoviePanel newMoviePrefab, Button matchSize)
     {
+        m_MatchSizeRow = matchSize;
         m_ScenarioRow = scenario;
         m_PrevMovieButton = previousMovie;
         m_NextMovieButton = nextMovie;

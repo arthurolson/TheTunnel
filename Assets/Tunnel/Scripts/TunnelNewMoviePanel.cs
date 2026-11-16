@@ -13,14 +13,15 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 /// shown beside it, for whoever pressed it: it makes a new 3D movie without code (see <see cref="MovieDefinition"/>).
 /// Top to bottom: its name (tap, then type on the keyboard under it); the receptor, chosen with ◄ ► from the molecules
 /// that carry binding sites (the viruses and EGFR), and the binder, from those that bind that receptor (only pairs with
-/// binding-site data are offered: IGG for the viruses, EGFR ligand for EGFR); how many of each (1 to 10 receptors, 1 to
+/// binding-site data are offered: IGG for the viruses, EGFR ligand for EGFR); the magnification its molecules are made
+/// at (×1 to ×20 on the Molecules list's stops, starting at the list's value); how many of each (1 to 10 receptors, 1 to
 /// 100 binders, fewer when the triangle budget says so); the capture radius (a pocket, 2 to 30 Å) or the binding
 /// sites' size (2 to 30% of a virus's diameter); the binding time (10 s to 1 min); how a receptor shows what is bound
 /// (shifting toward a colour by the share of its sites taken, as the viruses go green, or that colour all the while
 /// anything is bound, as EGFR goes light blue) and the colour; and the starting conditions, the container's viscosity,
 /// heat and motion (taken from the container when the menu opens). Create stores the movie on the host for everyone,
-/// adds it to every movie menu's list and chooses it here, and fills the container with those molecules at the Molecules
-/// list's magnification, scattered and moving (what was in it goes first; see <see cref="TunnelMovie.CreateMovie"/>).
+/// adds it to every movie menu's list and chooses it here, and fills the container with those molecules at the movie's
+/// own magnification, scattered and moving (what was in it goes first; see <see cref="TunnelMovie.CreateMovie"/>).
 /// It can be taken by the bar along its top and moved, and let go of within 25 cm of a flat tunnel wall it lies flat on
 /// the wall; until it is moved it stays beside the movie menu. What is set on it is this player's own until Create.
 /// Made by Tunnel > Movie > Build 3D Movie.
@@ -37,6 +38,8 @@ public class TunnelNewMoviePanel : MonoBehaviour
     [SerializeField] Button m_BinderPrev;
     [SerializeField] Button m_BinderRow;
     [SerializeField] Button m_BinderNext;
+    [SerializeField] Slider m_MagnificationSlider;
+    [SerializeField] TMP_Text m_MagnificationText;
     [SerializeField] Slider m_ReceptorsSlider;
     [SerializeField] TMP_Text m_ReceptorsText;
     [SerializeField] Slider m_BindersSlider;
@@ -131,6 +134,7 @@ public class TunnelNewMoviePanel : MonoBehaviour
         Listen(m_MotionRow, ToggleMotion);
         Listen(m_CreateButton, Create);
         Listen(m_CloseButton, Close);
+        Slide(m_MagnificationSlider, 0, TunnelMoleculeMenu.k_Steps.Length - 1, v => { m_Draft.magnification = TunnelMoleculeMenu.MagnificationAt(v); m_Refresh = true; });
         Slide(m_ReceptorsSlider, 1, TunnelMovie.k_MaxReceptors, v => { m_Draft.receptors = Mathf.RoundToInt(v); m_Refresh = true; });
         Slide(m_BindersSlider, 1, TunnelMovie.k_MaxBinders, v => { m_Draft.binders = Mathf.RoundToInt(v); m_Refresh = true; });
         Slide(m_StrengthSlider, 2, 30, v =>
@@ -218,6 +222,8 @@ public class TunnelNewMoviePanel : MonoBehaviour
             name = "",
             receptors = 1,
             binders = 15,
+            // The Molecules list's magnification to begin with; the movie keeps its own.
+            magnification = Mathf.Max(1, TunnelMoleculeMenu.currentMagnification),
             captureRadius = TunnelMovie.k_DefaultCaptureRadius,
             siteDiameter = TunnelMovie.k_DefaultSiteDiameter,
             bindingTime = TunnelMovie.k_DefaultBindingTime,
@@ -339,9 +345,8 @@ public class TunnelNewMoviePanel : MonoBehaviour
         if (movie.name.Length == 0)
             movie.name = $"{movie.binder} on {movie.receptor}";
         movie.binders = Mathf.Min(movie.binders, mostBinders);
-        int magnification = TunnelMoleculeMenu.currentMagnification;
-        m_Movie.CreateMovie(movie, magnification);
-        Debug.Log($"[Movie] New movie \"{movie.name}\" created from the menu at ×{magnification}");
+        m_Movie.CreateMovie(movie);
+        Debug.Log($"[Movie] New movie \"{movie.name}\" created from the menu at ×{movie.sizeToUse}");
         Close();
     }
 
@@ -426,6 +431,9 @@ public class TunnelNewMoviePanel : MonoBehaviour
         int most = mostBinders;
         if (m_Draft.binders > most)
             m_Draft.binders = most;
+        SetSlider(m_MagnificationSlider, TunnelMoleculeMenu.StepOf(m_Draft.sizeToUse));
+        string across = m_Receptors.Count > 0 ? $"{m_Draft.receptor} {TunnelMovie.SizeOf(m_Receptors[m_Receptor].prefab, m_Draft.sizeToUse) * 100f:0.#} cm across" : "";
+        SetText(m_MagnificationText, $"Magnification: ×{m_Draft.sizeToUse}  <color=#AAA>{across}</color>");
         SetSlider(m_ReceptorsSlider, m_Draft.receptors);
         if (m_BindersSlider != null)
             m_BindersSlider.maxValue = TunnelMovie.k_MaxBinders;
@@ -473,10 +481,9 @@ public class TunnelNewMoviePanel : MonoBehaviour
         SetRow(m_CloseButton, "Close", true);
         if (m_Status != null)
         {
-            int magnification = TunnelMoleculeMenu.currentMagnification;
             string text = m_Note.Length > 0 ? m_Note
-                : $"Create fills the container with these at ×{magnification} (the Molecules list's magnification), scattered and moving; what is in it now goes. " +
-                  "The movie is kept on the host and listed on every movie menu.";
+                : $"Create fills the container with these at ×{m_Draft.sizeToUse}, scattered and moving; what is in it now goes. " +
+                  "The movie is kept on the host and listed on every movie menu; choosing it sets the Molecules list to its magnification.";
             if (m_StartNote.Length > 0)
                 text += "\n<color=#FD6>" + m_StartNote + "</color>";
             m_Status.text = text;
@@ -611,7 +618,7 @@ public class TunnelNewMoviePanel : MonoBehaviour
     /// <summary>Set by Tunnel > Movie > Build 3D Movie.</summary>
     public void Configure(TMP_Text title, TMP_Text status, Button nameRow, XRKeyboard keyboard,
         Button receptorPrev, Button receptorRow, Button receptorNext, Button binderPrev, Button binderRow, Button binderNext,
-        Slider receptors, TMP_Text receptorsText, Slider binders, TMP_Text bindersText, Slider strength, TMP_Text strengthText,
+        Slider magnification, TMP_Text magnificationText, Slider receptors, TMP_Text receptorsText, Slider binders, TMP_Text bindersText, Slider strength, TMP_Text strengthText,
         Slider time, TMP_Text timeText, Button shift, Button solid, Button[] swatches, Slider viscosity, TMP_Text viscosityText,
         Slider heat, TMP_Text heatText, Button motion, Button create, Button close, XRGrabInteractable grab, float width, float height, float barSpace)
     {
@@ -625,6 +632,8 @@ public class TunnelNewMoviePanel : MonoBehaviour
         m_BinderPrev = binderPrev;
         m_BinderRow = binderRow;
         m_BinderNext = binderNext;
+        m_MagnificationSlider = magnification;
+        m_MagnificationText = magnificationText;
         m_ReceptorsSlider = receptors;
         m_ReceptorsText = receptorsText;
         m_BindersSlider = binders;

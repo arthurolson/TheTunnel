@@ -175,6 +175,20 @@ What has been built, what is in progress, and where each build is. Updated as wo
   a made movie sets the container's medium and heat as made. Play again, Save starting state (named after it) and
   pausing work as for the built-in two. Shared in a session (the host's list on each container's movie; creating and
   deleting go to the host); works when not connected.
+- Each movie has a magnification (15.11.2026.3), on the Molecules list's stops: Ligand binding x20,
+  Antibody action x1 (at x1 the capsids are 6 to 8 cm across, SARS-CoV-2 32 cm with its spikes and an IgG 2.6 cm:
+  large enough to watch, and the size it has always been played at), a made movie
+  whatever its New movie menu's Magnification slider said (it starts at the Molecules list's value; movies stored
+  before this have none and use the list's). Create fills the container at the movie's own magnification. Choosing a
+  movie (with ◄ ►, or for you at Start) sets the Molecules list's Magnification to it, so molecules added by hand from
+  the list come out at the movie's size; the slider is shared (the host's value is everyone's), as it already was.
+  The picker shows it ("Ligand binding x20 · 2 of 2"). Molecules already in the container are not resized: when any
+  is at another size, the status says so in yellow ("EGFR here is x10; this movie is x20. Match size resizes them.")
+  and Match size (between New movie... and Delete) makes everything in the container the movie's size for everyone,
+  each staying where it was in the container (the container grows first if they would crowd it; each headset resizes
+  what it moves, so it is the same for all). Only before Start. Capture spheres and the rest still follow each
+  molecule's actual size. Saved starting states record the movie's magnification too (each molecule's own scale was
+  already kept).
 - Built by Tunnel > Movie > Build 3D Movie (or Build Movie Menus); Editor test: Tunnel > Movie > Test New Movie (in
   Play mode; works in a test folder, the app's movies are untouched). Log tag [Movie].
 
@@ -270,18 +284,18 @@ What has been built, what is in progress, and where each build is. Updated as wo
 | Headset checks still owed | SARS-CoV-2 in the 3D movie (09.11.2026.1); the movie panel's placement on the wall beside a mixed reality box; transparent Viewer images (09.11.2026.2); Viewer Content only with two players and the backdrop fix (10.11.2026.2); the virtual marker following the hand instantly (09.11.2026.3). |
 | Antibody action, Clear contents, eraser | Built and passing its Editor test, not connected (14.11.2026.5). Next: headset (the menu's bar by hand and ray, its wall snap; the eraser in the hand, haptics and sound; the green shift on each virus) and two players (bindings, releases and colour the same for both; Play again's countdown and restore from a client; menu position shared while carried; a client erasing something another player holds; late joiner). |
 | Molecule categories, EGFR, EGFR ligand, Ligand binding | 15.11.2026.1 on a headset: the user saw no binding (no log). Fixed after it (capture sphere on the pocket's mouth, Start warms a container with no heat, a movie can be changed after it has played); Editor runs now bind within seconds at x10–x20 with the default 10 Å. Next: headset (Ligand binding at x10 and x20 with ~15 ligands: a binding within half a minute, the glide down the channel, Cys775, the light blue; the [Movie] reports in adb logcat; grabbing EGFR at x1 and the ligand's 2 cm grab collider; frame rate with many 42k-triangle ligands on Quest 3S) and two players (movie choice, capture radius, bindings, colour and Cys775 the same for both; late joiner). |
-| Magnification x20, New movie menu, movies as data | Built and passing their Editor tests, not connected (15.11.2026.2). Next: headset (the Magnification slider's stops by ray and poke; molecules at x20, about 25 cm for EGFR; New movie... and the New movie menu: its place beside the movie menu, the keyboard for the name, ◄ ►, the swatches, Create filling the box, Delete's second tap; the picker stopping a playing movie) and two players (a client creating and deleting a movie, the list the same for both, the host keeping it after a restart; late joiner). |
+| Magnification x20, New movie menu, movies as data | Built and passing their Editor tests, not connected (15.11.2026.2, runs on both Quest 3s). 15.11.2026.3: each movie has its own magnification (Ligand binding x20, Antibody action x1), choosing one sets the Molecules list to it, and Match size; passing their Editor tests, not yet launch-tested. Next: headset (choosing Ligand binding turning the list to x20; the yellow size note and Match size on molecules placed at another size; the Magnification slider's stops by ray and poke; molecules at x20, about 25 cm for EGFR; New movie... and the New movie menu: its place beside the movie menu, the keyboard for the name, ◄ ►, the swatches, Create filling the box, Delete's second tap; the picker stopping a playing movie) and two players (a client creating and deleting a movie, the list the same for both, the host keeping it after a restart; late joiner). |
 | Grab diagnostics | Every grab and release is logged (since 08.11.2026.1), to track down grabs that don't take. Still on. |
 
 ## Builds and headsets
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 15.11.2026.2 |
+| Latest build (Builds/TheTunnelDev.apk) | 15.11.2026.3 |
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |
 | Quest 3S 3497C10HC4041K | 13.11.2026.4 |
 | Quest 3S 3497C10HC4004X | 13.11.2026.4 |
 | Quest 3 2G0YC1ZF760BMQ | 15.11.2026.2 |
-| Quest 3 2G0YC1ZF7X0DTC | 14.11.2026.5 |
+| Quest 3 2G0YC1ZF7X0DTC | 15.11.2026.2 |
