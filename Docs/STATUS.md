@@ -39,7 +39,10 @@ What has been built, what is in progress, and where each build is. Updated as wo
   under headings in that order, skipping empty categories; names, network ids and prefab references are unchanged
   (moved with AssetDatabase). Adding a molecule is still dropping a folder with a model into a category folder.
 - Assemblies (16.11.2026.1): a sixth category, Assets/Molecules/assemblies, listed after Viral capsids, with the
-  E. coli 50S ribosome (PDB 10QM, from Mol*): 31 chains, 8,500 vertices, 3.7 cm across at x1, a box collider. An
+  E. coli 50S ribosome (PDB 10QM, from Mol*): 31 chains, 3.9 cm across at x1, a box collider. Since 16.11.2026.2
+  made from the user's Gaussian-surface export (10QM-gaussian.glb, 563k vertices, kept out of git like SARS's
+  model), merged on a 2 Å grid to 174k vertices / 360k triangles (the spawn nozzle's 3M budget allows 8 at once);
+  the first, coarse export is in Source~. An
   assembly is a surface (simplified like the others) but keeps the model's own colours, one per chain, since 2PLV's
   few colours can't tell dozens of chains apart. Editor test: Test Molecule Library passes with it.
   Builders find molecules by name wherever they are (MoleculeLibraryBuilder.ToyPath / FolderOf). Editor test:
@@ -295,7 +298,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 16.11.2026.1 |
+| Latest build (Builds/TheTunnelDev.apk) | 16.11.2026.2 |
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |
