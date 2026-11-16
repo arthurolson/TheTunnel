@@ -29,7 +29,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 ### Molecules
 - Molecule toys built from Assets/Molecules, chosen from the TS Menu's Molecules list. A slider magnifies them
-  from x1 to x20 (16.11.2026: its stops go x1 to x10 one at a time, then x12, x14, x16, x18, x20, so the low end keeps
+  from x1 to x20 (15.11.2026: its stops go x1 to x10 one at a time, then x12, x14, x16, x18, x20, so the low end keeps
   two thirds of the slider; ticks rebuilt by Tunnel > Molecules > Build Magnification Slider), and new molecules don't
   overlap. Everything that scales with it (colliders, the ligand's grab size, capture spheres, the binding glide, the
   nozzle's spray spacing) follows the molecule's own scale, so x20 needs nothing else; the nozzle's triangle budget
@@ -57,7 +57,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
 - The spawn nozzle sprays them like any other (budget: EGFR 100, ligand 60 per spray).
 - Physics:
   - each molecule's mass comes from its volume;
-  - the heat's random kicks can no longer be infinite (16.11.2026: Random.value can be exactly 1, and the Gaussian's
+  - the heat's random kicks can no longer be infinite (15.11.2026: Random.value can be exactly 1, and the Gaussian's
     log(0) gave "angularVelocity ... Infinity" errors in the log);
   - molecules bounce, and drift when pushed;
   - gravity can be turned on or off;
@@ -118,14 +118,14 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 ### Ligand binding (the second 3D movie in a container)
 - Chosen on the movie menu's picker (see 3D movies below); the Containers list's row reads 3D movie controls.
-- EGFR carries one binding site: a capture sphere on the mouth of its ligand's pocket (16.11.2026; it was on the
+- EGFR carries one binding site: a capture sphere on the mouth of its ligand's pocket (15.11.2026; it was on the
   ligand's bound place, which free ligands can't reach), radius set by the Capture radius slider, 2 to 30 Å at the
   molecules' true scale (10 Å at first), shown by Show capture spheres. A free EGFR ligand touching it glides (0.6 s)
   down the channel into its exact pose in the crystal structure, at EGFR's size, and stays for the binding time (10 s
   to 1 min); then it is pushed out through the mouth and rests 3 s. While bound, EGFR is light blue, and Cys775 (the
   cysteine the inhibitor is covalently bonded to) shows once the ligand has settled, hidden again the moment it leaves.
   IgGs don't bind in the pocket; ligands don't bind to viruses.
-- What was wrong (16.11.2026, after the user saw no binding in 15.11.2026.1): (1) the capture sphere was centred
+- What was wrong (15.11.2026, after the user saw no binding in 15.11.2026.1): (1) the capture sphere was centred
   20 Å down a 10 Å channel, which free ligands never entered (closest approach 12–19 Å in 30–90 s runs, 0 bindings in
   40 s at x10 with 15 ligands); (2) a new container has no heat (absolute zero), so after being let go of in it
   nothing moves; Start now brings a container at absolute zero to 20 °C and says so; (3) once a movie had started its
@@ -153,7 +153,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
   TS Menu's lists at x1, x5, x10 and x20, 10 Å and 30 Å, and once from the spawn nozzle, and starts it from the movie
   menu).
 
-### 3D movies as data, and the New movie menu (16.11.2026)
+### 3D movies as data, and the New movie menu (15.11.2026)
 - A movie is a definition (MovieDefinition): receptor (a molecule with binding sites; empty for "any virus"), binder,
   pocket or surface sites, how many of each, capture radius or sites' size, binding time, the bound colour effect
   (shift toward a colour by the share of sites taken, or a solid colour while bound) and colour, and starting
@@ -277,11 +277,11 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 15.11.2026.2 (not yet launch-tested on a headset) |
+| Latest build (Builds/TheTunnelDev.apk) | 15.11.2026.2 |
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |
 | Quest 3S 3497C10HC4041K | 13.11.2026.4 |
 | Quest 3S 3497C10HC4004X | 13.11.2026.4 |
-| Quest 3 2G0YC1ZF760BMQ | 15.11.2026.1 |
+| Quest 3 2G0YC1ZF760BMQ | 15.11.2026.2 |
 | Quest 3 2G0YC1ZF7X0DTC | 14.11.2026.5 |
