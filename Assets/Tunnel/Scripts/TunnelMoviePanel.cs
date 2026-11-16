@@ -8,7 +8,11 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 
 /// <summary>
 /// A container's 3D movie menu (see <see cref="TunnelMovie"/>), shown beside the container. Its top row chooses the
-/// movie before it starts: Antibody action or Ligand binding (tap to switch). Then Start, Pause, Play, Play again
+/// movie from every one there is (the two built in, Antibody action and Ligand binding, then those people made), with ◄
+/// and ► (or a tap on the name for the next); choosing another while one plays stops it. Under it, New movie... opens
+/// the New movie menu beside this one (see <see cref="TunnelNewMoviePanel"/>), and Delete movie deletes the movie
+/// chosen, for everyone, if someone made it (a second tap confirms; the built-in two can't be deleted). Then Start,
+/// Pause, Play, Play again
 /// (everything bound lets go, and after a 5 second countdown it starts again from the starting state), Show binding
 /// sites (the capture spheres, in Ligand binding), a slider for the binding sites' diameter (2% to 30% of each
 /// capsid's) in Antibody action or the capture radius (2 to 30 Å) in Ligand binding, the binding time (10 s to 1 min,
@@ -23,8 +27,28 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 public class TunnelMoviePanel : MonoBehaviour
 {
     [SerializeField]
-    [Tooltip("Chooses the movie: Antibody action or Ligand binding (only before it starts).")]
+    [Tooltip("Shows the movie chosen; a tap chooses the next.")]
     Button m_ScenarioRow;
+
+    [SerializeField]
+    [Tooltip("Chooses the movie before this one in the list.")]
+    Button m_PrevMovieButton;
+
+    [SerializeField]
+    [Tooltip("Chooses the movie after this one in the list.")]
+    Button m_NextMovieButton;
+
+    [SerializeField]
+    [Tooltip("Opens the New movie menu beside this one.")]
+    Button m_NewMovieRow;
+
+    [SerializeField]
+    [Tooltip("Deletes the movie chosen, if someone made it (a second tap confirms).")]
+    Button m_DeleteMovieRow;
+
+    [SerializeField]
+    [Tooltip("The New movie menu (made by Tunnel > Movie > Build 3D Movie).")]
+    TunnelNewMoviePanel m_NewMoviePrefab;
 
     [SerializeField]
     Button m_StartRow;
@@ -88,7 +112,11 @@ public class TunnelMoviePanel : MonoBehaviour
     float m_NextRefresh;
     float m_DiameterShown = -1f;
     float m_BindingTimeShown = -1f;
-    int m_ScenarioShown = -1;
+    string m_MovieShown;
+    bool m_PocketShown;
+    TunnelNewMoviePanel m_NewMovie;
+    string m_DeleteArmedFor;
+    float m_DeleteArmedUntil;
     bool m_Holding;
     float m_OwnPoseUntil;
     float m_NextShare;
@@ -124,10 +152,29 @@ public class TunnelMoviePanel : MonoBehaviour
         m_Movie.PlacePanel(true);
     }
 
+    /// <summary>Its New movie menu, once it has been opened on this headset.</summary>
+    public TunnelNewMoviePanel newMovieMenu => m_NewMovie;
+
+    /// <summary>Along the menu, the way away from its container (where the New movie menu goes).</summary>
+    public Vector3 awayFromContainer
+    {
+        get
+        {
+            var right = transform.right;
+            var container = m_Movie != null ? m_Movie.container : null;
+            if (container == null)
+                return -right;
+            return Vector3.Dot(transform.position - container.transform.position, right) >= 0f ? right : -right;
+        }
+    }
+
     void Awake()
     {
-        m_ScenarioRow?.onClick.AddListener(() => m_Movie?.SetScenario(m_Movie.scenario == TunnelMovie.Scenario.LigandBinding
-            ? TunnelMovie.Scenario.AntibodyAction : TunnelMovie.Scenario.LigandBinding));
+        m_ScenarioRow?.onClick.AddListener(() => StepMovie(1));
+        m_PrevMovieButton?.onClick.AddListener(() => StepMovie(-1));
+        m_NextMovieButton?.onClick.AddListener(() => StepMovie(1));
+        m_NewMovieRow?.onClick.AddListener(ToggleNewMovie);
+        m_DeleteMovieRow?.onClick.AddListener(DeleteMovie);
         m_StartRow?.onClick.AddListener(() => m_Movie?.StartMovie());
         m_PauseRow?.onClick.AddListener(() => m_Movie?.Pause());
         m_PlayRow?.onClick.AddListener(() => m_Movie?.Play());
@@ -178,6 +225,8 @@ public class TunnelMoviePanel : MonoBehaviour
 
     void OnDestroy()
     {
+        if (m_NewMovie != null)
+            Destroy(m_NewMovie.gameObject);
         if (m_Grab != null)
         {
             m_Grab.firstSelectEntered.RemoveListener(OnTaken);
@@ -193,6 +242,8 @@ public class TunnelMoviePanel : MonoBehaviour
 
     void OnDisable()
     {
+        if (m_NewMovie != null)
+            m_NewMovie.Close();
         if (m_Keyboard != null && m_Keyboard.isOpen)
             m_Keyboard.Close(false);
         m_Saving = null;
@@ -258,7 +309,81 @@ public class TunnelMoviePanel : MonoBehaviour
 
     #endregion
 
-    bool ligands => m_Movie != null && m_Movie.scenario == TunnelMovie.Scenario.LigandBinding;
+    #region Movies
+
+    /// <summary>
+    /// Chooses the movie this many places along the list (+1 the next, -1 the one before, round the ends), for
+    /// everyone. One playing stops.
+    /// </summary>
+    public void StepMovie(int by)
+    {
+        if (m_Movie == null)
+            return;
+        var list = m_Movie.movies;
+        if (list.Count == 0)
+            return;
+        int at = list.FindIndex(m => m.id == m_Movie.definition.id);
+        if (at < 0)
+            at = 0;
+        var next = list[((at + by) % list.Count + list.Count) % list.Count];
+        m_DeleteArmedFor = null;
+        m_Movie.SetMovie(next);
+        m_NextRefresh = 0f;
+    }
+
+    /// <summary>Opens the New movie menu beside this one (or puts it away if it is open).</summary>
+    public void ToggleNewMovie()
+    {
+        if (m_Movie == null)
+            return;
+        if (m_NewMovie != null && m_NewMovie.gameObject.activeSelf)
+        {
+            m_NewMovie.Close();
+            m_NextRefresh = 0f;
+            return;
+        }
+        if (m_NewMovie == null)
+        {
+            if (m_NewMoviePrefab == null)
+            {
+                m_Note = "No New movie menu in this build.";
+                return;
+            }
+            m_NewMovie = Instantiate(m_NewMoviePrefab);
+            m_NewMovie.name = $"{name} New Movie Menu";
+        }
+        m_NewMovie.Open(m_Movie, this);
+        m_NextRefresh = 0f;
+    }
+
+    // A made movie: a first tap asks, a second within a few seconds deletes it for everyone.
+    void DeleteMovie()
+    {
+        if (m_Movie == null)
+            return;
+        var movie = m_Movie.definition;
+        if (movie.builtIn)
+        {
+            m_Note = $"{movie.name} is built in: it can't be deleted.";
+            m_NextRefresh = 0f;
+            return;
+        }
+        if (m_DeleteArmedFor != movie.id || Time.unscaledTime > m_DeleteArmedUntil)
+        {
+            m_DeleteArmedFor = movie.id;
+            m_DeleteArmedUntil = Time.unscaledTime + 4f;
+            m_Note = $"Tap Delete again to delete \"{movie.name}\" for everyone.";
+            m_NextRefresh = 0f;
+            return;
+        }
+        m_DeleteArmedFor = null;
+        m_Movie.DeleteMovie(movie.id);
+        m_NextRefresh = 0f;
+    }
+
+    #endregion
+
+    bool ligands => m_Movie != null && m_Movie.definition.pocket;
 
     // The slider sets the sites' diameter (whole percent) or, in Ligand binding, the capture radius (whole ångströms).
     float SliderSetting => m_Movie == null ? 0f : ligands ? m_Movie.captureRadius : m_Movie.siteDiameter * 100f;
@@ -309,7 +434,7 @@ public class TunnelMoviePanel : MonoBehaviour
             return;
         float seconds = m_BindingTimeSlider.value;
         string time = seconds >= 60f ? "1 min" : $"{seconds:0} s";
-        string text = $"Binding time: {time}  <color=#AAA>each {(ligands ? "ligand" : "antibody")} stays bound</color>";
+        string text = $"Binding time: {time}  <color=#AAA>each {(m_Movie != null ? m_Movie.definition.BinderWord(1) : "binder")} stays bound</color>";
         if (m_BindingTimeText.text != text)
             m_BindingTimeText.text = text;
     }
@@ -319,7 +444,7 @@ public class TunnelMoviePanel : MonoBehaviour
         if (m_DiameterText == null || m_DiameterSlider == null)
             return;
         string text = ligands
-            ? $"Capture radius: {m_DiameterSlider.value:0} Å  <color=#AAA>round each EGFR's pocket</color>"
+            ? $"Capture radius: {m_DiameterSlider.value:0} Å  <color=#AAA>round each pocket's mouth</color>"
             : $"Binding site diameter: {m_DiameterSlider.value:0}%  <color=#AAA>of each capsid's</color>";
         if (m_DiameterText.text != text)
             m_DiameterText.text = text;
@@ -328,9 +453,10 @@ public class TunnelMoviePanel : MonoBehaviour
     void Update()
     {
         ShareWhileHeld();
-        if (m_Movie != null && (int)m_Movie.scenario != m_ScenarioShown)
+        if (m_Movie != null && (m_Movie.definition.id != m_MovieShown || m_Movie.definition.pocket != m_PocketShown))
         {
-            m_ScenarioShown = (int)m_Movie.scenario;
+            m_MovieShown = m_Movie.definition.id;
+            m_PocketShown = m_Movie.definition.pocket;
             ShowScenario();
             m_BindingTimeShown = -1f;
             m_NextRefresh = 0f;
@@ -352,10 +478,19 @@ public class TunnelMoviePanel : MonoBehaviour
             return;
         m_NextRefresh = Time.unscaledTime + 0.2f;
         var state = m_Movie.state;
-        bool canChoose = state == TunnelMovie.State.Ready || state == TunnelMovie.State.Ended;
-        string other = TunnelMovie.TitleOf(ligands ? TunnelMovie.Scenario.AntibodyAction : TunnelMovie.Scenario.LigandBinding);
-        SetRow(m_ScenarioRow, $"Movie: <b>{m_Movie.title}</b>  <color=#AAA>{(canChoose ? $"tap for {other}" : "(chosen before it starts)")}</color>", canChoose);
-        SetRow(m_StartRow, state == TunnelMovie.State.Ended ? "Start again" : "Start", state == TunnelMovie.State.Ready || state == TunnelMovie.State.Ended);
+        var movie = m_Movie.definition;
+        var list = m_Movie.movies;
+        int at = list.FindIndex(m => m.id == movie.id);
+        bool running = state == TunnelMovie.State.Playing || state == TunnelMovie.State.Paused || state == TunnelMovie.State.Restarting;
+        string where = at >= 0 ? $"{at + 1} of {list.Count}" : "deleted";
+        SetRow(m_ScenarioRow, $"<b>{movie.name}</b>  <color=#AAA>{where}{(running ? ", ◄ ► stops it" : movie.builtIn ? "" : ", made here")}</color>", list.Count > 1);
+        SetRow(m_PrevMovieButton, "◄", list.Count > 1);
+        SetRow(m_NextMovieButton, "►", list.Count > 1);
+        bool menuOpen = m_NewMovie != null && m_NewMovie.gameObject.activeSelf;
+        SetRow(m_NewMovieRow, menuOpen ? "New movie...  <color=#AAA>(open)</color>" : "New movie...", true);
+        bool armed = m_DeleteArmedFor == movie.id && Time.unscaledTime <= m_DeleteArmedUntil;
+        SetRow(m_DeleteMovieRow, armed ? "<color=#F55>Tap to delete</color>" : "Delete movie", !movie.builtIn);
+        SetRow(m_StartRow, $"{(state == TunnelMovie.State.Ended ? "Start again" : "Start")}  <color=#AAA>{movie.name}</color>", state == TunnelMovie.State.Ready || state == TunnelMovie.State.Ended);
         SetRow(m_PauseRow, "Pause", state == TunnelMovie.State.Playing);
         SetRow(m_PlayRow, "Play", state == TunnelMovie.State.Paused);
         SetRow(m_PlayAgainRow, state == TunnelMovie.State.Restarting
@@ -384,13 +519,10 @@ public class TunnelMoviePanel : MonoBehaviour
         if (m_Status != null)
         {
             int capsids = m_Movie.CountCapsids(), covered = m_Movie.CountCovered(), antibodies = m_Movie.CountAntibodies(), bound = m_Movie.CountBound();
-            string text = ligands
-                ? $"<color=#AAA>In the container:</color> {capsids} EGFR{(covered > 0 ? $" ({covered} with its ligand bound)" : "")}, "
-                    + $"{antibodies} free ligand{(antibodies == 1 ? "" : "s")}, {bound} bound\n"
-                    + (m_Note.Length > 0 ? m_Note : m_Movie.message)
-                : $"<color=#AAA>In the container:</color> {capsids} {(capsids == 1 ? "virus" : "viruses")}{(covered > 0 ? $" ({covered} fully covered)" : "")}, "
-                    + $"{antibodies} free antibod{(antibodies == 1 ? "y" : "ies")}, {bound} bound\n"
-                    + (m_Note.Length > 0 ? m_Note : m_Movie.message);
+            string coveredText = covered == 0 ? "" : ligands ? $" ({covered} with {movie.BinderWord(1)} bound)" : $" ({covered} fully covered)";
+            string text = $"<color=#AAA>In the container:</color> {capsids} {movie.ReceptorWord(capsids)}{coveredText}, "
+                + $"{antibodies} free {movie.BinderWord(antibodies)}, {bound} bound\n"
+                + (m_Note.Length > 0 ? m_Note : m_Movie.message);
             if (m_Status.text != text)
                 m_Status.text = text;
         }
@@ -509,9 +641,15 @@ public class TunnelMoviePanel : MonoBehaviour
     /// <summary>Set by Tunnel > Movie > Build 3D Movie.</summary>
     public void Configure(Button start, Button pause, Button play, Button sites, Button save, Slider diameter, TMP_Text diameterText,
         TMP_Text title, TMP_Text status, XRKeyboard keyboard, float width, float height,
-        Button playAgain, Slider bindingTime, TMP_Text bindingTimeText, XRGrabInteractable grab, float barSpace, Button scenario)
+        Button playAgain, Slider bindingTime, TMP_Text bindingTimeText, XRGrabInteractable grab, float barSpace, Button scenario,
+        Button previousMovie, Button nextMovie, Button newMovie, Button deleteMovie, TunnelNewMoviePanel newMoviePrefab)
     {
         m_ScenarioRow = scenario;
+        m_PrevMovieButton = previousMovie;
+        m_NextMovieButton = nextMovie;
+        m_NewMovieRow = newMovie;
+        m_DeleteMovieRow = deleteMovie;
+        m_NewMoviePrefab = newMoviePrefab;
         m_PlayAgainRow = playAgain;
         m_BindingTimeSlider = bindingTime;
         m_BindingTimeText = bindingTimeText;

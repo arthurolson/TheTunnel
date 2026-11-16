@@ -329,8 +329,8 @@ public class MoleculeGravity : MonoBehaviour
 
     static float Gaussian()
     {
-        // Box-Muller.
-        float u = 1f - Random.value, v = Random.value;
+        // Box-Muller. Random.value can be exactly 1 (and 0): u is kept off 0, or the log is infinite and so is the kick.
+        float u = Mathf.Max(1e-7f, 1f - Random.value), v = Random.value;
         return Mathf.Sqrt(-2f * Mathf.Log(u)) * Mathf.Cos(2f * Mathf.PI * v);
     }
 

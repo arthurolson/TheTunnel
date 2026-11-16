@@ -16,8 +16,9 @@ using UnityEngine.XR.Interaction.Toolkit.Transformers;
 /// (<see cref="AntibodyBinder"/>) found from its chains; the movie's menu (<see cref="TunnelMoviePanel"/>, from the
 /// TS Menu's rows and the browser's keyboard, with a bar along its top to carry it by); and then the containers again,
 /// which carry the movie (Tunnel > Containers > Build Containers).
-/// It also makes the Ligand binding movie's parts (see <see cref="BuildLigandBinding"/>): EGFR's capture sphere and its
-/// ligand's bound pose, from the crystal structure 9S3X, and the ligand's binder.
+/// It also makes the Ligand binding movie's parts (see <see cref="BuildLigandBinding"/>): EGFR's capture sphere (on its
+/// pocket's mouth) and its ligand's bound pose, from the crystal structure 9S3X, and the ligand's binder; and the New
+/// movie menu (<see cref="TunnelNewMoviePanel"/>) that the movie menu opens.
 /// Runs from Tunnel > Movie > Build 3D Movie (everything) or Tunnel > Movie > Build Ligand Binding (EGFR, its ligand
 /// and the menu only).
 /// </summary>
@@ -25,6 +26,7 @@ static class MovieBuilder
 {
     const string k_Folder = "Assets/Tunnel/Movie";
     const string k_PanelPath = k_Folder + "/Movie_Panel.prefab";
+    const string k_NewMoviePath = k_Folder + "/NewMovie_Panel.prefab";
     static string k_AntibodyPath => MoleculeLibraryBuilder.ToyPath("IGG"); // in Assets/Molecules/proteins
     const string k_SegmentPath = "Assets/Tunnel/TG_TunnelSegment.prefab";
     const string k_BrowserPath = "Assets/Tunnel/BrowserPanel.prefab";
@@ -36,7 +38,8 @@ static class MovieBuilder
     const float k_SiteDiameterFraction = 0.1f;   // of the capsid's diameter
 
     const float k_CanvasScale = 0.0004f;                   // meters per canvas unit, as the palette
-    static readonly Vector2 k_CanvasSize = new(620f, 990f); // 25 x 40 cm
+    static readonly Vector2 k_CanvasSize = new(620f, 1060f); // 25 x 42 cm
+    static readonly Vector2 k_NewMovieCanvasSize = new(1200f, 880f); // 48 x 35 cm, two columns
 
     // The bar along the menu's top that hands take it by (meters): its size, and the room it takes above the canvas.
     static readonly Vector3 k_BarSize = new(0.16f, 0.018f, 0.01f);
@@ -45,12 +48,23 @@ static class MovieBuilder
     [MenuItem("Tunnel/Movie/Build 3D Movie")]
     public static string Build() => BuilderScratchScene.Run(BuildAll);
 
+    [MenuItem("Tunnel/Movie/Build Movie Menus")]
+    public static string BuildMenus() => BuilderScratchScene.Run(() =>
+    {
+        if (!AssetDatabase.IsValidFolder(k_Folder))
+            AssetDatabase.CreateFolder("Assets/Tunnel", "Movie");
+        string log = $"[Movie] {BuildNewMoviePanel()}; {BuildPanel()}";
+        AssetDatabase.SaveAssets();
+        Debug.Log(log);
+        return log;
+    });
+
     [MenuItem("Tunnel/Movie/Build Ligand Binding")]
     public static string BuildLigandMovie() => BuilderScratchScene.Run(() =>
     {
         if (!AssetDatabase.IsValidFolder(k_Folder))
             AssetDatabase.CreateFolder("Assets/Tunnel", "Movie");
-        string log = $"[Movie] {BuildLigandBinding(SiteMaterial())}; {BuildPanel()}";
+        string log = $"[Movie] {BuildLigandBinding(SiteMaterial())}; {BuildNewMoviePanel()}; {BuildPanel()}";
         AssetDatabase.SaveAssets();
         Debug.Log(log);
         return log;
@@ -68,6 +82,7 @@ static class MovieBuilder
         log.Append(BuildVirion(antibody, siteMaterial)).Append("; ");
         log.Append(BuildAntibody()).Append("; ");
         log.Append(BuildLigandBinding(siteMaterial)).Append("; ");
+        log.Append(BuildNewMoviePanel()).Append("; ");
         log.Append(BuildPanel()).Append("; ");
         AssetDatabase.SaveAssets();
         log.Append(ContainerBuilder.Build());
@@ -522,6 +537,9 @@ static class MovieBuilder
         if (ligandPrefab == null)
             return "ligand binding: couldn't make the ligand's toy";
         string ligandPath = AssetDatabase.GetAssetPath(ligandPrefab);
+        // Its volume (its weight) was just recorded on the asset: written to disk now, or loading its contents below
+        // reads the file as the template left it (2PLV's volume, 20,000 times the ligand's).
+        AssetDatabase.SaveAssetIfDirty(ligandPrefab);
         if (!MoleculeLibraryBuilder.ModelToToy(proteinFolder, out var proteinMeshToToy, out _)
             || !MoleculeLibraryBuilder.ModelToToy(ligandFolder, out var ligandMeshToToy, out _, Inhibitor))
             return "ligand binding: no EGFR or ligand model";
@@ -539,13 +557,29 @@ static class MovieBuilder
         float radius;
         string body;
         string bonded = "";
+        GameObject shown;
         try
         {
             radius = Vertices(protein).Max(p => p.magnitude);
             body = BuildOpenPocketBody(protein, proteinPath, captureCentre);
-            var shown = residue != null ? BuildBondedResidue(protein, residue, proteinMeshToToy, out bonded) : null;
+            shown = residue != null ? BuildBondedResidue(protein, residue, proteinMeshToToy, out bonded) : null;
+            PrefabUtility.SaveAsPrefabAsset(protein, proteinPath);
+        }
+        finally
+        {
+            PrefabUtility.UnloadPrefabContents(protein);
+        }
+
+        // The capture sphere goes on the pocket's mouth, which a free ligand can reach (the pocket is at the end of a
+        // narrow channel); found with the body just made.
+        string mouthReport = FindPocketMouth(proteinPath, captureCentre, out var mouth, out var way);
+
+        protein = PrefabUtility.LoadPrefabContents(proteinPath);
+        try
+        {
+            shown = protein.GetComponentsInChildren<Transform>(true).FirstOrDefault(t => t.name == $"Bound {k_BondedResidue}")?.gameObject;
             var sites = protein.GetComponent<CapsidSites>() ?? protein.AddComponent<CapsidSites>();
-            sites.ConfigurePocket(captureCentre, pose.GetPosition(), pose.rotation, radius, ligandPrefab, siteMaterial, k_BoundBlue,
+            sites.ConfigurePocket(mouth, way, pose.GetPosition(), pose.rotation, radius, ligandPrefab, siteMaterial, k_BoundBlue,
                 k_UnitsPerAngstrom, shown);
             EditorUtility.SetDirty(sites);
             PrefabUtility.SaveAsPrefabAsset(protein, proteinPath);
@@ -556,12 +590,14 @@ static class MovieBuilder
         }
 
         var ligand = PrefabUtility.LoadPrefabContents(ligandPath);
+        float ligandVolume;
         try
         {
             var binder = ligand.GetComponent<AntibodyBinder>() ?? ligand.AddComponent<AntibodyBinder>();
             binder.Configure(new Vector3[0], new Vector3[0]);
             EditorUtility.SetDirty(binder);
             PrefabUtility.SaveAsPrefabAsset(ligand, ligandPath);
+            ligandVolume = ligand.GetComponent<MoleculeGravity>().volume;
         }
         finally
         {
@@ -569,9 +605,76 @@ static class MovieBuilder
         }
 
         var offset = pose.GetPosition() / k_UnitsPerAngstrom;
-        return $"ligand binding: the free ligand is the inhibitor alone ({SpawnNozzle.Triangles(ligandPrefab):N0} triangles); {body}; {bonded}; " +
-            $"the bound ligand (and its capture sphere's centre) at ({offset.x:0.00}, {offset.y:0.00}, {offset.z:0.00}) Å in EGFR's toy, " +
-            $"{offset.magnitude:0.0} Å from its centre, turned {Quaternion.Angle(Quaternion.identity, pose.rotation):0.00}°";
+        return $"ligand binding: the free ligand is the inhibitor alone ({SpawnNozzle.Triangles(ligandPrefab):N0} triangles, {ligandVolume / Mathf.Pow(k_UnitsPerAngstrom, 3):N0} Å³); {body}; {bonded}; " +
+            $"the bound ligand at ({offset.x:0.00}, {offset.y:0.00}, {offset.z:0.00}) Å in EGFR's toy, " +
+            $"{offset.magnitude:0.0} Å from its centre, turned {Quaternion.Angle(Quaternion.identity, pose.rotation):0.00}°; {mouthReport}";
+    }
+
+    // The mouth: where the channel from the pocket opens wide enough for a free ligand (this far from the body, Å).
+    const float k_MouthOpening = 9f;
+
+    /// <summary>
+    /// Where a protein's pocket opens on its surface (its toy's coordinates), and the way out of the pocket through it.
+    /// From the pocket's centre it looks along 3,000 directions at how far the body (its colliders, in this scratch
+    /// scene) is from each point along the way, out past the protein: the way out is the direction whose narrowest
+    /// point is widest before it opens out, and the mouth is the point on it from which the body stays at least
+    /// <see cref="k_MouthOpening"/> Å away all the way out (a free ligand fits there). EGFR's pocket lies at the end of a
+    /// channel about 10 Å across, which a free ligand, 9 by 12 by 18 Å, almost never finds its way down by itself:
+    /// its centre is 20 Å below the mouth.
+    /// </summary>
+    static string FindPocketMouth(string proteinPath, Vector3 pocket, out Vector3 mouth, out Vector3 way)
+    {
+        mouth = pocket;
+        way = pocket.sqrMagnitude > 1e-12f ? pocket.normalized : Vector3.up;
+        var instance = (GameObject)PrefabUtility.InstantiatePrefab(AssetDatabase.LoadAssetAtPath<GameObject>(proteinPath));
+        try
+        {
+            instance.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
+            instance.transform.localScale = Vector3.one;
+            Physics.SyncTransforms();
+            var bodies = instance.GetComponentsInChildren<Collider>(true).Where(c => !c.isTrigger && c.enabled).ToArray();
+            if (bodies.Length == 0)
+                return "no body to find the pocket's mouth from (capture sphere on the pocket)";
+            float Gap(Vector3 p) => bodies.Min(b => (b.ClosestPoint(p) - p).magnitude) / k_UnitsPerAngstrom;
+            float reach = Vertices(instance).Max(p => p.magnitude) / k_UnitsPerAngstrom + 20f;
+            int steps = Mathf.CeilToInt(reach);
+            var random = new System.Random(7); // the same every time
+            float bestClear = -1f;
+            int bestMouth = steps;
+            for (int found = 0, tried = 0; found < 3000 && tried < 20000; tried++)
+            {
+                var d = new Vector3((float)random.NextDouble() * 2f - 1f, (float)random.NextDouble() * 2f - 1f, (float)random.NextDouble() * 2f - 1f);
+                if (d.sqrMagnitude > 1f || d.sqrMagnitude < 0.01f)
+                    continue;
+                found++;
+                d.Normalize();
+                var gaps = new float[steps];
+                for (int t = 0; t < steps; t++)
+                    gaps[t] = Gap(pocket + d * t * k_UnitsPerAngstrom);
+                // From the far end back: the mouth is where it stays open all the way out.
+                int at = steps - 1;
+                for (int t = steps - 1; t >= 0 && gaps[t] >= k_MouthOpening; t--)
+                    at = t;
+                float clear = float.MaxValue;
+                for (int t = 0; t < at; t++)
+                    clear = Mathf.Min(clear, gaps[t]);
+                if (at == 0)
+                    clear = gaps[0];
+                if (clear > bestClear + 0.05f || (Mathf.Abs(clear - bestClear) <= 0.05f && at < bestMouth))
+                {
+                    bestClear = clear;
+                    bestMouth = at;
+                    way = d;
+                }
+            }
+            mouth = pocket + way * bestMouth * k_UnitsPerAngstrom;
+            float fromCentre = mouth.magnitude / k_UnitsPerAngstrom;
+            return $"its pocket's mouth {bestMouth} Å out from the pocket along a channel {2f * bestClear:0} Å across, {fromCentre:0} Å from the protein's centre: the capture sphere is centred there";
+        }
+        finally
+        {
+            Object.DestroyImmediate(instance);
+        }
     }
 
     /// <summary>
@@ -743,7 +846,7 @@ static class MovieBuilder
             background.color = menuPanel.color;
 
             var titleTemplate = control.Find("Container List/Title").gameObject;
-            var title = Text(titleTemplate, canvas, "Title", TunnelMovie.k_Title, new Vector2(0f, 443f), new Vector2(560f, 64f));
+            var title = Text(titleTemplate, canvas, "Title", TunnelMovie.k_Title, new Vector2(0f, 478f), new Vector2(560f, 64f));
             title.alignment = TextAlignmentOptions.Left;
 
             var rowTemplate = control.Find("Container List/Box Row").gameObject;
@@ -767,18 +870,23 @@ static class MovieBuilder
                 }
                 return button;
             }
-            var scenario = Row("Scenario Row", new Vector2(0f, 370f), 560f, $"Movie: {TunnelMovie.k_Title}", false);
-            var start = Row("Start Row", new Vector2(0f, 300f), 560f, "Start", true);
-            var pause = Row("Pause Row", new Vector2(-142f, 235f), 276f, "Pause", true);
-            var play = Row("Play Row", new Vector2(142f, 235f), 276f, "Play", true);
-            var playAgain = Row("Play Again Row", new Vector2(0f, 170f), 560f, "Play again", false);
-            var sites = Row("Sites Row", new Vector2(0f, 100f), 560f, "□  Show binding sites", false);
+            // The movie picker (◄ name ►), then New movie... and Delete movie.
+            var previousMovie = Row("Previous Movie", new Vector2(-250f, 410f), 60f, "◄", true);
+            var scenario = Row("Scenario Row", new Vector2(0f, 410f), 420f, $"<b>{TunnelMovie.k_Title}</b>", false);
+            var nextMovie = Row("Next Movie", new Vector2(250f, 410f), 60f, "►", true);
+            var newMovie = Row("New Movie Row", new Vector2(-142f, 345f), 276f, "New movie...", true);
+            var deleteMovie = Row("Delete Movie Row", new Vector2(142f, 345f), 276f, "Delete movie", true);
+            var start = Row("Start Row", new Vector2(0f, 280f), 560f, "Start", true);
+            var pause = Row("Pause Row", new Vector2(-142f, 215f), 276f, "Pause", true);
+            var play = Row("Play Row", new Vector2(142f, 215f), 276f, "Play", true);
+            var playAgain = Row("Play Again Row", new Vector2(0f, 150f), 560f, "Play again", false);
+            var sites = Row("Sites Row", new Vector2(0f, 85f), 560f, "□  Show binding sites", false);
 
             // The sites' diameter: the Containers list's viscosity slider, 2% to 30% of the capsid's diameter.
             var diameterGroup = Object.Instantiate(control.Find("Container List/Viscosity").gameObject, canvas, false);
             diameterGroup.name = "Site Diameter";
             var diameterRect = (RectTransform)diameterGroup.transform;
-            diameterRect.anchoredPosition = new Vector2(0f, 5f);
+            diameterRect.anchoredPosition = new Vector2(0f, -10f);
             diameterRect.sizeDelta = new Vector2(540f, 60f);
             var diameter = diameterGroup.GetComponentInChildren<Slider>(true);
             diameter.name = "Site Diameter Slider";
@@ -813,7 +921,7 @@ static class MovieBuilder
             var timeGroup = Object.Instantiate(control.Find("Container List/Viscosity").gameObject, canvas, false);
             timeGroup.name = "Binding Time";
             var timeRect = (RectTransform)timeGroup.transform;
-            timeRect.anchoredPosition = new Vector2(0f, -135f);
+            timeRect.anchoredPosition = new Vector2(0f, -150f);
             timeRect.sizeDelta = new Vector2(540f, 60f);
             var bindingTime = timeGroup.GetComponentInChildren<Slider>(true);
             bindingTime.name = "Binding Time Slider";
@@ -844,8 +952,8 @@ static class MovieBuilder
                 tick.GetComponent<TMP_Text>().text = $"{timeValues[i]} s";
             }
 
-            var save = Row("Save Row", new Vector2(0f, -250f), 560f, "Save starting state...", false);
-            var status = Text(titleTemplate, canvas, "Status", "", new Vector2(0f, -395f), new Vector2(560f, 170f));
+            var save = Row("Save Row", new Vector2(0f, -265f), 560f, "Save starting state...", false);
+            var status = Text(titleTemplate, canvas, "Status", "", new Vector2(0f, -430f), new Vector2(560f, 170f));
             status.fontSize = 22f;
             status.fontStyle = FontStyles.Normal;
             status.alignment = TextAlignmentOptions.TopLeft;
@@ -868,14 +976,204 @@ static class MovieBuilder
             keyboardObject.SetActive(false);
 
             // The bar along its top, which hands take it by (one hand moves it, kept upright; two don't scale it).
-            var grab = BuildBar(panel, title.font);
+            var grab = BuildBar(panel, title.font, k_CanvasSize.y);
 
             var component = panel.AddComponent<TunnelMoviePanel>();
             component.Configure(start, pause, play, sites, save, diameter, diameterText, title, status, keyboard,
-                k_CanvasSize.x * k_CanvasScale, k_CanvasSize.y * k_CanvasScale, playAgain, bindingTime, bindingTimeText, grab, k_BarSpace, scenario);
+                k_CanvasSize.x * k_CanvasScale, k_CanvasSize.y * k_CanvasScale, playAgain, bindingTime, bindingTimeText, grab, k_BarSpace, scenario,
+                previousMovie, nextMovie, newMovie, deleteMovie, AssetDatabase.LoadAssetAtPath<TunnelNewMoviePanel>(k_NewMoviePath));
             PrefabUtility.SaveAsPrefabAsset(panel, k_PanelPath);
             Object.DestroyImmediate(panel);
             return $"panel {k_PanelPath}";
+        }
+        finally
+        {
+            PrefabUtility.UnloadPrefabContents(browser);
+            PrefabUtility.UnloadPrefabContents(segment);
+        }
+    }
+
+    /// <summary>
+    /// The New movie menu (see <see cref="TunnelNewMoviePanel"/>): two columns, from the TS Menu's rows and the
+    /// Containers list's slider, the browser's keyboard under it, and a bar along its top to carry it by. Left: name,
+    /// receptor and binder (◄ ►), how many of each, the capture radius or sites' size, and the binding time. Right: the
+    /// colour effect and colour, viscosity, heat and motion, Create and Close, and its status.
+    /// </summary>
+    static string BuildNewMoviePanel()
+    {
+        var segment = PrefabUtility.LoadPrefabContents(k_SegmentPath);
+        var browser = PrefabUtility.LoadPrefabContents(k_BrowserPath);
+        try
+        {
+            var control = segment.transform.Find("Control Panel");
+            var size = k_NewMovieCanvasSize;
+            var panel = new GameObject("New Movie Panel");
+            var canvasObject = new GameObject("New Movie Canvas", typeof(RectTransform));
+            canvasObject.layer = control.gameObject.layer;
+            var canvas = (RectTransform)canvasObject.transform;
+            canvas.SetParent(panel.transform, false);
+            foreach (var type in new[] { typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster), typeof(UnityEngine.XR.Interaction.Toolkit.UI.TrackedDeviceGraphicRaycaster) })
+            {
+                var source = control.GetComponent(type);
+                if (source != null && UnityEditorInternal.ComponentUtility.CopyComponent(source))
+                    UnityEditorInternal.ComponentUtility.PasteComponentAsNew(canvasObject);
+            }
+            canvas.sizeDelta = size;
+            canvas.localScale = Vector3.one * k_CanvasScale;
+            canvas.localPosition = Vector3.zero;
+            canvas.localRotation = Quaternion.identity;
+
+            var menuPanel = control.Find("Menu Panel").GetComponent<Image>();
+            var background = UiObject("Background", canvas, Vector2.zero, size).gameObject.AddComponent<Image>();
+            background.sprite = menuPanel.sprite;
+            background.type = menuPanel.type;
+            background.color = menuPanel.color;
+
+            float top = size.y * 0.5f;
+            const float left = -300f, right = 300f;
+            var titleTemplate = control.Find("Container List/Title").gameObject;
+            var title = Text(titleTemplate, canvas, "Title", "New movie", new Vector2(0f, top - 40f), new Vector2(1140f, 64f));
+            title.alignment = TextAlignmentOptions.Left;
+
+            var rowTemplate = control.Find("Container List/Box Row").gameObject;
+            Button Row(string name, Vector2 position, float width, string text, bool centred)
+            {
+                var row = Object.Instantiate(rowTemplate, canvas, false);
+                row.name = name;
+                var rect = (RectTransform)row.transform;
+                rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f);
+                rect.anchoredPosition = position;
+                rect.sizeDelta = new Vector2(width, 56f);
+                var button = row.GetComponent<Button>();
+                button.onClick = new Button.ButtonClickedEvent();
+                var label = row.GetComponentInChildren<TMP_Text>(true);
+                label.text = text;
+                label.richText = true;
+                if (centred)
+                {
+                    label.alignment = TextAlignmentOptions.Center;
+                    label.fontStyle = FontStyles.Bold;
+                }
+                return button;
+            }
+            var sliderTemplate = control.Find("Container List/Viscosity").gameObject;
+            Slider SliderGroup(string name, Vector2 position, float min, float max, bool whole, (float value, string label)[] ticksAt, out TMP_Text text)
+            {
+                var group = Object.Instantiate(sliderTemplate, canvas, false);
+                group.name = name;
+                var rect = (RectTransform)group.transform;
+                rect.anchoredPosition = position;
+                rect.sizeDelta = new Vector2(540f, 60f);
+                var slider = group.GetComponentInChildren<Slider>(true);
+                slider.name = $"{name} Slider";
+                slider.onValueChanged = new Slider.SliderEvent();
+                slider.minValue = min;
+                slider.maxValue = max;
+                slider.wholeNumbers = whole;
+                slider.SetValueWithoutNotify(min);
+                foreach (var labelName in new[] { "Value Text", "Type Text" })
+                {
+                    var label = slider.transform.Find(labelName);
+                    if (label != null)
+                        label.GetComponent<TMP_Text>().text = "";
+                }
+                text = group.transform.Find("Viscosity Text").GetComponent<TMP_Text>();
+                text.name = $"{name} Text";
+                text.richText = true;
+                text.text = name;
+                var ticks = group.transform.Find("Ticks");
+                while (ticks.childCount > ticksAt.Length)
+                    Object.DestroyImmediate(ticks.GetChild(ticks.childCount - 1).gameObject);
+                while (ticks.childCount < ticksAt.Length)
+                    Object.Instantiate(ticks.GetChild(ticks.childCount - 1).gameObject, ticks, false);
+                for (int i = 0; i < ticksAt.Length; i++)
+                {
+                    var tick = (RectTransform)ticks.GetChild(i);
+                    float at = (ticksAt[i].value - min) / (max - min);
+                    tick.name = $"Tick {ticksAt[i].label}";
+                    tick.anchorMin = tick.anchorMax = new Vector2(at, 0.5f);
+                    tick.sizeDelta = new Vector2(Mathf.Max(tick.sizeDelta.x, 80f), tick.sizeDelta.y);
+                    var label = tick.GetComponent<TMP_Text>();
+                    label.text = ticksAt[i].label;
+                    label.textWrappingMode = TextWrappingModes.NoWrap;
+                }
+                return slider;
+            }
+            (float, string)[] Ticks(params float[] values) => values.Select(v => (v, v.ToString("0"))).ToArray();
+
+            // Left: what the movie is.
+            var nameRow = Row("Name Row", new Vector2(left, top - 110f), 560f, "Name:", false);
+            var receptorPrev = Row("Receptor Previous", new Vector2(left - 250f, top - 175f), 60f, "◄", true);
+            var receptorRow = Row("Receptor Row", new Vector2(left, top - 175f), 420f, "Receptor:", false);
+            var receptorNext = Row("Receptor Next", new Vector2(left + 250f, top - 175f), 60f, "►", true);
+            var binderPrev = Row("Binder Previous", new Vector2(left - 250f, top - 240f), 60f, "◄", true);
+            var binderRow = Row("Binder Row", new Vector2(left, top - 240f), 420f, "Binder:", false);
+            var binderNext = Row("Binder Next", new Vector2(left + 250f, top - 240f), 60f, "►", true);
+            var receptors = SliderGroup("Receptors", new Vector2(left, top - 335f), 1f, TunnelMovie.k_MaxReceptors, true, Ticks(1, 2, 4, 6, 8, 10), out var receptorsText);
+            var binders = SliderGroup("Binders", new Vector2(left, top - 475f), 1f, TunnelMovie.k_MaxBinders, true, Ticks(1, 25, 50, 75, 100), out var bindersText);
+            var strength = SliderGroup("Strength", new Vector2(left, top - 615f), 2f, 30f, true, Ticks(2, 5, 10, 15, 20, 25, 30), out var strengthText);
+            var time = SliderGroup("Binding Time", new Vector2(left, top - 755f), TunnelMovie.k_MinBindingTime, TunnelMovie.k_MaxBindingTime, true,
+                new[] { 10f, 20f, 30f, 40f, 50f, 60f }.Select(v => (v, $"{v:0} s")).ToArray(), out var timeText);
+
+            // Right: how it looks, and how it starts.
+            var shift = Row("Shift Row", new Vector2(right, top - 110f), 560f, "■  Shift toward the colour", false);
+            var solid = Row("Solid Row", new Vector2(right, top - 175f), 560f, "□  Solid colour while bound", false);
+            var swatches = new Button[TunnelNewMoviePanel.k_Colours.Length];
+            for (int i = 0; i < swatches.Length; i++)
+            {
+                var swatch = Row($"Colour {i + 1}", new Vector2(right - 250f + i * 92f + 20f, top - 240f), 80f, "", true);
+                if (swatch.targetGraphic != null)
+                    swatch.targetGraphic.color = TunnelNewMoviePanel.k_Colours[i];
+                // Its own colour shows as it is (the rows' tint would darken it).
+                var tint = swatch.colors;
+                tint.normalColor = Color.white;
+                tint.highlightedColor = new Color(0.85f, 0.85f, 0.85f);
+                tint.selectedColor = Color.white;
+                tint.pressedColor = new Color(0.7f, 0.7f, 0.7f);
+                swatch.colors = tint;
+                var label = swatch.GetComponentInChildren<TMP_Text>(true);
+                label.color = new Color(0.1f, 0.1f, 0.12f);
+                swatches[i] = swatch;
+            }
+            var viscosity = SliderGroup("Viscosity", new Vector2(right, top - 335f), 0f, 10f, true,
+                Enumerable.Range(0, 11).Where(i => i % 2 == 0).Select(i => ((float)i, i == 0 ? "0" : i == 10 ? "1" : $".{i}")).ToArray(), out var viscosityText);
+            var heat = SliderGroup("Heat", new Vector2(right, top - 475f), 0f, TunnelContainer.k_MaxTemperature, false,
+                new[] { -273.15f, -200f, -100f, 0f, 50f, 100f }.Select(c => ((c + 273.15f) / TunnelContainer.k_RoomKelvin * TunnelContainer.k_RoomTemperature,
+                    c < -273f ? "-273" : $"{c:0}")).ToArray(), out var heatText);
+            var motion = Row("Motion Row", new Vector2(right, top - 590f), 560f, "■  Random motion   □  Ballistic", false);
+            var create = Row("Create Button", new Vector2(right - 142f, top - 665f), 276f, "Create", true);
+            var close = Row("Close Button", new Vector2(right + 142f, top - 665f), 276f, "Close", true);
+            var status = Text(titleTemplate, canvas, "Status", "", new Vector2(right, top - 775f), new Vector2(560f, 150f));
+            status.fontSize = 22f;
+            status.fontStyle = FontStyles.Normal;
+            status.alignment = TextAlignmentOptions.TopLeft;
+            status.textWrappingMode = TextWrappingModes.Normal;
+
+            // The browser's keyboard, tilted toward whoever types, under the menu; out only while the name is typed.
+            var keys = browser.transform.Find("Keyboard").GetComponentInChildren<XRKeyboard>(true);
+            var keyboardRoot = new GameObject("Keyboard").transform;
+            keyboardRoot.SetParent(panel.transform, false);
+            keyboardRoot.localPosition = new Vector3(0f, -size.y * k_CanvasScale * 0.5f - 0.2f, -0.12f);
+            keyboardRoot.localRotation = Quaternion.Euler(40f, 0f, 0f);
+            var keyboardObject = Object.Instantiate(keys.gameObject, keyboardRoot, false);
+            keyboardObject.name = keys.gameObject.name;
+            keyboardObject.transform.localPosition = keys.transform.localPosition;
+            keyboardObject.transform.localRotation = keys.transform.localRotation;
+            keyboardObject.transform.localScale = keys.transform.localScale;
+            var keyboard = keyboardObject.GetComponent<XRKeyboard>();
+            keyboard.closeOnSubmit = true;
+            keyboardObject.SetActive(false);
+
+            var grab = BuildBar(panel, title.font, size.y);
+            var component = panel.AddComponent<TunnelNewMoviePanel>();
+            component.Configure(title, status, nameRow, keyboard, receptorPrev, receptorRow, receptorNext, binderPrev, binderRow, binderNext,
+                receptors, receptorsText, binders, bindersText, strength, strengthText, time, timeText, shift, solid, swatches,
+                viscosity, viscosityText, heat, heatText, motion, create, close, grab,
+                size.x * k_CanvasScale, size.y * k_CanvasScale, k_BarSpace);
+            panel.SetActive(true);
+            PrefabUtility.SaveAsPrefabAsset(panel, k_NewMoviePath);
+            Object.DestroyImmediate(panel);
+            return $"New movie menu {k_NewMoviePath}";
         }
         finally
         {
@@ -889,7 +1187,7 @@ static class MovieBuilder
     /// still (kinematic) body and a grab interactable whose only collider is the bar's, moved by the hand where it took
     /// it, kept upright and never scaled.
     /// </summary>
-    static XRGrabInteractable BuildBar(GameObject panel, TMP_FontAsset font)
+    static XRGrabInteractable BuildBar(GameObject panel, TMP_FontAsset font, float canvasHeight)
     {
         string path = $"{k_Folder}/MoveBar.mat";
         var material = AssetDatabase.LoadAssetAtPath<Material>(path);
@@ -903,7 +1201,7 @@ static class MovieBuilder
         material.SetFloat("_Metallic", 0f);
         EditorUtility.SetDirty(material);
 
-        float top = k_CanvasSize.y * k_CanvasScale * 0.5f;
+        float top = canvasHeight * k_CanvasScale * 0.5f;
         var bar = new GameObject("Move Bar", typeof(MeshFilter), typeof(MeshRenderer));
         bar.transform.SetParent(panel.transform, false);
         bar.transform.localPosition = new Vector3(0f, top + k_BarSpace * 0.5f, k_BarSize.z * 0.5f);

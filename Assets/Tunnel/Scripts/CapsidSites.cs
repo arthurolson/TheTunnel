@@ -27,12 +27,15 @@ using UnityEngine.XR.Interaction.Toolkit.Interactables;
 /// encloses one spike (its collider, a little larger), the antibody is drawn to the middle of the spike's outer end
 /// and binds there, and the movie's slider leaves those sites the size of their spikes.
 /// A protein's site can instead be a ligand's pocket (EGFR's, for the Ligand binding movie): one capture sphere
-/// centred where the ligand sits when bound, its radius in ångströms at the molecules' true scale set by the movie's
-/// Capture radius slider (see <see cref="TunnelMovie.captureRadius"/>). A free ligand that touches it glides into its
-/// bound pose (see <see cref="boundPosition"/>), and while it is bound the protein is light blue. A residue the ligand
+/// centred on the pocket's mouth, where the channel from the pocket opens on the protein's surface (the pocket itself is
+/// too deep and narrow for a free ligand to reach it: its centre lies 20 Å inside, along a channel 10 Å across), its
+/// radius in ångströms at the molecules' true scale set by the movie's Capture radius slider (see
+/// <see cref="TunnelMovie.captureRadius"/>). A free ligand that touches it glides down the channel into its bound pose
+/// (see <see cref="boundPosition"/>), and while it is bound the protein shows the movie's colour (light blue). A residue the ligand
 /// bonds to (EGFR's Cys775, covalently bonded to its inhibitor in the crystal) is shown only once the ligand has settled
-/// in its pocket, and hidden the moment it lets go (see <see cref="shownWhileBound"/>). Pocket sites are live only in
-/// the Ligand binding movie, the others only in the Antibody action.
+/// in its pocket, and hidden the moment it lets go (see <see cref="shownWhileBound"/>). Its sites are live only in a
+/// movie that has it as a receptor (see <see cref="MovieDefinition.Includes"/>): pockets in Ligand binding, the
+/// viruses' sites in Antibody action, either in a movie someone made.
 /// </summary>
 public class CapsidSites : NetworkBehaviour
 {
@@ -177,6 +180,7 @@ public class CapsidSites : NetworkBehaviour
     XRGrabInteractable m_Grab;
     readonly List<(Material material, Color color)> m_Colours = new();
     float m_FractionShown;
+    Color m_ColourShown;
     float m_DiameterShown;
     static Mesh s_Cylinder;
     static Mesh s_Sphere;
@@ -187,11 +191,10 @@ public class CapsidSites : NetworkBehaviour
     public TunnelMovie movie { get; private set; }
 
     /// <summary>
-    /// Whether its sites are live: the movie of the container it's in is playing, and it is that movie's kind (pockets
-    /// in Ligand binding, antibody sites in Antibody action).
+    /// Whether its sites are live: the movie of the container it's in is playing, and it is one of that movie's
+    /// receptors (viruses in Antibody action, EGFR in Ligand binding, the receptor someone chose for a movie they made).
     /// </summary>
-    public bool sitesActive => movie != null && movie.isPlaying
-        && movie.scenario == (m_Pocket ? TunnelMovie.Scenario.LigandBinding : TunnelMovie.Scenario.AntibodyAction);
+    public bool sitesActive => movie != null && movie.isPlaying && movie.Includes(this);
 
     public int siteCount => m_Axes.Length;
 
@@ -335,8 +338,7 @@ public class CapsidSites : NetworkBehaviour
         var container = m_Body != null ? TunnelContainer.At(m_Body.worldCenterOfMass) : null;
         movie = container != null ? container.movie : null;
         bool active = sitesActive;
-        bool visible = movie != null && movie.showSites
-            && movie.scenario == (m_Pocket ? TunnelMovie.Scenario.LigandBinding : TunnelMovie.Scenario.AntibodyAction);
+        bool visible = movie != null && movie.showSites && movie.Includes(this);
         if ((active || visible) && m_Sites == null)
             BuildSites();
         if (m_Sites != null)
@@ -370,6 +372,7 @@ public class CapsidSites : NetworkBehaviour
         if (!IsSpawned || IsServer)
             CountDownBindings(Time.deltaTime);
         ShowBindings();
+        ShowColour();
     }
 
     #region Sites
@@ -545,6 +548,8 @@ public class CapsidSites : NetworkBehaviour
             : $"[Movie] {antibody.name} bound to {name} at {(protrusions ? "" : m_Symmetry + " ")}site {binding.site + 1} for {time:0} s: " +
             $"{count} of {siteCount} sites taken");
         Remove(antibody);
+        if (movie != null)
+            movie.NoteBinding(this);
         if (fullyCovered && !m_AnnouncedCovered && movie != null && !m_Pocket)
         {
             m_AnnouncedCovered = true;
@@ -771,7 +776,6 @@ public class CapsidSites : NetworkBehaviour
                     m_Physics.CollidersChanged();
                 }
             }
-            Tint(coveredFraction);
         }
 
         // Each slides into its place; a pocket's residue shows once its ligand has settled (from everyone's shared list
@@ -878,13 +882,38 @@ public class CapsidSites : NetworkBehaviour
         return root;
     }
 
-    // The capsid's own colours (not its bound antibodies'), shifted toward green by the share of its sites taken (a
-    // protein's toward light blue while its ligand is bound).
-    void Tint(float fraction)
+    // The colour its movie gives it for what is bound (the same on every headset, from the shared bindings and the
+    // shared movie): its own colours shifted toward the movie's colour by the share of its sites taken, or that colour
+    // all the while anything is bound. Outside a movie that has it as a receptor, its own colour (green, or EGFR's light
+    // blue) by the share of its sites taken.
+    void ShowColour()
     {
-        if (Mathf.Approximately(fraction, m_FractionShown))
+        var colour = m_CoveredColour;
+        bool solid = false;
+        if (movie != null && movie.Includes(this))
+        {
+            var definition = movie.definition;
+            colour = definition.colour;
+            solid = definition.colourEffect == MovieColourEffect.SolidWhileBound;
+        }
+        float fraction = solid ? (bindingCount > 0 ? 1f : 0f) : coveredFraction;
+        Tint(colour, fraction);
+    }
+
+    // The capsid's own colours (not its bound antibodies'), shifted toward a colour by a fraction.
+    void Tint(Color colour, float fraction)
+    {
+        if (Mathf.Approximately(fraction, m_FractionShown) && colour == m_ColourShown)
             return;
+        if (m_Colours.Count == 0 && fraction <= 0f)
+        {
+            // Its own colours as they are: no copies of its materials until something binds.
+            m_FractionShown = 0f;
+            m_ColourShown = colour;
+            return;
+        }
         m_FractionShown = fraction;
+        m_ColourShown = colour;
         if (m_Colours.Count == 0)
         {
             foreach (var renderer in GetComponentsInChildren<MeshRenderer>(true))
@@ -897,9 +926,9 @@ public class CapsidSites : NetworkBehaviour
                         m_Colours.Add((material, material.GetColor("_BaseColor")));
             }
         }
-        foreach (var (material, colour) in m_Colours)
+        foreach (var (material, own) in m_Colours)
             if (material != null)
-                material.SetColor("_BaseColor", CoveredColour(colour, m_CoveredColour, fraction));
+                material.SetColor("_BaseColor", CoveredColour(own, colour, fraction));
     }
 
     #endregion
@@ -943,13 +972,14 @@ public class CapsidSites : NetworkBehaviour
 
     /// <summary>
     /// Set by Tunnel > Movie > Build Ligand Binding for a protein with a ligand's pocket (EGFR): the capture sphere's
-    /// centre and the bound ligand's pose (its own coordinates), its outer radius, the ligand toy, how a shown site
-    /// looks, how light blue it turns while bound, and its units per ångström.
+    /// centre (the pocket's mouth) and the way out of the pocket through it, the bound ligand's pose (its own
+    /// coordinates), its outer radius, the ligand toy, how a shown site looks, how light blue it turns while bound, and
+    /// its units per ångström.
     /// </summary>
-    public void ConfigurePocket(Vector3 centre, Vector3 boundPosition, Quaternion boundRotation, float radius, GameObject ligand,
+    public void ConfigurePocket(Vector3 centre, Vector3 axis, Vector3 boundPosition, Quaternion boundRotation, float radius, GameObject ligand,
         Material siteMaterial, Color boundColour, float unitsPerAngstrom, GameObject shownWhileBound)
     {
-        var axis = centre.sqrMagnitude > 1e-12f ? centre.normalized : Vector3.up;
+        axis = axis.sqrMagnitude > 1e-12f ? axis.normalized : centre.sqrMagnitude > 1e-12f ? centre.normalized : Vector3.up;
         Configure("pocket", new[] { axis }, new[] { centre.magnitude }, radius, ligand, siteMaterial);
         m_ShownWhileBound = shownWhileBound;
         m_Points = new[] { centre };

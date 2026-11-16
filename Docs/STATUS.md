@@ -29,7 +29,11 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 ### Molecules
 - Molecule toys built from Assets/Molecules, chosen from the TS Menu's Molecules list. A slider magnifies them
-  from 1x to 10x, and new molecules don't overlap.
+  from x1 to x20 (16.11.2026: its stops go x1 to x10 one at a time, then x12, x14, x16, x18, x20, so the low end keeps
+  two thirds of the slider; ticks rebuilt by Tunnel > Molecules > Build Magnification Slider), and new molecules don't
+  overlap. Everything that scales with it (colliders, the ligand's grab size, capture spheres, the binding glide, the
+  nozzle's spray spacing) follows the molecule's own scale, so x20 needs nothing else; the nozzle's triangle budget
+  doesn't depend on size.
 - Sorted into category folders (15.11.2026): Assets/Molecules/viral capsids (2PLV, SARS, TBSV, Zika), proteins (EGFR,
   IGG), ligands (EGFR ligand), chemicals and nucleic acids (empty, each with a README). The Molecules list shows them
   under headings in that order, skipping empty categories; names, network ids and prefab references are unchanged
@@ -39,8 +43,11 @@ What has been built, what is in progress, and where each build is. Updated as wo
 - EGFR (proteins; egfr.glb from Mol*, PDB 9S3X): true scale, 1.24 x 0.98 x 1.16 cm at x1; surface merged on a 2 A
   grid, 61,984 to 8,409 triangles (IgG has 18,996); coloured like the other surfaces (2PLV's first chain colour, as
   the GLB's own colour is a single grey). Its body collider is 8 convex pieces of its surface with its ligand's
-  pocket left open within 14 Å (Tunnel > Movie > Build Ligand Binding), not one ellipsoid: a single convex shape
-  fills the cleft, putting the pocket 19 Å inside it, out of reach of a 10 Å capture sphere.
+  pocket left open within 14 Å (Tunnel > Movie > Build Ligand Binding), not one ellipsoid. Even so the pocket lies
+  at the end of a channel about 10 Å across: its centre is 9 Å from EGFR's centre and 21 Å below the channel's mouth,
+  and a free ligand (9 x 12 x 18 Å) never got closer than 12–19 Å to it in Editor runs. So the capture sphere is now
+  centred on the mouth (found by the builder from the body: the widest way out, and the point from which the body
+  stays 9 Å or more away), 28 Å from EGFR's centre.
 - EGFR ligand (ligands; 9S3X-ligand.glb from Mol*, the inhibitor NCL-26007 in PDB coordinates; the older OBJ and zip
   are in Source~): the free ligand is the inhibitor alone, spacefill in Mol*'s atom colours (carbon grey, nitrogen
   blue, oxygen red), 42,240 triangles, 0.16 x 0.21 x 0.32 cm at x1 (about 18 Å long). Ligands and chemicals keep the
@@ -50,6 +57,8 @@ What has been built, what is in progress, and where each build is. Updated as wo
 - The spawn nozzle sprays them like any other (budget: EGFR 100, ligand 60 per spray).
 - Physics:
   - each molecule's mass comes from its volume;
+  - the heat's random kicks can no longer be infinite (16.11.2026: Random.value can be exactly 1, and the Gaussian's
+    log(0) gave "angularVelocity ... Infinity" errors in the log);
   - molecules bounce, and drift when pushed;
   - gravity can be turned on or off;
   - the host can toggle gravity from a palm button.
@@ -108,20 +117,66 @@ What has been built, what is in progress, and where each build is. Updated as wo
 - The container, splat and movie builders work in a scratch scene, so running them leaves the open scene unchanged.
 
 ### Ligand binding (the second 3D movie in a container)
-- Chosen on the movie's menu (top row, Movie: Antibody action / Ligand binding, only before it starts); the Containers
-  list's row now reads 3D movie controls.
-- EGFR carries one binding site: a capture sphere centred on its ligand's bound place (from the two GLBs, both in
-  9S3X's coordinates; no rotation), radius set by the Capture radius slider, 2 to 30 Å at the molecules' true scale
-  (10 Å at first), shown by Show capture spheres. A free EGFR ligand touching it glides (0.6 s) into its exact pose
-  in the crystal structure, at EGFR's size, and stays for the binding time (10 s to 1 min); then it is pushed out of
-  the pocket and rests 3 s. While bound, EGFR is light blue, and Cys775 (the cysteine the inhibitor is covalently
-  bonded to) shows once the ligand has settled, hidden again the moment it leaves. IgGs don't bind in the pocket;
-  ligands don't bind to viruses.
+- Chosen on the movie menu's picker (see 3D movies below); the Containers list's row reads 3D movie controls.
+- EGFR carries one binding site: a capture sphere on the mouth of its ligand's pocket (16.11.2026; it was on the
+  ligand's bound place, which free ligands can't reach), radius set by the Capture radius slider, 2 to 30 Å at the
+  molecules' true scale (10 Å at first), shown by Show capture spheres. A free EGFR ligand touching it glides (0.6 s)
+  down the channel into its exact pose in the crystal structure, at EGFR's size, and stays for the binding time (10 s
+  to 1 min); then it is pushed out through the mouth and rests 3 s. While bound, EGFR is light blue, and Cys775 (the
+  cysteine the inhibitor is covalently bonded to) shows once the ligand has settled, hidden again the moment it leaves.
+  IgGs don't bind in the pocket; ligands don't bind to viruses.
+- What was wrong (16.11.2026, after the user saw no binding in 15.11.2026.1): (1) the capture sphere was centred
+  20 Å down a 10 Å channel, which free ligands never entered (closest approach 12–19 Å in 30–90 s runs, 0 bindings in
+  40 s at x10 with 15 ligands); (2) a new container has no heat (absolute zero), so after being let go of in it
+  nothing moves; Start now brings a container at absolute zero to 20 °C and says so; (3) once a movie had started its
+  choice was fixed for good (no way back to Ready), so a box that had played Antibody action could never play Ligand
+  binding; choosing another movie now stops the one playing (everything bound lets go); (4) the user's own log
+  (760BMQ) shows Start pressed with Antibody action still chosen ("Put a virus ... first"): the choice row wasn't
+  found or understood. Now the picker shows the movie's name and "2 of 2" between ◄ and ►, Start reads "Start Ligand
+  binding", Start with another movie's molecules in the box (EGFR and ligands while Antibody action is chosen) chooses
+  that movie and asks for Start again, and the not-ready message names the movie chosen, exactly what it needs, how
+  many of them are outside the box, and the picker. Placing a molecule from the Molecules list now says how large it
+  is ("EGFR placed beside this list at x1: only 1.2 cm across. Raise the magnification to see it better"). The Editor scenes also run
+  with gravity on (the app starts with it off), which had piled every molecule on the box's floor in the earlier
+  Editor numbers; tests now turn it off. And Build Ligand Binding no longer leaves the ligand weighing as much as 2PLV
+  (its rebuilt toy's volume is saved before the binder is added).
+- Logs ([Movie]): each touch ("touched ... capture sphere: gliding into its pocket"), binding ("binding N since it
+  started, T s in"), and release; every 30 s on the host while it plays, how it goes (receptors, free and bound
+  binders, bindings so far, heat, radius), and a warning naming the likely cause if nothing has bound after 50 s.
+- Rates in Editor runs (gravity off, room temperature, 15 ligands, ligands started 2 cm clear of EGFR, 5 runs each,
+  default 10 Å): x10 in a 30 cm box, first binding at 0–3 s (and a new one soon after each release); x20 in a 60 cm
+  box, 0–5 s; x5 in a 30 cm box, 2–33 s; x1 (EGFR 1.2 cm) in a 30 cm box, none in a minute (30 Å: a few seconds). The
+  default radius stays 10 Å.
 - Play again, pause, saving ("Ligand binding N") and the movable menu work as in Antibody action. Built by Tunnel >
-  Movie > Build Ligand Binding (also part of Build 3D Movie); Editor test: Tunnel > Movie > Test Ligand Binding (in
-  Play mode).
-- In Editor runs at x10 (EGFR 12 cm): with 40 ligands in a 22 cm box, warm, about one binding every two minutes at
-  10 Å; at 20 to 30 Å with 20 ligands in a 35 cm box, a new ligand bound soon after each release.
+  Movie > Build Ligand Binding (also part of Build 3D Movie); Editor tests: Tunnel > Movie > Test Ligand Binding and
+  Test Ligand Binding as a Person Would (both in Play mode; the second places the box, EGFR and 15 ligands from the
+  TS Menu's lists at x1, x5, x10 and x20, 10 Å and 30 Å, and once from the spawn nozzle, and starts it from the movie
+  menu).
+
+### 3D movies as data, and the New movie menu (16.11.2026)
+- A movie is a definition (MovieDefinition): receptor (a molecule with binding sites; empty for "any virus"), binder,
+  pocket or surface sites, how many of each, capture radius or sites' size, binding time, the bound colour effect
+  (shift toward a colour by the share of sites taken, or a solid colour while bound) and colour, and starting
+  viscosity, heat and motion. Antibody action and Ligand binding are the two built-in ones, with their behaviour
+  unchanged (green shift; light blue while bound).
+- The movie menu's top row is a picker of every movie (◄ name ►, "2 of 3"); under it New movie... and Delete movie (a
+  made movie only; a second tap within 4 s deletes it for everyone; containers with it chosen and not playing go back
+  to Antibody action). The menu grew from 40 to 42 cm.
+- New movie... opens the New movie menu (48 x 35 cm, two columns) beside the movie menu, on the side away from the
+  container, for whoever pressed it; it can be carried by its bar and lies flat on a wall when let go within 25 cm.
+  Left: name (tap, then the keyboard), receptor (◄ ►: 2PLV, SARS, TBSV, Zika, EGFR), binder (only those with site
+  data: IGG for the viruses, EGFR ligand for EGFR), receptors 1–10, binders 1–100 (capped by the 3M-triangle budget:
+  at most 70 EGFR ligands), capture radius (pocket) or sites' size (virus), binding time. Right: colour effect, six
+  colours, viscosity, heat (°C), motion, Create and Close. Starting conditions come from the container (20 °C if it
+  has no heat).
+- Create stores the movie on the host (files/3D Movies/Movie definitions/<id>.json), lists it on every movie menu,
+  chooses it on that container, empties the container and fills it with the receptors and binders at the Molecules
+  list's magnification, scattered where they don't overlap and moving (a container too small is made larger). Choosing
+  a made movie sets the container's medium and heat as made. Play again, Save starting state (named after it) and
+  pausing work as for the built-in two. Shared in a session (the host's list on each container's movie; creating and
+  deleting go to the host); works when not connected.
+- Built by Tunnel > Movie > Build 3D Movie (or Build Movie Menus); Editor test: Tunnel > Movie > Test New Movie (in
+  Play mode; works in a test folder, the app's movies are untouched). Log tag [Movie].
 
 ### Antibody action (the 3D movie in a container)
 - Capsids carry invisible antibody binding sites, found from each capsid's surface: TBSV on its 2-folds, poliovirus
@@ -214,14 +269,15 @@ What has been built, what is in progress, and where each build is. Updated as wo
 | Co-location (floor QR) | Two-player test: after aligning to the floor QR, the joining headset's AR-marker sighting sat 23–24 cm (briefly 30 cm) from the host's. 12.11.2026.4: the floor QR is read by both cameras through the AR marker's verified camera path (corner squares refined, floor height measured from the code; Editor: under 1 mm and 0.05°), and whenever a joining player and the host both see the AR marker held still, the player's view glides onto the host's (Editor: a 24 cm / 3° error corrected to within 3 mm). Next: two-player headset test. 13.11.2026.1 test: the floor QR left the player ~5 cm off; the marker alignment then corrected 29 mm and 7 mm, leaving under 1 cm. But it ran only because the canvas took a minute to lock: tracking stopped at the lock, so normally it never would. 13.11.2026.2: with other players present, tracking stays on for up to 15 s after the lock until each player's room is lined up with the host's by the marker; the logs say whether alignment ran, each correction and the totals. |
 | Headset checks still owed | SARS-CoV-2 in the 3D movie (09.11.2026.1); the movie panel's placement on the wall beside a mixed reality box; transparent Viewer images (09.11.2026.2); Viewer Content only with two players and the backdrop fix (10.11.2026.2); the virtual marker following the hand instantly (09.11.2026.3). |
 | Antibody action, Clear contents, eraser | Built and passing its Editor test, not connected (14.11.2026.5). Next: headset (the menu's bar by hand and ray, its wall snap; the eraser in the hand, haptics and sound; the green shift on each virus) and two players (bindings, releases and colour the same for both; Play again's countdown and restore from a client; menu position shared while carried; a client erasing something another player holds; late joiner). |
-| Molecule categories, EGFR, EGFR ligand, Ligand binding | Built and passing their Editor tests, not connected (15.11.2026.1, starts on a headset). Next: headset (the Molecules list's headings and scrolling; grabbing EGFR at x1, 1.2 cm, and the ligand, whose 2 cm grab collider is far larger than it at x1; Ligand binding at x5 to x10 with 10 to 20 ligands: how often they bind at 10 Å, the glide, Cys775 appearing, the light blue; frame rate with many 42k-triangle ligands on Quest 3S) and two players (scenario choice, capture radius, bindings, colour and Cys775 the same for both; late joiner). |
+| Molecule categories, EGFR, EGFR ligand, Ligand binding | 15.11.2026.1 on a headset: the user saw no binding (no log). Fixed after it (capture sphere on the pocket's mouth, Start warms a container with no heat, a movie can be changed after it has played); Editor runs now bind within seconds at x10–x20 with the default 10 Å. Next: headset (Ligand binding at x10 and x20 with ~15 ligands: a binding within half a minute, the glide down the channel, Cys775, the light blue; the [Movie] reports in adb logcat; grabbing EGFR at x1 and the ligand's 2 cm grab collider; frame rate with many 42k-triangle ligands on Quest 3S) and two players (movie choice, capture radius, bindings, colour and Cys775 the same for both; late joiner). |
+| Magnification x20, New movie menu, movies as data | Built and passing their Editor tests, not connected (15.11.2026.2). Next: headset (the Magnification slider's stops by ray and poke; molecules at x20, about 25 cm for EGFR; New movie... and the New movie menu: its place beside the movie menu, the keyboard for the name, ◄ ►, the swatches, Create filling the box, Delete's second tap; the picker stopping a playing movie) and two players (a client creating and deleting a movie, the list the same for both, the host keeping it after a restart; late joiner). |
 | Grab diagnostics | Every grab and release is logged (since 08.11.2026.1), to track down grabs that don't take. Still on. |
 
 ## Builds and headsets
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 15.11.2026.1 |
+| Latest build (Builds/TheTunnelDev.apk) | 15.11.2026.2 (not yet launch-tested on a headset) |
 | Meta store, ArtDev channel | 09.11.2026.2 |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |

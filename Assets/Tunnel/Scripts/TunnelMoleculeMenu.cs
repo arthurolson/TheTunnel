@@ -12,9 +12,10 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// in it yet has no heading.
 /// Tapping a name places that molecule for everyone inside the tunnel, beside the list's far edge at the list's height,
 /// a little out from the wall the menu is on. It stays there until someone grabs it.
-/// The Magnification slider (1 to 10) under the list sets how large new molecules are: every molecule keeps its true
+/// The Magnification slider (×1 to ×20) under the list sets how large new molecules are: every molecule keeps its true
 /// size relative to the others (one ångström-to-meter scale for all), times the magnification, so two molecules placed
-/// at the same magnification are in proportion. In a session everyone shares the one slider and sees the same
+/// at the same magnification are in proportion. The slider steps through ×1 to ×10 one at a time, then ×12, ×14, ×16,
+/// ×18 and ×20 (see <see cref="k_Steps"/>), so the small magnifications keep most of its length and stay easy to set. In a session everyone shares the one slider and sees the same
 /// messages. The Spawn nozzle check box under the slider calls up the spawn nozzle (see <see cref="SpawnNozzle"/>)
 /// in front of whoever ticks it, for everyone, or removes it. Works locally when not connected.
 /// </summary>
@@ -84,7 +85,43 @@ public class TunnelMoleculeMenu : NetworkBehaviour
     float m_NozzleDrop = 0.2f;
 
     const int k_MinMagnification = 1;
-    const int k_MaxMagnification = 10;
+    const int k_MaxMagnification = 20;
+
+    /// <summary>The magnifications the slider stops at, left to right: one step at a time to ×10, then two at a time to ×20.</summary>
+    public static readonly int[] k_Steps = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20 };
+
+    /// <summary>The slider's stop for a magnification (the nearest one).</summary>
+    public static int StepOf(int magnification)
+    {
+        int best = 0;
+        for (int i = 1; i < k_Steps.Length; i++)
+            if (Mathf.Abs(k_Steps[i] - magnification) < Mathf.Abs(k_Steps[best] - magnification))
+                best = i;
+        return best;
+    }
+
+    /// <summary>The magnification at a slider stop.</summary>
+    public static int MagnificationAt(float step) => k_Steps[Mathf.Clamp(Mathf.RoundToInt(step), 0, k_Steps.Length - 1)];
+
+    static readonly List<TunnelMoleculeMenu> s_Menus = new();
+
+    /// <summary>
+    /// The Molecules list's magnification now (the shared one in a session), for what else makes molecules: the New
+    /// movie menu fills a container at it. ×1 if there is no Molecules list.
+    /// </summary>
+    public static int currentMagnification
+    {
+        get
+        {
+            foreach (var menu in s_Menus)
+                if (menu != null && menu.IsSpawned)
+                    return menu.magnification;
+            foreach (var menu in s_Menus)
+                if (menu != null)
+                    return menu.magnification;
+            return k_MinMagnification;
+        }
+    }
     const float k_FreeSpotStep = 0.05f; // meters along the tunnel between tries for a free spot
 
     public bool isListOpen => m_ListPanel != null && m_ListPanel.activeSelf;
@@ -94,7 +131,7 @@ public class TunnelMoleculeMenu : NetworkBehaviour
     int magnification => IsSpawned
         ? Mathf.Clamp(m_SharedMagnification.Value, k_MinMagnification, k_MaxMagnification)
         : m_MagnificationSlider != null
-            ? Mathf.Clamp(Mathf.RoundToInt(m_MagnificationSlider.value), k_MinMagnification, k_MaxMagnification)
+            ? MagnificationAt(m_MagnificationSlider.value)
             : k_MinMagnification;
 
     void Awake()
@@ -106,10 +143,11 @@ public class TunnelMoleculeMenu : NetworkBehaviour
 
         if (m_MagnificationSlider != null)
         {
-            m_MagnificationSlider.minValue = k_MinMagnification;
-            m_MagnificationSlider.maxValue = k_MaxMagnification;
+            // The slider counts stops (see k_Steps), not the magnification itself.
+            m_MagnificationSlider.minValue = 0;
+            m_MagnificationSlider.maxValue = k_Steps.Length - 1;
             m_MagnificationSlider.wholeNumbers = true;
-            m_MagnificationSlider.SetValueWithoutNotify(k_MinMagnification);
+            m_MagnificationSlider.SetValueWithoutNotify(StepOf(k_MinMagnification));
             m_MagnificationSlider.onValueChanged.AddListener(OnMagnificationMoved);
         }
 
@@ -137,10 +175,16 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         base.OnNetworkDespawn();
     }
 
-    void OnMagnificationMoved(float value)
+    void OnEnable() => s_Menus.Add(this);
+
+    void OnDisable() => s_Menus.Remove(this);
+
+    void OnMagnificationMoved(float step)
     {
+        int value = MagnificationAt(step);
+        Debug.Log($"[Molecules] magnification ×{value}");
         if (IsSpawned)
-            SetMagnificationRpc((byte)Mathf.Clamp(Mathf.RoundToInt(value), k_MinMagnification, k_MaxMagnification));
+            SetMagnificationRpc((byte)Mathf.Clamp(value, k_MinMagnification, k_MaxMagnification));
         ShowMagnification();
     }
 
@@ -150,8 +194,8 @@ public class TunnelMoleculeMenu : NetworkBehaviour
     // Another player moved the slider (or this one's move came back from the host).
     void OnMagnificationChanged(byte previous, byte current)
     {
-        if (m_MagnificationSlider != null && Mathf.RoundToInt(m_MagnificationSlider.value) != current)
-            m_MagnificationSlider.SetValueWithoutNotify(current);
+        if (m_MagnificationSlider != null && MagnificationAt(m_MagnificationSlider.value) != current)
+            m_MagnificationSlider.SetValueWithoutNotify(StepOf(current));
         ShowMagnification();
     }
 
@@ -167,7 +211,7 @@ public class TunnelMoleculeMenu : NetworkBehaviour
     void ShowMagnification()
     {
         if (m_MagnificationText != null)
-            m_MagnificationText.text = $"Magnification: ×{(m_MagnificationSlider != null ? Mathf.RoundToInt(m_MagnificationSlider.value) : magnification)}";
+            m_MagnificationText.text = $"Magnification: ×{(m_MagnificationSlider != null ? MagnificationAt(m_MagnificationSlider.value) : magnification)}";
     }
 
     public void ShowList(bool show)
@@ -281,6 +325,13 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         var networkObject = molecule.GetComponent<NetworkObject>();
         if (IsSpawned && networkObject != null)
             networkObject.Spawn(true);
+
+        // Its size, so a small one (EGFR is 1.2 cm at ×1, its ligand a few millimetres) is looked for, not missed.
+        float across = TunnelMovie.SizeOf(prefab, mag) * 100f;
+        string name = m_Prefabs.molecules[index].name;
+        ShareStatus(across < 3f
+            ? $"{name} placed beside this list at ×{mag}: only {across:0.#} cm across. Raise the magnification to see it better."
+            : $"{name} placed beside this list at ×{mag}, {across:0} cm across.");
     }
 
     /// <summary>

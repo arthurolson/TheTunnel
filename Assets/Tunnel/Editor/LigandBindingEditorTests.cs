@@ -9,7 +9,7 @@ using UnityEngine.UI;
 
 /// <summary>
 /// Checks the Ligand binding movie (see <see cref="TunnelMovie"/>, <see cref="CapsidSites.pocket"/>) without a headset
-/// or a session: choosing it on the movie's menu; EGFR's capture sphere live only once it plays, sized by the Capture
+/// or a session: choosing it on the movie's menu; EGFR's capture sphere (on its pocket's mouth) live only once it plays, sized by the Capture
 /// radius slider (2 to 30 Å at the molecules' true scale, 10 Å at first) so that a ligand 20 Å from the pocket is caught
 /// at 30 Å but not at 10 Å; a ligand touching the sphere binding at its pose from the crystal structure, shown at the
 /// protein's size, and gliding there; EGFR turning light blue while it is bound and back when it lets go; the binding
@@ -102,7 +102,9 @@ static class LigandBindingEditorTests
         float worldPerAngstrom = k_UnitsPerAngstrom * egfr.transform.lossyScale.x;
         Check(sphere != null && sphere.enabled && Mathf.Abs(sphere.radius * sphere.transform.lossyScale.x - 10f * worldPerAngstrom) < 1e-5f,
             $"the capture sphere's radius is 10 Å at true scale ({(sphere != null ? sphere.radius * sphere.transform.lossyScale.x * 100f : 0f):0.00} cm at ×{magnification})");
-        Check(sphere != null && Vector3.Distance(sphere.transform.position, egfr.SiteBase(0)) < 1e-5f, "centred on the ligand's place in the pocket");
+        Check(sphere != null && Vector3.Distance(sphere.transform.position, egfr.SiteBase(0)) < 1e-5f, "centred on the pocket's mouth");
+        float mouthDepth = (egfr.SiteBase(0) - egfr.transform.TransformPoint(egfr.boundPosition)).magnitude / worldPerAngstrom;
+        Check(mouthDepth > 10f && mouthDepth < 30f, $"the mouth is {mouthDepth:0} Å out from where the ligand sits bound");
 
         // A ligand whose collider is 20 Å from the pocket's centre: caught at 30 Å, not at 10 Å.
         var ligandCollider = ligand.GetComponentInChildren<Collider>();
@@ -266,8 +268,9 @@ static class LigandBindingEditorTests
                     var slider = Field<Slider>(panel, "m_DiameterSlider");
                     var sliderText = Field<TMP_Text>(panel, "m_DiameterText");
                     Check(Field<TMP_Text>(panel, "m_Title").text.StartsWith("Ligand binding"), "the menu is called Ligand binding");
-                    Check(scenarioRow != null && scenarioRow.GetComponentInChildren<TMP_Text>(true).text.Contains("Ligand binding") && !scenarioRow.interactable,
-                        "its movie row shows Ligand binding, fixed while it plays");
+                    string rowText = scenarioRow != null ? scenarioRow.GetComponentInChildren<TMP_Text>(true).text : "";
+                    Check(rowText.Contains("Ligand binding") && rowText.Contains("stops it"),
+                        $"its movie picker shows Ligand binding, and that choosing another stops it ({rowText})");
                     Check(slider != null && Mathf.Approximately(slider.minValue, 2f) && Mathf.Approximately(slider.maxValue, 30f) && Mathf.Approximately(slider.value, 10f)
                         && sliderText.text.StartsWith("Capture radius: 10 Å"), $"its slider is the capture radius, 2 to 30 Å ({sliderText?.text})");
                     movie.SetControls(false);

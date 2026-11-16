@@ -55,6 +55,51 @@ static class MoleculeLibraryBuilder
     // The smallest a toy's collider is across at ×1 (meters in the headset) before it gets a minimum grab size.
     const float k_MinGrabSize = 0.02f;
 
+    const string k_SegmentPath = "Assets/Tunnel/TG_TunnelSegment.prefab";
+
+    /// <summary>
+    /// The Molecules list's Magnification slider in the TS Menu (TG_TunnelSegment): it counts the stops of
+    /// <see cref="TunnelMoleculeMenu.k_Steps"/> (×1 to ×10 one at a time, then two at a time to ×20), with a tick label
+    /// at each. Only the slider's range and its ticks change.
+    /// </summary>
+    [MenuItem("Tunnel/Molecules/Build Magnification Slider")]
+    public static string BuildMagnificationSlider()
+    {
+        var root = PrefabUtility.LoadPrefabContents(k_SegmentPath);
+        try
+        {
+            var group = root.GetComponentsInChildren<Transform>(true).FirstOrDefault(t => t.name == "Magnification" && t.Find("Ticks") != null);
+            var slider = group != null ? group.GetComponentInChildren<UnityEngine.UI.Slider>(true) : null;
+            if (slider == null)
+                return "[Molecules] no Magnification slider in the TS Menu";
+            var steps = TunnelMoleculeMenu.k_Steps;
+            slider.minValue = 0f;
+            slider.maxValue = steps.Length - 1;
+            slider.wholeNumbers = true;
+            slider.SetValueWithoutNotify(0f);
+            var ticks = group.Find("Ticks");
+            while (ticks.childCount > steps.Length)
+                Object.DestroyImmediate(ticks.GetChild(ticks.childCount - 1).gameObject);
+            while (ticks.childCount < steps.Length)
+                Object.Instantiate(ticks.GetChild(ticks.childCount - 1).gameObject, ticks, false);
+            for (int i = 0; i < steps.Length; i++)
+            {
+                var tick = (RectTransform)ticks.GetChild(i);
+                tick.name = $"Tick {steps[i]}";
+                tick.anchorMin = tick.anchorMax = new Vector2(i / (float)(steps.Length - 1), tick.anchorMin.y);
+                tick.GetComponent<TMPro.TMP_Text>().text = steps[i].ToString();
+            }
+            PrefabUtility.SaveAsPrefabAsset(root, k_SegmentPath);
+            string log = $"[Molecules] Magnification slider: {steps.Length} stops, ×{string.Join(", ×", steps)}";
+            Debug.Log(log);
+            return log;
+        }
+        finally
+        {
+            PrefabUtility.UnloadPrefabContents(root);
+        }
+    }
+
     [MenuItem("Tunnel/Molecules/Update Molecule Library")]
     public static void UpdateLibrary()
     {
