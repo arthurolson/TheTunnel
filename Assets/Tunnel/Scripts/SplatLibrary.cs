@@ -3,11 +3,12 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// The 3D portraits (Gaussian splats, baked to coloured meshes) a splat-box can show, by name: the list on the menu
-/// beside every splat-box (see <see cref="SplatBox"/>). To add one, put its model in Assets/Tunnel/Splats and add a line
-/// to SplatBuilder's list, then run Tunnel > Containers > Build Splats; or add an entry here by hand with any prefab.
-/// Its order is shared by every headset (a splat-box shows its splat by its place in this list), so add new ones at the
-/// end.
+/// The 3D portraits (Gaussian splats, baked to coloured meshes) built into the app, which a splat-box can show without
+/// a download: the first rows of the menu beside every splat-box (see <see cref="SplatBox"/>), above the asset
+/// repository's meshes (see <see cref="TunnelAssetCatalog"/>). Each has the id of the same file in the repository, so a
+/// splat-box asked for that id shows the built-in copy at once. To add one, put its model in Assets/Tunnel/Splats and
+/// add a line to SplatBuilder's list, then run Tunnel > Containers > Build Splats; or add an entry here by hand with any
+/// prefab. A new splat-box shows the first one.
 /// </summary>
 [CreateAssetMenu(menuName = "Tunnel/Splat Library")]
 public class SplatLibrary : ScriptableObject
@@ -18,6 +19,9 @@ public class SplatLibrary : ScriptableObject
         [Tooltip("Shown on the splat-box's menu.")]
         public string name;
 
+        [Tooltip("The id of the same model in the asset repository (assets.json), which is how splat-boxes name it.")]
+        public string assetId;
+
         [Tooltip("What the box shows: the splat's mesh with an unlit vertex-colour material (Tunnel/Splat Unlit).")]
         public GameObject prefab;
 
@@ -27,6 +31,9 @@ public class SplatLibrary : ScriptableObject
 
     public List<Splat> splats = new();
 
+    [Tooltip("What every mesh loaded from the asset repository is drawn with (Tunnel/Splat Unlit).")]
+    public Material material;
+
     public int count => splats.Count;
 
     /// <summary>The splat at this place in the list, or null if there is none there.</summary>
@@ -34,4 +41,7 @@ public class SplatLibrary : ScriptableObject
 
     /// <summary>Where the splat with this name is in the list, or -1.</summary>
     public int IndexOf(string splatName) => splats.FindIndex(s => s != null && s.name == splatName);
+
+    /// <summary>The asset id a new splat-box shows: the first splat's, or "" if there is none.</summary>
+    public string firstAssetId => splats.Count > 0 && splats[0] != null ? splats[0].assetId ?? "" : "";
 }

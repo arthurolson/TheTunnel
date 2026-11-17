@@ -24,12 +24,13 @@ static class SplatBuilder
     const float k_CanvasWidth = 420f;    // 25 cm
 
     /// <summary>
-    /// The splats: the name on the menu, the model (a glb with the splat baked to a vertex-coloured mesh) and how it is
-    /// turned in its box (degrees). Add new ones at the end: a splat-box shows its splat by its place in the list.
+    /// The splats built into the app: the name on the menu, the id of the same file in the asset repository
+    /// (TunnelAssetCatalog), the model (a glb with the splat baked to a vertex-coloured mesh) and how it is turned in its
+    /// box (degrees). The first is what a new splat-box shows.
     /// </summary>
-    static readonly (string name, string model, Vector3 rotation)[] k_Splats =
+    static readonly (string name, string assetId, string model, Vector3 rotation)[] k_Splats =
     {
-        ("David Goodsell", k_Folder + "/goodsellportrait_mesh.glb", Vector3.zero),
+        ("David Goodsell", "goodsell_portrait_mesh", k_Folder + "/goodsellportrait_mesh.glb", Vector3.zero),
     };
 
     [MenuItem("Tunnel/Containers/Build Splats")]
@@ -56,7 +57,8 @@ static class SplatBuilder
             library = ScriptableObject.CreateInstance<SplatLibrary>();
             AssetDatabase.CreateAsset(library, k_LibraryPath);
         }
-        foreach (var (splatName, model, rotation) in k_Splats)
+        library.material = material;
+        foreach (var (splatName, assetId, model, rotation) in k_Splats)
         {
             var prefab = BuildSplatPrefab(splatName, model, material);
             if (prefab == null)
@@ -68,6 +70,7 @@ static class SplatBuilder
                 library.splats.Add(entry);
             }
             entry.prefab = prefab;
+            entry.assetId = assetId;
         }
         EditorUtility.SetDirty(library);
         return library;

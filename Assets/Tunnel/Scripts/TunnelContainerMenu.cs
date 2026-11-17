@@ -1,4 +1,5 @@
 using TMPro;
+using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.UI;
@@ -414,6 +415,67 @@ public class TunnelContainerMenu : NetworkBehaviour
         container.transform.SetParent(null, true);
         Destroy(holder);
         Debug.Log($"[Containers] placed a {shape} at {container.transform.position:F2}");
+
+        if (IsSpawned && container.TryGetComponent(out NetworkObject networkObject))
+            networkObject.Spawn(true);
+    }
+
+    /// <summary>
+    /// The menu that places splat-boxes for <see cref="TunnelAssets.Spawn"/>: one that is shared in the session when
+    /// connected (so the box is shared too), else any.
+    /// </summary>
+    public static TunnelContainerMenu ForAssets()
+    {
+        TunnelContainerMenu any = null;
+        foreach (var menu in FindObjectsByType<TunnelContainerMenu>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+        {
+            if (menu.m_SplatBoxPrefab == null)
+                continue;
+            if (menu.IsSpawned)
+                return menu;
+            any ??= menu;
+        }
+        return any;
+    }
+
+    /// <summary>
+    /// Places a splat-box showing this asset from the asset repository here, for everyone (see
+    /// <see cref="TunnelAssets.Spawn"/>). Its height in meters, or 0 to keep the box's usual size.
+    /// </summary>
+    public void PlaceAsset(string assetId, Vector3 position, Quaternion rotation, float height)
+    {
+        if (string.IsNullOrEmpty(assetId) || assetId.Length > 120)
+        {
+            Debug.LogWarning($"[Assets] can't place \"{assetId}\": not an asset id");
+            return;
+        }
+        if (IsSpawned)
+            SpawnAssetRpc(new FixedString128Bytes(assetId), position, rotation, height);
+        else
+            SpawnAsset(assetId, position, rotation, height);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void SpawnAssetRpc(FixedString128Bytes assetId, Vector3 position, Quaternion rotation, float height) =>
+        SpawnAsset(assetId.ToString(), position, rotation, height);
+
+    void SpawnAsset(string assetId, Vector3 position, Quaternion rotation, float height)
+    {
+        if (m_SplatBoxPrefab == null)
+        {
+            Debug.LogWarning("[Assets] no splat-box to place (run Tunnel > Containers > Build Containers)");
+            return;
+        }
+        // Placed, and given its asset, before it wakes up (its network transform takes its pose when it's created).
+        var holder = new GameObject("Container Holder");
+        holder.SetActive(false);
+        var container = Instantiate(m_SplatBoxPrefab, holder.transform);
+        container.transform.SetPositionAndRotation(position, rotation);
+        if (container.TryGetComponent(out SplatBox splat))
+            splat.Preset(assetId, height);
+        container.transform.SetParent(null, true);
+        Destroy(holder);
+        Debug.Log($"[Assets] placed a splat-box with {assetId} at {position:F2}{(height > 0f ? $", {height:F2} m tall" : "")}");
 
         if (IsSpawned && container.TryGetComponent(out NetworkObject networkObject))
             networkObject.Spawn(true);

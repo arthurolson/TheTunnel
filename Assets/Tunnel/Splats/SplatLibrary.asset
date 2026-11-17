@@ -14,5 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::SplatLibrary
   splats:
   - name: David Goodsell
+    assetId: goodsell_portrait_mesh
     prefab: {fileID: 1029477597604143924, guid: a7b54d6596dbc4560830cdb76a4e327f, type: 3}
     rotation: {x: 0, y: 0, z: 0}
+  material: {fileID: 2100000, guid: bd16fba1066b840d88c29dea73cd1a05, type: 2}
