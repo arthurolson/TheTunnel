@@ -7,8 +7,11 @@ using UnityEngine;
 /// <summary>
 /// A splat-box: a box from the TS Menu's Containers list that frames a 3D portrait, chosen from the small menu beside
 /// it (see <see cref="SplatBoxPanel"/>): one built into the app (see <see cref="SplatLibrary"/>, David Goodsell) or any
-/// mesh in the Tunnel's asset repository (see <see cref="TunnelAssetCatalog"/>), loaded while the app runs. Other
+/// asset in the Tunnel's asset repository (see <see cref="TunnelAssetCatalog"/>), loaded while the app runs: a mesh,
+/// molecule or virus fitted in the box; an image or video on a screen in it; a 360 image or video all round it. Other
 /// scripts put one in the tunnel with <see cref="TunnelAssets.Spawn"/>.
+/// A video plays for everyone together: paused or playing, and where, are shared (see <see cref="SetVideoPaused"/>).
+/// The host's asset list goes with the box, so every headset reads an id from the same list.
 /// The box is the container's (see <see cref="TunnelContainer"/>, shape SplatBox): it is grabbed by its edges, two
 /// hands scale it, and it can be a mixed reality box set into a tunnel wall, but it has no walls, medium or heat, so
 /// molecules pay it no attention. A portrait reads well only from the side it was captured from, so that side is
@@ -44,6 +47,14 @@ public class SplatBox : NetworkBehaviour
     // The asset shown ("" for the library's first) and the height it is made (meters; 0 keeps the box's largest side).
     readonly NetworkVariable<FixedString128Bytes> m_Asset = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<float> m_Height = new(0f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    // The asset list its asset comes from: the host's, which everyone then reads too.
+    readonly NetworkVariable<FixedString512Bytes> m_Catalog = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    // A video's state: paused or playing, and where (a playing video is at server time minus its anchor).
+    readonly NetworkVariable<bool> m_VideoPaused = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<double> m_VideoAnchor = new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<double> m_VideoPausedAt = new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    bool m_LocalVideoPaused;
+    double m_LocalVideoAnchor, m_LocalVideoPausedAt;
     string m_LocalAsset = "";
     float m_LocalHeight;
 
@@ -52,6 +63,8 @@ public class SplatBox : NetworkBehaviour
     string m_ContentFor;
     int m_Loading;
     bool m_HasModel;
+    bool m_Surround;
+    TunnelVideo m_Video;
     TMP_Text m_PlaceholderText;
     Material m_PlaceholderMaterial;
     Bounds m_Bounds = new(Vector3.zero, Vector3.one);
@@ -92,6 +105,19 @@ public class SplatBox : NetworkBehaviour
     /// <summary>Its model has arrived on this headset (not the placeholder).</summary>
     public bool isShown => m_HasModel;
 
+    /// <summary>It shows a video (loaded and ready to play).</summary>
+    public bool hasVideo => m_Video != null;
+
+    /// <summary>Its video is paused, for everyone.</summary>
+    public bool videoPaused => IsSpawned ? m_VideoPaused.Value : m_LocalVideoPaused;
+
+    /// <summary>The clock its video follows: the session's when connected, else this headset's.</summary>
+    double Now => IsSpawned && NetworkManager != null ? NetworkManager.ServerTime.Time : Time.timeAsDouble;
+
+    /// <summary>Where its video should be now (seconds; not wrapped round its length).</summary>
+    double VideoTime => videoPaused ? (IsSpawned ? m_VideoPausedAt.Value : m_LocalVideoPausedAt)
+        : Now - (IsSpawned ? m_VideoAnchor.Value : m_LocalVideoAnchor);
+
     void Awake()
     {
         m_Container = GetComponent<TunnelContainer>();
@@ -100,6 +126,8 @@ public class SplatBox : NetworkBehaviour
 
     void Start()
     {
+        if (!IsSpawned)
+            SetVideoState(false, 0); // a video starts from the beginning
         ShowSplat();
         if (m_PanelPrefab != null && m_Panel == null)
         {
@@ -113,14 +141,23 @@ public class SplatBox : NetworkBehaviour
     public override void OnNetworkSpawn()
     {
         base.OnNetworkSpawn();
-        // Whoever placed it chose its asset before it was shared.
-        if (IsServer && m_Asset.Value.IsEmpty && !string.IsNullOrEmpty(m_LocalAsset))
+        if (IsServer)
         {
-            m_Asset.Value = new FixedString128Bytes(m_LocalAsset);
-            m_Height.Value = m_LocalHeight;
+            // Whoever placed it chose its asset before it was shared.
+            if (m_Asset.Value.IsEmpty && !string.IsNullOrEmpty(m_LocalAsset))
+            {
+                m_Asset.Value = new FixedString128Bytes(m_LocalAsset);
+                m_Height.Value = m_LocalHeight;
+            }
+            ShareCatalog();
+            m_VideoPaused.Value = false;
+            m_VideoAnchor.Value = Now;
         }
+        else
+            FollowCatalog();
         m_Asset.OnValueChanged += OnAssetChanged;
         m_Height.OnValueChanged += OnHeightChanged;
+        m_Catalog.OnValueChanged += OnCatalogChanged;
         ShowSplat();
     }
 
@@ -128,6 +165,7 @@ public class SplatBox : NetworkBehaviour
     {
         m_Asset.OnValueChanged -= OnAssetChanged;
         m_Height.OnValueChanged -= OnHeightChanged;
+        m_Catalog.OnValueChanged -= OnCatalogChanged;
         base.OnNetworkDespawn();
     }
 
@@ -154,6 +192,60 @@ public class SplatBox : NetworkBehaviour
     }
 
     void OnAssetChanged(FixedString128Bytes previous, FixedString128Bytes current) => ShowSplat();
+
+    void OnCatalogChanged(FixedString512Bytes previous, FixedString512Bytes current) => FollowCatalog();
+
+    /// <summary>The host tells everyone which asset list it uses (so an id means the same asset to all).</summary>
+    void ShareCatalog()
+    {
+        string url = TunnelAssetCatalog.source;
+        if (url.Length < 500 && m_Catalog.Value.ToString() != url)
+            m_Catalog.Value = new FixedString512Bytes(url);
+    }
+
+    /// <summary>A guest reads the host's asset list, if it isn't already, and shows its asset from that.</summary>
+    void FollowCatalog()
+    {
+        string url = m_Catalog.Value.ToString();
+        if (string.IsNullOrEmpty(url) || url == TunnelAssetCatalog.source)
+            return;
+        Debug.Log($"[Splat] {name}: using the host's asset list, {url}");
+        _ = TunnelAssetCatalog.UseSource(url);
+        if (!m_HasModel && TunnelAssets.BuiltIn(assetId) == null)
+        {
+            m_ContentFor = null; // load it again, from the host's list
+            ShowSplat();
+        }
+    }
+
+    /// <summary>Pauses or plays its video, for everyone, from where it is.</summary>
+    public void SetVideoPaused(bool paused)
+    {
+        double at = VideoTime;
+        if (IsSpawned)
+            VideoStateRpc(paused, at);
+        else
+            SetVideoState(paused, at);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void VideoStateRpc(bool paused, double at) => SetVideoState(paused, at);
+
+    void SetVideoState(bool paused, double at)
+    {
+        if (IsSpawned)
+        {
+            m_VideoPausedAt.Value = at;
+            m_VideoAnchor.Value = Now - at;
+            m_VideoPaused.Value = paused;
+        }
+        else
+        {
+            m_LocalVideoPausedAt = at;
+            m_LocalVideoAnchor = Now - at;
+            m_LocalVideoPaused = paused;
+        }
+    }
 
     void OnHeightChanged(float previous, float current)
     {
@@ -186,6 +278,8 @@ public class SplatBox : NetworkBehaviour
             bool same = id == assetId;
             m_LocalAsset = id;
             m_LocalHeight = height;
+            if (!same)
+                SetVideoState(false, 0);
             if (same)
                 FitBoxToSplat();
             else
@@ -203,6 +297,9 @@ public class SplatBox : NetworkBehaviour
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     void ChooseRpc(FixedString128Bytes id, float height)
     {
+        if (m_Asset.Value != id)
+            SetVideoState(false, 0); // a new video starts from the beginning, for everyone
+        ShareCatalog();
         m_Asset.Value = id;
         m_Height.Value = Mathf.Max(0f, height);
     }
@@ -222,6 +319,8 @@ public class SplatBox : NetworkBehaviour
             Destroy(m_Content.gameObject);
         m_Content = null;
         m_HasModel = false;
+        m_Surround = false;
+        m_Video = null;
         status = "";
         attribution = TunnelAssetCatalog.Resolve(id)?.attribution ?? "";
         if (string.IsNullOrEmpty(id))
@@ -264,11 +363,18 @@ public class SplatBox : NetworkBehaviour
             m_PlaceholderText = null;
             m_HasModel = true;
             status = "";
+            var instance = model.GetComponent<TunnelAssetInstance>();
+            m_Surround = instance != null && instance.surround;
+            m_Video = instance != null ? instance.video : null;
             m_Bounds = MeshBounds(holder, Matrix4x4.identity, model.transform);
+            // A picture is flat: give it a little depth, so its box isn't a sheet.
+            var size = m_Bounds.size;
+            size.z = Mathf.Max(size.z, 0.05f * Mathf.Max(size.x, size.y));
+            m_Bounds.size = size;
             m_FittedFor = Vector3.zero;
             FitContent();
             // Whoever moves the box gives it the portrait's proportions; the network transform shares them.
-            if (!IsSpawned || IsOwner)
+            if ((!IsSpawned || IsOwner) && !m_Surround)
                 FitBoxToSplat();
             Debug.Log($"[Splat] {name}: showing {title}, {m_Bounds.size.x:F2} x {m_Bounds.size.y:F2} x {m_Bounds.size.z:F2} in its own units");
         }
@@ -418,6 +524,14 @@ public class SplatBox : NetworkBehaviour
             return;
         m_FittedFor = lossy;
         var s = new Vector3(Mathf.Max(Mathf.Abs(lossy.x), 1e-4f), Mathf.Max(Mathf.Abs(lossy.y), 1e-4f), Mathf.Max(Mathf.Abs(lossy.z), 1e-4f));
+        if (m_Surround)
+        {
+            // A 360 picture all round the box at its own size (meters), whatever the box's size.
+            m_Content.localScale = new Vector3(1f / s.x, 1f / s.y, 1f / s.z);
+            m_Content.localPosition = Vector3.zero;
+            m_Content.localRotation = Quaternion.identity;
+            return;
+        }
         var need = m_Bounds.size * (1f + m_Margin);
         float k = Mathf.Min(s.x / need.x, Mathf.Min(s.y / need.y, s.z / need.z)); // meters per unit of the splat
         var undo = new Vector3(1f / s.x, 1f / s.y, 1f / s.z);
@@ -429,6 +543,8 @@ public class SplatBox : NetworkBehaviour
     void LateUpdate()
     {
         FitContent();
+        if (m_Video != null)
+            m_Video.Follow(!videoPaused, VideoTime);
         if (m_Panel != null && m_Panel.gameObject.activeSelf)
             PlacePanel(false);
     }

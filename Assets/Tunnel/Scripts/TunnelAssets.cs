@@ -12,9 +12,12 @@ using UnityMaterial = UnityEngine.Material;
 
 /// <summary>
 /// Loads an asset from the Tunnel's asset repository (see <see cref="TunnelAssetCatalog"/>) by its id and puts it in
-/// the tunnel. Each file is downloaded once per headset and kept there by its checksum, so after the first time it
-/// appears at once, offline too. A mesh is drawn as David Goodsell's portrait is: unlit, in its own vertex colours or
-/// texture, exactly as captured. Meshes built into the app (the splat library's David Goodsell) need no download.
+/// the tunnel: meshes, molecules and viruses (glTF), images and videos (flat or 360), atomic models (as their ready-made
+/// surface) and virus instance lists (see TunnelAssetKinds.cs). Each file is downloaded once per headset and kept there
+/// by its checksum, so after the first time it appears at once, offline too; large videos stream instead. A captured
+/// mesh is drawn as David Goodsell's portrait is: unlit, in its own vertex colours or texture, exactly as captured;
+/// molecules and viruses are shaded from their normals. Meshes built into the app (the splat library's David Goodsell)
+/// need no download. Docs/ASSETS.md says how to add an asset, end to end.
 ///
 /// From other scripts:
 /// <code>
@@ -27,7 +30,7 @@ using UnityMaterial = UnityEngine.Material;
 /// GameObject model = await TunnelAssets.Load("art_photo_mesh", parent, progress => Debug.Log(progress));
 /// </code>
 /// </summary>
-public static class TunnelAssets
+public static partial class TunnelAssets
 {
     /// <summary>Where the files are kept on the headset.</summary>
     public static string CacheFolder => Path.Combine(Application.persistentDataPath, "TunnelAssets");
@@ -125,10 +128,12 @@ public static class TunnelAssets
     static readonly Dictionary<string, int> s_Users = new();
 
     /// <summary>
-    /// The asset's model, under this parent, on this headset only: from the app itself, the copy on the headset, or
-    /// downloaded (progress 0 to 1 while it downloads). On a headset an asset with a Quest version loads that instead.
-    /// Each model loaded from the same file shares its meshes and textures; destroying the last one frees them.
-    /// Throws <see cref="LoadException"/> if it can't be loaded.
+    /// The asset, under this parent, on this headset only, whatever its kind: a glTF mesh, molecule or virus as its
+    /// model; an image on a quad, or all round on a sphere if it is a 360 panorama; a video playing the same way; an
+    /// atomic model as its ready-made surface; a virus instance list as its proteins put together. It comes from the app
+    /// itself, the copy on the headset, or a download (progress 0 to 1 while it downloads); large videos stream. On a
+    /// headset an asset with a Quest version loads that instead. Models loaded from the same file share its meshes and
+    /// textures; destroying the last one frees them. Throws <see cref="LoadException"/> if it can't be loaded.
     /// </summary>
     public static async Task<GameObject> Load(string assetId, Transform parent = null, Action<float> progress = null)
     {
@@ -145,10 +150,12 @@ public static class TunnelAssets
         var asset = TunnelAssetCatalog.Resolve(assetId);
         if (asset == null)
             throw new LoadException(TunnelAssetCatalog.ready ? $"{assetId} isn't in the asset list" : "the asset list can't be read (offline?)");
-        if (!asset.isLoadableMesh)
-            throw new LoadException($"{asset.title} is a {asset.kind} ({asset.format}); only glTF meshes can be shown so far");
+        if (!asset.isLoadable)
+            throw new LoadException($"{asset.title} is a {asset.kind} ({asset.format}), which the app can't show yet");
         if (asset.id != assetId)
             Debug.Log($"[Assets] {assetId}: loading its Quest version, {asset.id}");
+        if (!asset.isGlb)
+            return await LoadKind(asset, parent, progress); // images, videos, atomic models, instance lists
         if (asset.isHeavy)
             Debug.LogWarning($"[Assets] {asset.id} has {asset.faces:N0} triangles: more than {TunnelAssetCatalog.k_HeavyFaces:N0}, the headset may slow down");
 
@@ -176,10 +183,19 @@ public static class TunnelAssets
         root.transform.SetParent(parent, false);
         var holder = root.AddComponent<TunnelAssetInstance>();
         holder.Bind(asset.id);
-        if (!await import.InstantiateMainSceneAsync(root.transform))
+        // Its default scene; files that name none (Mol* exports) get their first.
+        bool placed = import.DefaultSceneIndex.HasValue || import.SceneCount == 0
+            ? await import.InstantiateMainSceneAsync(root.transform)
+            : await import.InstantiateSceneAsync(root.transform, 0);
+        if (!placed)
         {
             UnityEngine.Object.Destroy(root);
             throw new LoadException($"{asset.title} couldn't be put together");
+        }
+        if (root.GetComponentInChildren<Renderer>(true) == null)
+        {
+            UnityEngine.Object.Destroy(root);
+            throw new LoadException($"{asset.title} has nothing to draw");
         }
 
         foreach (var renderer in root.GetComponentsInChildren<MeshRenderer>(true))
@@ -230,7 +246,9 @@ public static class TunnelAssets
     static async Task<GltfImport> Import(TunnelAssetCatalog.Asset asset)
     {
         string path = await Download(asset);
-        var import = new GltfImport(materialGenerator: new UnlitMaterials(Template()), logger: new ConsoleLogger());
+        // Molecules and viruses are shaded from their normals, unless the file asks to be drawn unlit.
+        bool lit = asset.kind == "molecule" || asset.kind == "virus";
+        var import = new GltfImport(materialGenerator: new UnlitMaterials(Template(), lit), logger: new ConsoleLogger());
         if (!await import.LoadFile(path, new Uri(path)))
         {
             import.Dispose();
@@ -242,9 +260,15 @@ public static class TunnelAssets
     // ---------------------------------------------------------------------------------------------------------------
     // The copies kept on the headset
 
-    /// <summary>Where this asset's file is kept on the headset (named by its checksum).</summary>
+    /// <summary>Where this asset's file is kept on the headset (named by its checksum, with its own extension).</summary>
     public static string CachedPath(TunnelAssetCatalog.Asset asset) =>
-        Path.Combine(CacheFolder, (string.IsNullOrEmpty(asset.sha256) ? asset.id : asset.sha256) + ".glb");
+        Path.Combine(CacheFolder, (string.IsNullOrEmpty(asset.sha256) ? asset.id : asset.sha256) + Extension(asset));
+
+    static string Extension(TunnelAssetCatalog.Asset asset)
+    {
+        string ext = Path.GetExtension(!string.IsNullOrEmpty(asset.path) ? asset.path : asset.url ?? "");
+        return string.IsNullOrEmpty(ext) || ext.Length > 6 ? ".bin" : ext.ToLowerInvariant();
+    }
 
     /// <summary>The headset has this asset's file already.</summary>
     public static bool IsCached(TunnelAssetCatalog.Asset asset)
@@ -432,6 +456,7 @@ public static class TunnelAssets
     static readonly int s_MainTex = Shader.PropertyToID("_MainTex");
     static readonly int s_VertexColor = Shader.PropertyToID("_VertexColor");
     static readonly int s_Cull = Shader.PropertyToID("_Cull");
+    static readonly int s_Lit = Shader.PropertyToID("_Lit");
 
     /// <summary>The material every loaded mesh starts from: Tunnel/Splat Unlit, as David Goodsell's portrait has.</summary>
     internal static UnityMaterial Template()
@@ -458,19 +483,26 @@ public static class TunnelAssets
     }
 
     /// <summary>
-    /// Gives glTFast's meshes the Tunnel's unlit material instead of its own lit ones: unlit is how these captures
-    /// look right (their light is in their colours), and the app then needs no extra shaders.
+    /// Gives glTFast's meshes the Tunnel's own material (Tunnel/Splat Unlit) instead of glTFast's lit ones: unlit is how
+    /// captures look right (their light is in their colours), molecules get its simple shading from their normals, and
+    /// the app needs no extra shaders.
     /// </summary>
     class UnlitMaterials : IMaterialGenerator
     {
         readonly UnityMaterial m_Template;
+        readonly bool m_Lit;
 
-        public UnlitMaterials(UnityMaterial template) => m_Template = template;
+        public UnlitMaterials(UnityMaterial template, bool lit)
+        {
+            m_Template = template;
+            m_Lit = lit;
+        }
 
         public UnityMaterial GetDefaultMaterial(bool pointsSupport = false)
         {
             var material = new UnityMaterial(m_Template) { name = "Default" };
             material.SetFloat(s_VertexColor, 1f);
+            material.SetFloat(s_Lit, m_Lit ? 1f : 0f);
             material.SetFloat(s_Cull, (float)UnityEngine.Rendering.CullMode.Off);
             return material;
         }
@@ -480,6 +512,7 @@ public static class TunnelAssets
             var material = new UnityMaterial(m_Template) { name = string.IsNullOrEmpty(gltfMaterial.name) ? "Material" : gltfMaterial.name };
             material.SetFloat(s_VertexColor, 1f);
             material.SetFloat(s_Cull, (float)(gltfMaterial.doubleSided ? UnityEngine.Rendering.CullMode.Off : UnityEngine.Rendering.CullMode.Back));
+            material.SetFloat(s_Lit, m_Lit && gltfMaterial.Extensions?.KHR_materials_unlit == null ? 1f : 0f);
             var pbr = gltfMaterial.PbrMetallicRoughness;
             var info = pbr?.BaseColorTexture;
             var texture = info != null && info.index >= 0 ? gltf.GetTexture(info.index) : null;

@@ -6,8 +6,9 @@ using UnityEngine.UI;
 
 /// <summary>
 /// The small menu beside a splat-box (see <see cref="SplatBox"/>): "Splats", then one row per portrait, each with its
-/// picture: those built into the app (see <see cref="SplatLibrary"/>), then every mesh in the Tunnel's asset repository
-/// (see <see cref="TunnelAssetCatalog"/>), the one shown checked. Pressing a row shows that portrait in the box, for
+/// picture: those built into the app (see <see cref="SplatLibrary"/>), then everything in the Tunnel's asset repository
+/// the app can show (see <see cref="TunnelAssetCatalog"/>): meshes, images, videos, molecules and viruses, the one shown
+/// checked. While the box shows a video, a button under the rows pauses and plays it for everyone. Pressing a row shows that portrait in the box, for
 /// everyone. A row says how large a download is the first time, and when a mesh has so many triangles the headset may
 /// slow down. Under the rows: how loading is going on this headset, and the credit an asset's license asks for.
 /// Its rows are made from the library and the repository's list, so an asset added to the repository appears here with
@@ -56,6 +57,9 @@ public class SplatBoxPanel : MonoBehaviour
     }
 
     SplatBox m_Box;
+    Button m_VideoButton;
+    TMP_Text m_VideoLabel;
+    bool? m_VideoShownFor;
     readonly List<Row> m_Rows = new();
     TMP_Text m_Status;
     string m_ShownFor;
@@ -84,13 +88,13 @@ public class SplatBoxPanel : MonoBehaviour
                 Destroy(row.button.gameObject);
         m_Rows.Clear();
 
-        // Built in first, then the repository's meshes not already built in.
+        // Built in first, then everything in the repository the app can show, not already built in.
         var library = m_Box.library;
         if (library != null)
             foreach (var splat in library.splats)
                 if (splat != null && splat.prefab != null)
                     m_Rows.Add(new Row { assetId = string.IsNullOrEmpty(splat.assetId) ? splat.name : splat.assetId, name = splat.name, asset = TunnelAssetCatalog.Get(splat.assetId) });
-        foreach (var asset in TunnelAssetCatalog.MenuMeshes())
+        foreach (var asset in TunnelAssetCatalog.MenuAssets())
             if (m_Rows.All(r => r.assetId != asset.id))
                 m_Rows.Add(new Row { assetId = asset.id, name = string.IsNullOrEmpty(asset.title) ? asset.id : asset.title, asset = asset });
 
@@ -128,6 +132,21 @@ public class SplatBoxPanel : MonoBehaviour
             }
         }
 
+        // Under the rows, a button that pauses and plays the box's video, shown while it has one.
+        if (m_VideoButton == null && m_RowTemplate != null)
+        {
+            m_VideoButton = Instantiate(m_RowTemplate, m_RowTemplate.transform.parent, false);
+            m_VideoButton.name = "Video Play Pause";
+            m_VideoButton.onClick.AddListener(() => m_Box?.SetVideoPaused(!m_Box.videoPaused));
+            m_VideoLabel = m_VideoButton.GetComponentInChildren<TMP_Text>(true);
+        }
+        if (m_VideoButton != null)
+        {
+            var rect = (RectTransform)m_VideoButton.transform;
+            rect.anchoredPosition = new Vector2(0f, -(m_Top + m_RowHeight * (m_Rows.Count + 0.5f)));
+            m_VideoButton.gameObject.SetActive(false);
+        }
+
         if (m_Status == null && m_Title != null)
         {
             m_Status = Instantiate(m_Title, m_Title.transform.parent, false);
@@ -141,14 +160,14 @@ public class SplatBoxPanel : MonoBehaviour
         if (m_Status != null)
         {
             var rect = m_Status.rectTransform;
-            rect.anchoredPosition = new Vector2(0f, -(m_Top + m_RowHeight * m_Rows.Count + 6f));
+            rect.anchoredPosition = new Vector2(0f, -(m_Top + m_RowHeight * (m_Rows.Count + 1) + 6f));
             rect.sizeDelta = new Vector2(rect.sizeDelta.x, m_StatusHeight);
         }
 
         if (m_Canvas != null)
-            m_Canvas.sizeDelta = new Vector2(m_Canvas.sizeDelta.x, m_Top + m_RowHeight * Mathf.Max(m_Rows.Count, 1) + m_StatusHeight + m_Bottom);
+            m_Canvas.sizeDelta = new Vector2(m_Canvas.sizeDelta.x, m_Top + m_RowHeight * (Mathf.Max(m_Rows.Count, 1) + 1) + m_StatusHeight + m_Bottom);
         if (m_Title != null)
-            m_Title.text = m_Rows.Count == 0 ? "Splats  <color=#AAA>(none yet: is the headset online?)</color>" : "Splats";
+            m_Title.text = m_Rows.Count <= 1 ? "Splats  <color=#AAA>(is the headset online?)</color>" : "Splats and assets";
         m_ShownFor = null;
         m_StatusFor = null;
         Refresh();
@@ -226,6 +245,16 @@ public class SplatBoxPanel : MonoBehaviour
                 m_Status.text = status;
         }
 
+        // The video button: shown while the box has a video, saying what pressing it does.
+        bool? video = m_Box.hasVideo ? m_Box.videoPaused : null;
+        if (video != m_VideoShownFor && m_VideoButton != null)
+        {
+            m_VideoShownFor = video;
+            m_VideoButton.gameObject.SetActive(video.HasValue);
+            if (m_VideoLabel != null && video.HasValue)
+                m_VideoLabel.text = video.Value ? "▶  Play the video, for everyone" : "❚❚  Pause the video, for everyone";
+        }
+
         if (shown != m_ShownFor)
         {
             m_ShownFor = shown;
@@ -251,10 +280,19 @@ public class SplatBoxPanel : MonoBehaviour
         if (asset == null || TunnelAssets.BuiltIn(row.assetId) != null)
             return "";
         var notes = new List<string>();
+        switch (asset.kind)
+        {
+            case "image": notes.Add(asset.isSurround ? "360 image" : $"image, {asset.width} x {asset.height}"); break;
+            case "video": notes.Add($"{(asset.isSurround ? "360 video" : "video")}, {asset.duration:F0} s{(asset.height > 0 ? $", {asset.height}p" : "")}"); break;
+            case "molecule": notes.Add(asset.atoms > 0 ? $"molecule, {asset.atoms:N0} atoms" : "molecule"); break;
+            case "virus": notes.Add(asset.instances > 0 ? $"assembly of {asset.instances} proteins" : "virus"); break;
+        }
         if (asset.isHeavy)
             notes.Add($"<color=#FFB347>{asset.faces / 1e6f:F1}M triangles: may slow the headset</color>");
-        if (!TunnelAssets.IsCached(asset) && asset.bytes > 0)
-            notes.Add($"{asset.bytes / 1e6f:F0} MB to download");
+        if (asset.kind == "video" && asset.bytes > TunnelAssetSettings.current.cacheVideosUpTo)
+            notes.Add("streams");
+        else if (!TunnelAssets.IsCached(asset) && asset.bytes > 0)
+            notes.Add(asset.bytes < 1_000_000 ? "under 1 MB to download" : $"{asset.bytes / 1e6f:F0} MB to download");
         return notes.Count > 0 ? $"<color=#BBB>{string.Join(", ", notes)}</color>" : "";
     }
 
