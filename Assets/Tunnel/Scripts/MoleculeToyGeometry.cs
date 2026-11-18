@@ -58,7 +58,8 @@ public static class MoleculeToyGeometry
     /// <paramref name="angstromsPerUnit"/> is the model's scale (1 for a model in ångströms, as Mol* exports them).
     /// </summary>
     public static Geometry Build(Transform modelRoot, List<MeshFilter> filters, string name, string category,
-        Material[] templateMaterials, bool fullDetail, Dictionary<string, Color> mtlColours = null, float angstromsPerUnit = 1f)
+        Material[] templateMaterials, bool fullDetail, Dictionary<string, Color> mtlColours = null, float angstromsPerUnit = 1f,
+        bool fitCollider = true)
     {
         mtlColours ??= new Dictionary<string, Color>();
         Matrix4x4 toRoot(Transform t) => modelRoot.worldToLocalMatrix * t.localToWorldMatrix;
@@ -133,12 +134,23 @@ public static class MoleculeToyGeometry
             foreach (var v in mesh.vertices)
                 result.radius = Mathf.Max(result.radius, v.magnitude);
 
-        // The tightest collider around every vertex: an oriented box or an ellipsoid, whichever is smaller.
-        var points = result.meshes.SelectMany(m => m.vertices).ToList();
-        result.box = MoleculeColliderFit.Box(points);
-        result.ellipsoid = MoleculeColliderFit.Ellipsoid(points);
-        result.fit = result.box.volume <= result.ellipsoid.volume ? result.box : result.ellipsoid;
+        if (fitCollider)
+            FitCollider(result, Points(result));
         return result;
+    }
+
+    /// <summary>Every vertex of the toy's parts (read on the main thread, for <see cref="FitCollider"/>).</summary>
+    public static List<Vector3> Points(Geometry g) => g.meshes.SelectMany(m => m.vertices).ToList();
+
+    /// <summary>
+    /// The tightest collider around every vertex: an oriented box or an ellipsoid, whichever is smaller. Only maths
+    /// on the points, so a headset can run it off the main thread (it takes seconds for a large molecule).
+    /// </summary>
+    public static void FitCollider(Geometry g, List<Vector3> points)
+    {
+        g.box = MoleculeColliderFit.Box(points);
+        g.ellipsoid = MoleculeColliderFit.Ellipsoid(points);
+        g.fit = g.box.volume <= g.ellipsoid.volume ? g.box : g.ellipsoid;
     }
 
     /// <summary>

@@ -197,6 +197,12 @@ public static class MoleculeColliderFit
     // band angle) of the vertex radius.
     static float PolyhedronGrowth => 1f / (Mathf.Cos(Mathf.PI / k_Segments) * Mathf.Cos(Mathf.PI / (2f * k_Bands)));
 
+    /// <summary>
+    /// Works out, once, what <see cref="Ellipsoid"/> needs a Unity mesh for, so the fits can then run off the main
+    /// thread (as a headset fits a repository molecule's collider). Call on the main thread.
+    /// </summary>
+    public static void Prepare() => _ = PolyhedronVolumeFactor;
+
     // Volume of the unit polyhedron (before growth), as a fraction of the box 1 x 1 x 1 semi-axes: computed once.
     static float? s_PolyhedronVolumeFactor;
     static float PolyhedronVolumeFactor

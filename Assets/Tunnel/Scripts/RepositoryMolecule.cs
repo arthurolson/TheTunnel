@@ -145,7 +145,18 @@ public class RepositoryMolecule : NetworkBehaviour
                 throw new TunnelAssets.LoadException($"{title} has nothing to draw");
             string category = TunnelAssetCatalog.CategoryOf(asset);
             var geometry = MoleculeToyGeometry.Build(model.transform, filters, title, category, m_ChainMaterials, false,
-                angstromsPerUnit: AngstromsPerUnit(asset));
+                angstromsPerUnit: AngstromsPerUnit(asset), fitCollider: false);
+            // The collider fit takes seconds for a large molecule: off the main thread, so the headset keeps drawing.
+            ShowLabel($"Fitting {title}'s collider...");
+            var points = MoleculeToyGeometry.Points(geometry);
+            MoleculeColliderFit.Prepare();
+            await System.Threading.Tasks.Task.Run(() => MoleculeToyGeometry.FitCollider(geometry, points));
+            if (this == null || building != m_Building)
+            {
+                foreach (var m in geometry.meshes)
+                    Destroy(m);
+                return;
+            }
             var visual = m_Visual != null ? m_Visual : transform.GetChild(0);
             string report = MoleculeToyGeometry.Assemble(gameObject, visual, geometry, title, m_MetersPerUnit, m_Owned.Add);
             m_Owned.AddRange(geometry.meshes);
