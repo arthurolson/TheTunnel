@@ -125,8 +125,8 @@ public class MoleculeGravity : MonoBehaviour
     }
 
     /// <summary>
-    /// Freezes it where it is, or lets it move again, for everyone (the Freeze checkbox that appears beside a molecule
-    /// held or pointed at, see <see cref="MoleculeFreezeCheckbox"/>).
+    /// Freezes it where it is, or lets it move again, for everyone (the Freeze checkbox in the TS Menu's Molecules list,
+    /// for the molecule last held: see <see cref="lastSelected"/>).
     /// </summary>
     public void SetFrozen(bool frozen)
     {
@@ -136,11 +136,11 @@ public class MoleculeGravity : MonoBehaviour
         Debug.Log($"[Molecules] {name} {(frozen ? "frozen where it is" : "free to move again")}");
     }
 
-    /// <summary>A hand or ray on this headset is holding it or pointing at it: its Freeze checkbox shows.</summary>
-    public static event System.Action<MoleculeGravity> attention;
+    /// <summary>The molecule a hand or ray on this headset last took hold of (null once it is gone).</summary>
+    public static MoleculeGravity lastSelected { get; private set; }
 
-    /// <summary>Someone here is pointing at it (or holding it).</summary>
-    public bool isHovered => m_Grab != null && m_Grab.isHovered;
+    /// <summary>Raised when a hand or ray on this headset takes hold of a molecule.</summary>
+    public static event System.Action<MoleculeGravity> selected;
 
     // The container a frozen molecule was parked in, and where in it (its position and turn, not its scale): when the
     // container is moved, the molecule moves with it.
@@ -205,8 +205,11 @@ public class MoleculeGravity : MonoBehaviour
         if (TryGetComponent(out m_Grab))
         {
             m_Grab.selectEntered.AddListener(OnGrabbed);
-            m_Grab.hoverEntered.AddListener(_ => attention?.Invoke(this));
-            m_Grab.selectEntered.AddListener(_ => attention?.Invoke(this));
+            m_Grab.selectEntered.AddListener(_ =>
+            {
+                lastSelected = this;
+                selected?.Invoke(this);
+            });
             m_Grab.selectExited.AddListener(OnReleased);
         }
     }

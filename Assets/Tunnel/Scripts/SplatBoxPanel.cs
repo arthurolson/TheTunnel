@@ -12,7 +12,9 @@ using UnityEngine.UI;
 /// for everyone. A row says how large a download is the first time, and when a mesh has so many triangles the headset may
 /// slow down. Under the rows: how loading is going on this headset, and the credit an asset's license asks for.
 /// Its rows are made from the library and the repository's list, so an asset added to the repository appears here with
-/// no new build. Each headset has its own copy, facing its player. Made by Tunnel > Containers > Build Containers.
+/// no new build. Each headset has its own copy, facing its player. While the box is snapped into a tunnel wall, a
+/// small button beside the box hides the menu and brings it back (on this headset). Made by Tunnel > Containers > Build
+/// Containers.
 /// </summary>
 public class SplatBoxPanel : MonoBehaviour
 {
@@ -59,6 +61,10 @@ public class SplatBoxPanel : MonoBehaviour
     SplatBox m_Box;
     Button m_VideoButton;
     TMP_Text m_VideoLabel;
+    RectTransform m_ToggleCanvas;
+    TMP_Text m_ToggleLabel;
+    bool m_Hidden;
+    bool? m_ToggleShownFor;
     bool? m_VideoShownFor;
     readonly List<Row> m_Rows = new();
     TMP_Text m_Status;
@@ -75,6 +81,77 @@ public class SplatBoxPanel : MonoBehaviour
         TunnelAssetCatalog.changed -= Rebuild;
         TunnelAssetCatalog.changed += Rebuild;
         Rebuild();
+        MakeHideToggle();
+    }
+
+    /// <summary>Hides the menu (only the small button beside the box stays) or brings it back, on this headset.</summary>
+    public void SetHidden(bool hidden)
+    {
+        m_Hidden = hidden;
+        m_ToggleShownFor = null;
+        Debug.Log($"[Splat] {name}: menu {(hidden ? "hidden" : "shown")}");
+    }
+
+    /// <summary>
+    /// The small button that hides and shows the menu: a little canvas of the menu's own look (its background), with
+    /// one row, at the menu's top corner on the box's side.
+    /// </summary>
+    void MakeHideToggle()
+    {
+        if (m_ToggleCanvas != null || m_Canvas == null || m_RowTemplate == null)
+            return;
+        var toggle = Instantiate(m_Canvas.gameObject, transform, false);
+        toggle.name = "Hide Toggle";
+        m_ToggleCanvas = (RectTransform)toggle.transform;
+        for (int i = m_ToggleCanvas.childCount - 1; i >= 0; i--)
+        {
+            var child = m_ToggleCanvas.GetChild(i);
+            if (child.name != "Background")
+                Destroy(child.gameObject);
+        }
+        m_ToggleCanvas.sizeDelta = new Vector2(180f, 64f);
+        var button = Instantiate(m_RowTemplate, m_ToggleCanvas, false);
+        button.name = "Hide";
+        button.gameObject.SetActive(true);
+        var rect = (RectTransform)button.transform;
+        rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.anchoredPosition = Vector2.zero;
+        rect.sizeDelta = new Vector2(166f, 50f);
+        button.onClick.RemoveAllListeners();
+        button.onClick.AddListener(() => SetHidden(!m_Hidden));
+        m_ToggleLabel = button.GetComponentInChildren<TMP_Text>(true);
+        if (m_ToggleLabel != null)
+        {
+            m_ToggleLabel.alignment = TextAlignmentOptions.Center;
+            m_ToggleLabel.margin = Vector4.zero;
+        }
+        toggle.SetActive(false);
+    }
+
+    // Only while the box is snapped into a wall: the button beside it, and the menu as the button says.
+    void RefreshHideToggle()
+    {
+        if (m_ToggleCanvas == null || m_Box == null)
+            return;
+        bool inWall = m_Box.isSetInWall;
+        if (m_ToggleCanvas.gameObject.activeSelf != inWall)
+            m_ToggleCanvas.gameObject.SetActive(inWall);
+        bool showMenu = !inWall || !m_Hidden;
+        if (m_Canvas.gameObject.activeSelf != showMenu)
+            m_Canvas.gameObject.SetActive(showMenu);
+        if (!inWall)
+            return;
+        if (m_ToggleShownFor != m_Hidden && m_ToggleLabel != null)
+        {
+            m_ToggleShownFor = m_Hidden;
+            m_ToggleLabel.text = m_Hidden ? "Show menu" : "Hide menu"; // the menu's font has no arrows
+        }
+        // At the menu's top corner nearest the box (its left, as the menu is on the box's right).
+        float s = m_Canvas.localScale.x;
+        var main = m_Canvas.sizeDelta;
+        var small = m_ToggleCanvas.sizeDelta;
+        m_ToggleCanvas.localPosition = m_Canvas.localPosition + new Vector3(-(main.x + small.x) * 0.5f - 10f, (main.y - small.y) * 0.5f, 0f) * s;
+        m_ToggleCanvas.localRotation = m_Canvas.localRotation;
     }
 
     void OnDestroy() => TunnelAssetCatalog.changed -= Rebuild;
@@ -227,7 +304,11 @@ public class SplatBoxPanel : MonoBehaviour
         rect.sizeDelta = aspect >= 1f ? new Vector2(side, side / aspect) : new Vector2(side * aspect, side);
     }
 
-    void Update() => Refresh();
+    void Update()
+    {
+        Refresh();
+        RefreshHideToggle();
+    }
 
     // ■ for the portrait shown, □ for the others; under the rows, how loading is going and the credits.
     void Refresh()

@@ -138,9 +138,6 @@ public class TunnelMoleculeMenu : NetworkBehaviour
 
     void Awake()
     {
-        // Each molecule's Freeze checkbox (one on this headset, shown above the molecule held or pointed at).
-        if (m_Prefabs != null)
-            MoleculeFreezeCheckbox.EnsureFrom(m_Prefabs.freezeCheckbox);
         if (m_RowTemplate != null)
             m_RowTemplate.gameObject.SetActive(false);
         if (m_ListPanel != null)
@@ -234,6 +231,7 @@ public class TunnelMoleculeMenu : NetworkBehaviour
     public override void OnDestroy()
     {
         TunnelAssetCatalog.changed -= OnCatalogChanged;
+        MoleculeGravity.selected -= OnMoleculeSelected;
         base.OnDestroy();
         if (m_MagnificationSlider != null)
             m_MagnificationSlider.onValueChanged.RemoveAllListeners();
@@ -256,6 +254,8 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         if (show)
         {
             BuildList();
+            MoleculeGravity.selected -= OnMoleculeSelected;
+            MoleculeGravity.selected += OnMoleculeSelected;
             // Molecules just added to the asset repository: read its list again, and show them when it comes.
             TunnelAssetCatalog.changed += OnCatalogChanged;
             _ = TunnelAssetCatalog.Refresh();
@@ -310,10 +310,49 @@ public class TunnelMoleculeMenu : NetworkBehaviour
     }
 
     /// <summary>
-    /// Molecules placed from the list arrive frozen where they are put (see <see cref="MoleculeGravity.isFrozen"/>),
-    /// for scripts; in the headset each molecule has its own Freeze checkbox (<see cref="MoleculeFreezeCheckbox"/>).
+    /// The list's Freeze checkbox, at its top. Ticked, molecules placed from the list arrive frozen where they are put
+    /// (see <see cref="MoleculeGravity.isFrozen"/>). Ticking or unticking it also freezes or unfreezes the molecule last
+    /// held on this headset, whose name it shows. Each player's own; it stays as set for the session.
     /// </summary>
     public bool placeFrozen { get; set; }
+
+    Button m_FreezeRow;
+
+    /// <summary>Ticks or unticks the Freeze checkbox: new molecules, and the one last held, follow it.</summary>
+    public void SetFreeze(bool frozen)
+    {
+        placeFrozen = frozen;
+        var last = MoleculeGravity.lastSelected;
+        if (last != null && last.isFrozen != frozen)
+            last.SetFrozen(frozen);
+        Debug.Log($"[Molecules] Freeze {(frozen ? "ticked" : "unticked")}{(last != null ? $": {MoleculeName(last)} {(frozen ? "frozen" : "free again")}" : "")}");
+        ShowFreeze();
+    }
+
+    void ShowFreeze()
+    {
+        if (m_FreezeRow == null)
+            return;
+        var last = MoleculeGravity.lastSelected;
+        string applies = last != null ? $"new ones and {MoleculeName(last)}" : "new molecules";
+        m_FreezeRow.GetComponentInChildren<TMP_Text>(true).text =
+            $"{(placeFrozen ? "■" : "□")}  Freeze  <size=70%><color=#AAA>({applies})</color></size>";
+    }
+
+    void OnMoleculeSelected(MoleculeGravity molecule) => ShowFreeze();
+
+    /// <summary>A molecule's name as the list shows it.</summary>
+    public static string MoleculeName(MoleculeGravity molecule)
+    {
+        if (molecule == null)
+            return "";
+        if (molecule.TryGetComponent(out RepositoryMolecule repository))
+        {
+            string menuName = TunnelAssetCatalog.MenuName(TunnelAssetCatalog.Get(repository.assetId));
+            return string.IsNullOrEmpty(menuName) ? repository.assetId : menuName;
+        }
+        return molecule.name.Replace("(Clone)", "").Replace("_Networked", "").Replace("Toy_", "").Trim();
+    }
 
     void BuildList()
     {
@@ -325,6 +364,15 @@ public class TunnelMoleculeMenu : NetworkBehaviour
 
         var molecules = Entries();
         float y = 0f;
+
+        // The Freeze checkbox at the top: for molecules placed from now on, and the one last held.
+        m_FreezeRow = Instantiate(m_RowTemplate, m_ListContent);
+        m_FreezeRow.name = "Freeze";
+        m_FreezeRow.gameObject.SetActive(true);
+        ((RectTransform)m_FreezeRow.transform).anchoredPosition = new Vector2(0f, -y);
+        m_FreezeRow.onClick.AddListener(() => SetFreeze(!placeFrozen));
+        ShowFreeze();
+        y += m_RowSpacing;
 
         string category = null;
         for (int i = 0; i < molecules.Count; i++)

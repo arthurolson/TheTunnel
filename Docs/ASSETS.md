@@ -23,12 +23,14 @@ Until its model arrives, the toy shows the download's progress, and a sphere of 
 - **Colliders.** A toy's collider is fitted once: ahead of time in the repository (a `collider` in its sidecar, fitted
   in the Unity Editor), or on each headset the first time, in the background, and kept there. A flat molecule, such as
   the Membrane, gets a grid of boxes that follows its surface instead of one box, so things can come close to it.
-- **Freezing.** Holding a molecule, or pointing at it, shows a Freeze checkbox just above it, for a few seconds after
-  too.
-  - Ticked, the molecule stays where it is put: you can still grab and move it, and it parks wherever you let go.
-  - Inside a container, it keeps its place in the container when that is moved.
-  - Unticked, it moves with the physics again.
+- **Freezing.** The Molecules list has a Freeze checkbox at its top, next to the name of the molecule last held.
+  - Molecules placed while it is ticked arrive frozen where they are put. You can still grab and move them, and they
+    park wherever you let go.
+  - Ticking or unticking it also freezes or unfreezes the molecule last held.
+  - Inside a container, a frozen molecule keeps its place in the container when that is moved.
   - This works for built-in molecules too, and everyone in a session sees it.
+- **Splat-box menu.** While a splat-box is snapped into a tunnel wall, a small button beside it hides its menu and
+  brings it back (on your headset only).
 - **The spawn gun** takes repository molecules too. Its copies share one set of geometry on each headset.
 
 ## Adding a molecule, end to end

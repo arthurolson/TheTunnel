@@ -105,6 +105,9 @@ public class SplatBox : NetworkBehaviour
     /// <summary>Its model has arrived on this headset (not the placeholder).</summary>
     public bool isShown => m_HasModel;
 
+    /// <summary>Snapped into a tunnel wall (a mixed reality box): its menu can then be hidden (see <see cref="SplatBoxPanel"/>).</summary>
+    public bool isSetInWall => m_Container != null && m_Container.isSetInWall;
+
     /// <summary>It shows a video (loaded and ready to play).</summary>
     public bool hasVideo => m_Video != null;
 
