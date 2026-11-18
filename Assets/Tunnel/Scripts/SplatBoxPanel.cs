@@ -6,10 +6,10 @@ using UnityEngine.UI;
 
 /// <summary>
 /// The small menu beside a splat-box (see <see cref="SplatBox"/>): "Splats", then one row per portrait, each with its
-/// picture: those built into the app (see <see cref="SplatLibrary"/>), then everything in the Tunnel's asset repository
-/// the app can show (see <see cref="TunnelAssetCatalog"/>): meshes, images, videos, molecules and viruses, the one shown
-/// checked. While the box shows a video, a button under the rows pauses and plays it for everyone. Pressing a row shows that portrait in the box, for
-/// everyone. A row says how large a download is the first time, and when a mesh has so many triangles the headset may
+/// picture: those built into the app (see <see cref="SplatLibrary"/>), then the 3D portraits (meshes) in the Tunnel's
+/// asset repository (see <see cref="TunnelAssetCatalog"/>), the one shown checked. The repository's molecules are in the
+/// TS Menu's Molecules list, and its images and videos in the Viewer's. Pressing a row shows that portrait in the box,
+/// for everyone. A row says how large a download is the first time, and when a mesh has so many triangles the headset may
 /// slow down. Under the rows: how loading is going on this headset, and the credit an asset's license asks for.
 /// Its rows are made from the library and the repository's list, so an asset added to the repository appears here with
 /// no new build. Each headset has its own copy, facing its player. Made by Tunnel > Containers > Build Containers.
@@ -88,13 +88,14 @@ public class SplatBoxPanel : MonoBehaviour
                 Destroy(row.button.gameObject);
         m_Rows.Clear();
 
-        // Built in first, then everything in the repository the app can show, not already built in.
+        // Built in first, then the repository's portraits (its meshes) not already built in. Molecules are in the TS Menu's
+        // Molecules list, images and videos in the Viewer's.
         var library = m_Box.library;
         if (library != null)
             foreach (var splat in library.splats)
                 if (splat != null && splat.prefab != null)
                     m_Rows.Add(new Row { assetId = string.IsNullOrEmpty(splat.assetId) ? splat.name : splat.assetId, name = splat.name, asset = TunnelAssetCatalog.Get(splat.assetId) });
-        foreach (var asset in TunnelAssetCatalog.MenuAssets())
+        foreach (var asset in TunnelAssetCatalog.MenuAssets().Where(a => a.kind == "mesh"))
             if (m_Rows.All(r => r.assetId != asset.id))
                 m_Rows.Add(new Row { assetId = asset.id, name = string.IsNullOrEmpty(asset.title) ? asset.id : asset.title, asset = asset });
 
@@ -167,7 +168,7 @@ public class SplatBoxPanel : MonoBehaviour
         if (m_Canvas != null)
             m_Canvas.sizeDelta = new Vector2(m_Canvas.sizeDelta.x, m_Top + m_RowHeight * (Mathf.Max(m_Rows.Count, 1) + 1) + m_StatusHeight + m_Bottom);
         if (m_Title != null)
-            m_Title.text = m_Rows.Count <= 1 ? "Splats  <color=#AAA>(is the headset online?)</color>" : "Splats and assets";
+            m_Title.text = m_Rows.Count <= 1 ? "Splats  <color=#AAA>(is the headset online?)</color>" : "Splats";
         m_ShownFor = null;
         m_StatusFor = null;
         Refresh();

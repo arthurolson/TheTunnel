@@ -26,6 +26,9 @@ public enum ViewerMediaKind : byte
 ///    other folders such as Pictures or Download are not listed), newest first; spatial ones (by their
 ///    name or what the file says, see <see cref="ViewerMediaProbe"/>) go into the Spatial lists. Reading them needs the
 ///    headset's photos-and-videos permission, asked for the first time a list is opened.
+///  - The asset repository (see <see cref="TunnelAssetCatalog"/>): its images and videos, as links to their URLs, so
+///    media pushed there is in every headset's lists with no rebuild and plays the same for everyone. 360 ones aren't
+///    listed (the Viewer shows flat and stereo pictures).
 /// A folder can hold the media itself or a link to it: a .url, .webloc or .txt file whose text contains an http(s)
 /// address. Either way the entry's name is the file name without its extension.
 /// Spatial media is stereo: side by side (left eye on the left) unless the name says otherwise; see <see cref="StereoLayoutFor"/>.
@@ -59,11 +62,14 @@ public static class ViewerLibrary
         /// <summary>The file behind an entry on this headset (its own folder or the Quest's); null for built-in media.</summary>
         [NonSerialized]
         public string file;
+        /// <summary>From the asset repository: a link to its URL, neither built in nor on the headset.</summary>
+        [NonSerialized]
+        public bool fromRepository;
 
         public bool isDeviceMedia => !string.IsNullOrEmpty(fullPath);
         public bool canDelete => !string.IsNullOrEmpty(file);
         /// <summary>Built into the app: deleting it marks it to come out of the app at the next build.</summary>
-        public bool inApp => !onHeadset && !isDeviceMedia;
+        public bool inApp => !onHeadset && !isDeviceMedia && !fromRepository;
         /// <summary>Tells marked entries apart: the file, or the kind and name for media built into the app.</summary>
         public string deleteKey => file ?? $"app\t{(int)kind}\t{name}";
     }
@@ -127,6 +133,17 @@ public static class ViewerLibrary
                 s_All.Add(entry);
         }
 
+        // The asset repository's images and videos (its list is read at startup; a moment's wait for it, no more).
+        var reading = TunnelAssetCatalog.Ready();
+        float until = Time.realtimeSinceStartup + 5f;
+        while (!reading.IsCompleted && Time.realtimeSinceStartup < until)
+            yield return null;
+        foreach (var entry in RepositoryEntries())
+        {
+            if (!s_All.Any(e => e.kind == entry.kind && string.Equals(e.name, entry.name, StringComparison.OrdinalIgnoreCase)))
+                s_All.Add(entry);
+        }
+
         s_All.AddRange(ScanDeviceMedia());
 
         // By kind; the app's own media by name as listed (captures by date), then the Quest's photos and videos, newest
@@ -139,6 +156,28 @@ public static class ViewerLibrary
                 return a.isDeviceMedia ? 1 : -1;
             return a.isDeviceMedia ? b.modified.CompareTo(a.modified) : string.Compare(LabelFor(a.name), LabelFor(b.name), StringComparison.OrdinalIgnoreCase);
         });
+    }
+
+    /// <summary>
+    /// The asset repository's images and videos as links: stereo ones (tagged stereo-tb or stereo-sbs, or with a stereo
+    /// field) in the Spatial lists, 360 ones left out.
+    /// </summary>
+    static IEnumerable<Entry> RepositoryEntries()
+    {
+        foreach (var asset in TunnelAssetCatalog.all)
+        {
+            if ((asset.kind != "image" && asset.kind != "video") || !asset.isLoadable || asset.isSurround)
+                continue;
+            bool stereo = (!string.IsNullOrEmpty(asset.stereo) && asset.stereo != "mono") || asset.HasTag("stereo-tb") || asset.HasTag("stereo-sbs");
+            var kind = asset.kind == "video"
+                ? stereo ? ViewerMediaKind.SpatialVideo : ViewerMediaKind.Video
+                : stereo ? ViewerMediaKind.SpatialImage : ViewerMediaKind.Image;
+            // A top-and-bottom stereo picture says so in its name, as the Viewer reads it.
+            string name = TunnelAssetCatalog.MenuName(asset);
+            if (stereo && (asset.stereo == "top-bottom" || asset.HasTag("stereo-tb")) && StereoLayoutFor(name, 0, 0) == StereoLayout.Mono)
+                name += " (tb)";
+            yield return new Entry { name = name, kind = kind, location = asset.url, isLink = true, fromRepository = true };
+        }
     }
 
     static IEnumerator LoadBuiltIn(List<Entry> into)

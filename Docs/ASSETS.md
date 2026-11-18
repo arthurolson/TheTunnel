@@ -1,31 +1,53 @@
 # Assets from the asset repository
 
-The Tunnel shows assets from a GitHub repository at runtime, with no new build. The repository is
-[arthurolson/TheTunnelAsset](https://github.com/arthurolson/TheTunnelAsset), a fork of autinlab/TheTunnelAsset. It
-holds meshes, images, videos, molecules and viruses. A splat-box shows any of them, and everyone in a session sees the
-same asset.
+The Tunnel reads a GitHub repository at runtime, so new molecules and media need no new build. The repository is
+[arthurolson/TheTunnelAsset](https://github.com/arthurolson/TheTunnelAsset), a fork of autinlab/TheTunnelAsset.
 
-## Adding an asset, end to end
+| What's in the repository | Where it appears in the headset |
+|---|---|
+| molecules and viruses (`molecule/<category>/`, `virus/capsids/`) | the TS Menu's Molecules list, under their category, next to the built-in ones |
+| images and videos (`image/`, `video/`) | the Viewer's Images, Videos and Spatial lists |
+| 3D portraits (`mesh/`) | a splat-box's menu |
 
-1. **Drop in the file.** In a clone of TheTunnelAsset, put the file in its kind's folder: `mesh/`, `image/`, `video/`,
-   `molecule/<category>/` or `virus/capsids/`. Put a thumbnail in `thumbs/`. For a glb, the thumbnail can be drawn:
-   `python3 tools/glb_thumbnail.py <file>.glb thumbs/<name>.jpg`.
-2. **Write its sidecar** next to it, as `<file>.meta.json`:
-   ```json
-   {"id": "my_asset", "title": "What the menu shows", "subject": "molecules", "tags": ["protein"], "thumbnail": "thumbs/my_asset.jpg"}
+A molecule from the repository becomes a toy just like a built-in one. Every headset downloads the model, or takes its
+own copy, and makes the toy itself with the Editor's code (`MoleculeToyGeometry`):
+- the same ångström-to-meter scale;
+- the same colours by category: 2PLV's chain colours for surfaces, the model's own for assemblies, element colours for
+  atoms and bonds;
+- surfaces simplified on a 2 Å grid and kept under 200k vertices;
+- the tightest collider, a box or an ellipsoid;
+- the same grab, scale and gravity.
+
+Until its model arrives, the toy shows the download's progress, and a sphere of the model's size holds its place.
+
+## Adding a molecule, end to end
+
+You can ask Claude in one line, for example "load the attached molecule in the proteins folder and call it HIV
+protease". By hand, in a clone of TheTunnelAsset:
+
+1. **Drop in the model.** Put a Mol* glTF export (`.glb`, in ångströms) in `molecule/<category>/`, for example
+   `molecule/proteins/hiv_protease.glb`. The category is the TS Menu heading it goes under: proteins, ligands,
+   chemicals, assemblies, nucleic acids. Viruses go in `virus/capsids/`.
+2. **Make its thumbnail:**
+   ```bash
+   python3 tools/glb_thumbnail.py molecule/proteins/hiv_protease.glb thumbs/hiv_protease.jpg
    ```
-3. **Run the script and push:**
+3. **Write its sidecar**, `molecule/proteins/hiv_protease.glb.meta.json`:
+   ```json
+   {"id": "hiv_protease", "name": "HIV protease", "category": "proteins", "subject": "molecules",
+    "title": "HIV-1 protease", "tags": ["protein", "enzyme"], "thumbnail": "thumbs/hiv_protease.jpg"}
+   ```
+   `name` is what the Molecules list shows.
+4. **Run the script and push:**
    ```bash
    python3 tools/build_manifest.py
-   git add -A && git commit -m "Add my asset" && git push
+   git add -A && git commit -m "Add HIV protease" && git push
    ```
-   The script writes `assets.json` and stops on any problem: a file over 95 MB, a duplicate id, a missing thumbnail,
-   a checksum mismatch, or a video that won't stream. The repository's GitHub Action also regenerates `assets.json` on
-   every push.
-4. **It appears in the headset.** The next time The Tunnel starts, the asset is a row in every splat-box's menu.
-   raw.githubusercontent.com can take up to 5 minutes to show a new `assets.json`.
+5. **In the headset:** open the Molecules list again (close it and open it). It re-reads the repository each time it
+   opens, and HIV protease is there under Proteins.
 
-The repository's README covers each kind, files too large for GitHub, and the schema.
+For an image or video the steps are the same, in `image/` or `video/`. It appears in the Viewer's lists the next time
+they're opened. The repository's README covers each kind, files over 95 MB, and the schema.
 
 ## In the app
 
@@ -35,25 +57,16 @@ The repository's README covers each kind, files too large for GitHub, and the sc
   ```bash
   adb shell "echo https://raw.githubusercontent.com/someone/TheTunnelAsset/dev/assets.json > /sdcard/Android/data/edu.scripps.tunnel/files/TunnelAssets/catalog-url.txt"
   ```
-  Or call `TunnelAssetCatalog.UseSource(url, remember: true)`. To go back to the default, delete the file.
-- **In a session**, each splat-box carries the host's list URL, so every headset reads the same list.
-- **How each kind is shown** (`TunnelAssets.Load(assetId)` returns a GameObject):
-
-  | kind | shown as |
-  |---|---|
-  | mesh, molecule or virus `.glb` | the model (glTFast, as for David Goodsell); molecules and viruses are shaded from their normals |
-  | image | a quad of its proportions; a 360 panorama (tag `equirect`) on an 8 m sphere around the box, its centre straight ahead |
-  | video | the same, with spatial sound. It plays from the headset's copy up to 20 MB, otherwise it streams. It loops, and play, pause and position are shared |
-  | `.pdb` / `.cif` | its ready-made `surface` glb |
-  | virus instance list | its protein glbs, put together at their positions and rotations |
-  | splat, `.usdz` | not shown (there's no splat renderer in the project) |
-- **Caching:** every downloaded file is kept on the headset by its sha256 (`files/TunnelAssets/`), so it downloads
-  once.
-- **From other scripts:**
-  ```csharp
-  TunnelAssets.SpawnInFront("zika_capsid_5ire");              // a shared splat-box, 1 m in front of the caller
-  TunnelAssets.Spawn("equirect_test_360", position, rotation);
-  GameObject model = await TunnelAssets.Load("egfr", parent);  // this headset only; destroy it to free memory
-  splatBox.SetVideoPaused(true);                               // pauses its video for everyone
-  ```
-- **David Goodsell** (`goodsell_portrait_mesh`) still comes from the app itself, with no download.
+  To go back to the default, delete the file.
+- **In a session** every repository toy carries the host's list URL, so all headsets make it from the same list.
+- **The pieces:**
+  - `RepositoryMolecule` is the toy, one network prefab for every repository molecule.
+  - Tunnel > Molecules > Build Repository Toy makes that prefab.
+  - `TunnelMoleculeMenu.ChooseFromRepository(assetId)` places one; other scripts can call it.
+  - `TunnelAssets.Load(assetId)` loads any asset on one headset.
+  - Downloads are cached by sha256 in `files/TunnelAssets/`.
+- **What isn't covered yet:**
+  - A repository molecule can't be saved in a movie's starting state.
+  - Binding sites and ligand pockets are made by their own builders for built-in molecules only.
+  - The Viewer doesn't show 360 images and videos, so they aren't listed.
+- **David Goodsell** (`goodsell_portrait_mesh`) still comes from the app itself.

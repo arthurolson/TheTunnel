@@ -1,5 +1,7 @@
 using System.Collections.Generic;
+using System.Linq;
 using TMPro;
+using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.UI;
@@ -228,6 +230,7 @@ public class TunnelMoleculeMenu : NetworkBehaviour
 
     public override void OnDestroy()
     {
+        TunnelAssetCatalog.changed -= OnCatalogChanged;
         base.OnDestroy();
         if (m_MagnificationSlider != null)
             m_MagnificationSlider.onValueChanged.RemoveAllListeners();
@@ -246,8 +249,61 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         if (m_ListPanel == null)
             return;
         m_ListPanel.SetActive(show);
+        TunnelAssetCatalog.changed -= OnCatalogChanged;
         if (show)
+        {
             BuildList();
+            // Molecules just added to the asset repository: read its list again, and show them when it comes.
+            TunnelAssetCatalog.changed += OnCatalogChanged;
+            _ = TunnelAssetCatalog.Refresh();
+        }
+    }
+
+    void OnCatalogChanged()
+    {
+        if (this != null && m_ListPanel != null && m_ListPanel.activeSelf)
+            BuildList();
+    }
+
+    /// <summary>
+    /// A row of the Molecules list: a molecule built into the app (its place in the registry), or one from the asset
+    /// repository (its asset id), which becomes a <see cref="RepositoryMolecule"/> toy.
+    /// </summary>
+    struct Entry
+    {
+        public string name;
+        public string category;
+        public int builtIn;     // -1 for one from the repository
+        public string assetId;
+    }
+
+    /// <summary>
+    /// The built-in molecules, then those in the asset repository under the same headings (a repository molecule with
+    /// a built-in one's name is that one, so it isn't listed twice), each category's in its order.
+    /// </summary>
+    List<Entry> Entries()
+    {
+        var entries = new List<Entry>();
+        var builtIn = m_Prefabs != null ? m_Prefabs.molecules : new List<TunnelPrefabRegistry.Molecule>();
+        for (int i = 0; i < builtIn.Count; i++)
+            entries.Add(new Entry { name = builtIn[i].name, category = builtIn[i].category ?? "", builtIn = i });
+        if (m_Prefabs != null && m_Prefabs.repositoryMolecule != null)
+        {
+            var names = new HashSet<string>(builtIn.Select(m => m.name), System.StringComparer.OrdinalIgnoreCase);
+            foreach (var asset in TunnelAssetCatalog.Molecules())
+            {
+                string name = TunnelAssetCatalog.MenuName(asset);
+                if (names.Add(name))
+                    entries.Add(new Entry { name = name, category = TunnelAssetCatalog.CategoryOf(asset), builtIn = -1, assetId = asset.id });
+            }
+        }
+        // Stable: within a category, built-in ones first, as the library listed them.
+        return entries.Select((e, i) => (e, i))
+            .OrderBy(x => TunnelPrefabRegistry.CategoryOrder(x.e.category))
+            .ThenBy(x => TunnelPrefabRegistry.CategoryOrder(x.e.category) == TunnelPrefabRegistry.categories.Length ? x.e.category : "")
+            .ThenBy(x => x.i)
+            .Select(x => x.e)
+            .ToList();
     }
 
     void BuildList()
@@ -258,12 +314,12 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         for (int i = m_ListContent.childCount - 1; i >= 0; i--)
             Destroy(m_ListContent.GetChild(i).gameObject);
 
-        var molecules = m_Prefabs != null ? m_Prefabs.molecules : new List<TunnelPrefabRegistry.Molecule>();
+        var molecules = Entries();
         float y = 0f;
         string category = null;
         for (int i = 0; i < molecules.Count; i++)
         {
-            // A heading where a new category starts (the library keeps each category's molecules together).
+            // A heading where a new category starts (the list keeps each category's molecules together).
             string next = molecules[i].category ?? "";
             if (next != category)
             {
@@ -271,19 +327,22 @@ public class TunnelMoleculeMenu : NetworkBehaviour
                 AddHeading(TunnelPrefabRegistry.CategoryHeading(category), ref y);
             }
 
-            int index = i;
+            var entry = molecules[i];
             var row = Instantiate(m_RowTemplate, m_ListContent);
-            row.name = $"Row {molecules[i].name}";
+            row.name = $"Row {entry.name}";
             row.gameObject.SetActive(true);
             ((RectTransform)row.transform).anchoredPosition = new Vector2(0f, -y);
-            row.GetComponentInChildren<TMP_Text>(true).text = molecules[i].name;
-            row.onClick.AddListener(() => Choose(index));
+            row.GetComponentInChildren<TMP_Text>(true).text = entry.name;
+            if (entry.builtIn >= 0)
+                row.onClick.AddListener(() => Choose(entry.builtIn));
+            else
+                row.onClick.AddListener(() => ChooseFromRepository(entry.assetId, entry.name));
             y += m_RowSpacing;
         }
 
         m_ListContent.sizeDelta = new Vector2(m_ListContent.sizeDelta.x, Mathf.Max(m_RowSpacing, y));
         SetStatus(molecules.Count == 0
-            ? "No molecules yet. Add a folder with a model to a category folder in Assets/Molecules and rebuild the app."
+            ? "No molecules yet. Add one to the asset repository (or a folder with a model to Assets/Molecules and rebuild)."
             : "Set the magnification, then tap a molecule to place it beside this list.");
     }
 
@@ -325,6 +384,72 @@ public class TunnelMoleculeMenu : NetworkBehaviour
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     void SpawnMoleculeRpc(int index, int mag) => SpawnMolecule(index, mag);
+
+    /// <summary>
+    /// Places a molecule from the asset repository, as a built-in one is placed: a <see cref="RepositoryMolecule"/>
+    /// toy at the magnification, beside this list, which every headset then makes from the molecule's model.
+    /// Other scripts can call it with any molecule's asset id.
+    /// </summary>
+    public void ChooseFromRepository(string assetId, string displayName = null)
+    {
+        if (string.IsNullOrEmpty(assetId) || assetId.Length > 120)
+            return;
+        int mag = magnification;
+        displayName ??= TunnelAssetCatalog.MenuName(TunnelAssetCatalog.Get(assetId));
+        ShareStatus($"Placing {displayName} at ×{mag}...");
+        Debug.Log($"[Molecules] chose {displayName} ({assetId}, from the asset repository) at ×{mag}: " +
+            (IsSpawned ? (IsServer ? "placing it for everyone" : "asking the host to place it") : "not connected, placing it here only"));
+        if (IsSpawned)
+            SpawnRepositoryRpc(new FixedString128Bytes(assetId), mag);
+        else
+            SpawnRepository(assetId, mag);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void SpawnRepositoryRpc(FixedString128Bytes assetId, int mag) => SpawnRepository(assetId.ToString(), mag);
+
+    void SpawnRepository(string assetId, int mag)
+    {
+        mag = Mathf.Clamp(mag, k_MinMagnification, k_MaxMagnification);
+        var prefab = m_Prefabs != null ? m_Prefabs.repositoryMolecule : null;
+        if (prefab == null || m_Geometry == null)
+        {
+            Debug.LogWarning("[Molecules] no repository toy to place (run Tunnel > Molecules > Build Repository Toy)");
+            return;
+        }
+        var asset = TunnelAssetCatalog.Get(assetId);
+        string name = asset != null ? TunnelAssetCatalog.MenuName(asset) : assetId;
+
+        // Placed, sized and given its molecule before it wakes up, as the built-in ones are.
+        var holder = new GameObject("Molecule Holder");
+        holder.SetActive(false);
+        var molecule = Instantiate(prefab, holder.transform);
+        molecule.transform.localScale = prefab.transform.localScale * mag;
+        molecule.transform.rotation = m_Geometry.transform.rotation;
+        var repository = molecule.GetComponent<RepositoryMolecule>();
+        repository.Preset(assetId);
+        // Its size from the asset list, so it is placed clear of the list and other molecules before its model comes.
+        var extent = RepositoryMolecule.ExtentInAngstroms(asset);
+        if (extent != Vector3.zero)
+        {
+            var collider = MoleculeToyGeometry.ColliderHolder(molecule);
+            if (collider.TryGetComponent(out SphereCollider sphere))
+            {
+                sphere.radius = 0.5f * extent.magnitude * MoleculeToyGeometry.k_UnitsPerAngstrom;
+                sphere.center = Vector3.zero;
+                collider.transform.localPosition = Vector3.zero;
+            }
+        }
+        molecule.transform.position = PlaceOnWall(molecule);
+        molecule.transform.SetParent(null, true);
+        Destroy(holder);
+        Debug.Log($"[Molecules] placed {name} ({assetId}) from the asset repository at ×{mag}, radius {WorldRadius(molecule):F3} m");
+
+        var networkObject = molecule.GetComponent<NetworkObject>();
+        if (IsSpawned && networkObject != null)
+            networkObject.Spawn(true);
+        ShareStatus($"{name} placed beside this list at ×{mag}; each headset is making it from the asset repository.");
+    }
 
     void SpawnMolecule(int index, int mag)
     {

@@ -55,6 +55,10 @@ public class TunnelPrefabRegistry : ScriptableObject
     public GameObject marker;
     public GameObject paintCopy;
 
+    [Tooltip("The toy a molecule from the asset repository becomes (made by Tunnel > Molecules > Build Repository Toy): " +
+        "one network prefab for them all, each made from its model in the headset.")]
+    public GameObject repositoryMolecule;
+
     [Tooltip("Filled in by Tunnel > Molecules > Update Molecule Library from the folders in Assets/Molecules, " +
         "grouped by category in the order of TunnelPrefabRegistry.categories.")]
     public List<Molecule> molecules = new();

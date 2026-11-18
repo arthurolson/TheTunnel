@@ -34,6 +34,8 @@ public static class TunnelAssetCatalog
     public class Asset
     {
         public string id;
+        public string name;      // what a menu calls it, if not its title (molecules: "HIV protease")
+        public string category;  // a molecule's TS Menu category: "proteins", "viral capsids", "assemblies"...
         public string kind;      // "mesh", "splat", "image", "video", "molecule", "virus"
         public string subject;
         public string title;
@@ -60,6 +62,7 @@ public static class TunnelAssetCatalog
         public string surface;    // a molecule's ready-made glb (an asset id)
         public int instances;     // a virus instance list
         public string[] proteins;
+        public float[] extent;    // the model's size along x, y, z in its own units (Å for molecules)
         public Coordinates coordinates;
         public License license;
 
@@ -241,7 +244,8 @@ public static class TunnelAssetCatalog
     static async Task<bool> Read(string url)
     {
         string json = null;
-        using (var request = UnityWebRequest.Get(url))
+        string fresh = url.StartsWith("http") ? url + (url.Contains("?") ? "&" : "?") + "t=" + DateTimeOffset.UtcNow.ToUnixTimeSeconds() : url;
+        using (var request = UnityWebRequest.Get(fresh))
         {
             request.timeout = 20;
             var operation = request.SendWebRequest();
@@ -295,6 +299,26 @@ public static class TunnelAssetCatalog
         ready = true;
         changed?.Invoke();
         return true;
+    }
+
+    /// <summary>What a menu calls an asset: its name if it has one, else its title, else its id.</summary>
+    public static string MenuName(Asset asset) => asset == null ? "" : !string.IsNullOrEmpty(asset.name) ? asset.name
+        : !string.IsNullOrEmpty(asset.title) ? asset.title : asset.id;
+
+    /// <summary>A molecule's TS Menu category: its own, or "viral capsids" for a virus, else "".</summary>
+    public static string CategoryOf(Asset asset) => asset == null ? "" : !string.IsNullOrEmpty(asset.category) ? asset.category
+        : asset.kind == "virus" ? "viral capsids" : "";
+
+    /// <summary>
+    /// The molecules (and viruses) a molecule toy can be made from, for the TS Menu's Molecules list: glTF models, and
+    /// atomic models with a ready-made surface (whose surface is then not listed again). Instance lists are left out.
+    /// </summary>
+    public static IEnumerable<Asset> Molecules()
+    {
+        var surfaces = new HashSet<string>(s_Assets.Where(a => a.isLoadable && !string.IsNullOrEmpty(a.surface)).Select(a => a.surface));
+        return s_Assets.Where(a => (a.kind == "molecule" || a.kind == "virus") && a.isLoadable && a.format != "instance-list-json"
+            && !surfaces.Contains(a.id)
+            && (!Application.isMobilePlatform || a.id.EndsWith(k_QuestSuffix) || Get(a.id + k_QuestSuffix) == null));
     }
 
     /// <summary>The asset with this id, or null.</summary>

@@ -9,7 +9,7 @@ using UnityEngine;
 /// a 12 x 8 polyhedron pushed out just enough that its faces clear the true ellipsoid, and its volume is compared as
 /// that polyhedron's, so the choice is between the colliders as they really are.
 /// </summary>
-static class MoleculeColliderFit
+public static class MoleculeColliderFit
 {
     public enum Kind { Box, Ellipsoid }
 

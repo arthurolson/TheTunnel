@@ -195,10 +195,22 @@ static class MoleculeLibraryEditorTests
                 .ToList();
             string shown = string.Join(" | ", lines.Select(l => l.heading ? $"[{l.text}]" : l.text));
             report.AppendLine($"       the list reads: {shown}");
-            Check(shown == "[Viral capsids] | 2PLV | SARS | TBSV | Zika | [Assemblies] | E. coli 50S ribosome | Hi-res Ribosome | [Proteins] | EGFR | IGG | [Ligands] | EGFR ligand",
-                "the Molecules list shows each molecule under its heading, in category order, with no empty headings");
-            Check(lines.Where(l => !l.heading).Select(l => l.text).SequenceEqual(registry.molecules.Select(m => m.name)),
-                "every molecule has a row, with the name people already know");
+            // Molecules from the asset repository (when its list has been read) come after the built-in ones of their
+            // category; the built-in ones read as always.
+            var repository = new HashSet<string>(TunnelAssetCatalog.Molecules().Select(TunnelAssetCatalog.MenuName));
+            var builtInNames = new HashSet<string>(registry.molecules.Select(m => m.name));
+            string builtInShown = string.Join(" | ", lines.Where(l => l.heading || builtInNames.Contains(l.text) || !repository.Contains(l.text))
+                .Select(l => l.heading ? $"[{l.text}]" : l.text));
+            Check(builtInShown ==
+                "[Viral capsids] | 2PLV | SARS | TBSV | Zika | [Assemblies] | E. coli 50S ribosome | Hi-res Ribosome | [Proteins] | EGFR | IGG | [Ligands] | EGFR ligand",
+                "the Molecules list shows each built-in molecule under its heading, in category order");
+            Check(lines.Where(l => !l.heading && builtInNames.Contains(l.text)).Select(l => l.text).SequenceEqual(registry.molecules.Select(m => m.name)),
+                "every built-in molecule has a row, with the name people already know");
+            Check(lines.Where(l => !l.heading).GroupBy(l => l.text).All(g => g.Count() == 1),
+                "no molecule is listed twice (a repository copy of a built-in one isn't listed again)");
+            for (int i = 0; i + 1 < lines.Count; i++)
+                if (lines[i].heading && lines[i + 1].heading)
+                    Check(false, $"no empty heading ({lines[i].text})");
         }
         finally
         {
