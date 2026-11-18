@@ -5,6 +5,7 @@ using TMPro;
 using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
 
 /// <summary>
 /// A molecule toy whose molecule comes from the asset repository (see <see cref="TunnelAssetCatalog"/>), so a molecule
@@ -152,6 +153,11 @@ public class RepositoryMolecule : NetworkBehaviour
             if (TryGetComponent(out MoleculeGravity gravity))
                 gravity.volume = (float)MoleculeToyGeometry.EnclosedVolume(gameObject);
             HideLabel();
+            // The placeholder sphere goes at the end of this frame; then hands and rays take hold of the new collider.
+            await Awaitable.NextFrameAsync();
+            if (this == null || building != m_Building)
+                return;
+            UseNewCollider();
             isBuilt = true;
             status = "";
             Debug.Log($"[Molecules] made {title} ({id}, {category}) from the asset repository: {geometry.detail}{geometry.meshes.Count} part(s), " +
@@ -174,6 +180,33 @@ public class RepositoryMolecule : NetworkBehaviour
             if (model != null)
                 Destroy(model); // its toy has its own meshes now; the model's are freed
         }
+    }
+
+    /// <summary>
+    /// Tells the parts that found the toy's collider when it appeared (the placeholder sphere) about the fitted one:
+    /// the grab interactable (hands and rays find a toy by the colliders it registered), the network physics (which
+    /// turns its collider off and on when the toy changes hands) and the gravity (bounce, walls).
+    /// </summary>
+    void UseNewCollider()
+    {
+        var colliders = GetComponentsInChildren<Collider>(true).Where(c => !c.isTrigger).ToList();
+        foreach (var interactable in GetComponents<XRBaseInteractable>())
+        {
+            bool wasEnabled = interactable.enabled;
+            interactable.enabled = false; // unregisters its old colliders
+            interactable.colliders.Clear();
+            interactable.colliders.AddRange(colliders);
+            interactable.enabled = wasEnabled; // registers the new ones
+        }
+        foreach (var behaviour in GetComponents<MonoBehaviour>())
+        {
+            var field = behaviour.GetType().GetField("m_Collider", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            if (field != null && field.FieldType == typeof(Collider) && behaviour is not MoleculeGrabSize)
+                field.SetValue(behaviour, colliders.FirstOrDefault());
+        }
+        if (TryGetComponent(out MoleculeGravity gravity))
+            gravity.CollidersChanged();
+        Debug.Log($"[Molecules] {name}: hands and rays now take hold of its {string.Join(", ", colliders.Select(c => c.GetType().Name))}");
     }
 
     /// <summary>
