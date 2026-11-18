@@ -80,13 +80,14 @@ public class MoleculeGrabSize : MonoBehaviour
             m_Collider.localScale = stretch;
     }
 
-#if UNITY_EDITOR
-    /// <summary>Set by Tunnel > Molecules > Update Molecule Library.</summary>
+    /// <summary>
+    /// Set when a toy is made: by Tunnel > Molecules > Update Molecule Library, or in the headset for a molecule from
+    /// the asset repository (see <see cref="MoleculeToyGeometry"/>).
+    /// </summary>
     public void Configure(Transform collider, Vector3 fittedSize, float minimumSize)
     {
         m_Collider = collider;
         m_FittedSize = fittedSize;
         m_MinimumSize = minimumSize;
     }
-#endif
 }
