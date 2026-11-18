@@ -138,6 +138,9 @@ public class TunnelMoleculeMenu : NetworkBehaviour
 
     void Awake()
     {
+        // Each molecule's Freeze checkbox (one on this headset, shown above the molecule held or pointed at).
+        if (m_Prefabs != null)
+            MoleculeFreezeCheckbox.EnsureFrom(m_Prefabs.freezeCheckbox);
         if (m_RowTemplate != null)
             m_RowTemplate.gameObject.SetActive(false);
         if (m_ListPanel != null)
@@ -307,8 +310,8 @@ public class TunnelMoleculeMenu : NetworkBehaviour
     }
 
     /// <summary>
-    /// "Place frozen", ticked: molecules placed from the list arrive frozen where they are put (see
-    /// <see cref="MoleculeGravity.isFrozen"/>). Each player's own; it stays ticked for the session.
+    /// Molecules placed from the list arrive frozen where they are put (see <see cref="MoleculeGravity.isFrozen"/>),
+    /// for scripts; in the headset each molecule has its own Freeze checkbox (<see cref="MoleculeFreezeCheckbox"/>).
     /// </summary>
     public bool placeFrozen { get; set; }
 
@@ -323,21 +326,6 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         var molecules = Entries();
         float y = 0f;
 
-        // The checkbox at the top of the list: a row that ticks and unticks.
-        var freeze = Instantiate(m_RowTemplate, m_ListContent);
-        freeze.name = "Place Frozen";
-        freeze.gameObject.SetActive(true);
-        ((RectTransform)freeze.transform).anchoredPosition = new Vector2(0f, -y);
-        var freezeLabel = freeze.GetComponentInChildren<TMP_Text>(true);
-        void ShowFreeze() => freezeLabel.text = (placeFrozen ? "■" : "□") + "  Place frozen <size=70%><color=#AAA>(stay where put)</color></size>";
-        ShowFreeze();
-        freeze.onClick.AddListener(() =>
-        {
-            placeFrozen = !placeFrozen;
-            ShowFreeze();
-            Debug.Log($"[Molecules] place frozen: {placeFrozen}");
-        });
-        y += m_RowSpacing;
         string category = null;
         for (int i = 0; i < molecules.Count; i++)
         {

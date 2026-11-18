@@ -52,6 +52,20 @@ namespace XRMultiplayer
         /// <summary>Sets <see cref="frozen"/> before it is shared (the host places it).</summary>
         public void PresetFrozen(bool frozen) => m_FrozenBeforeSpawn = frozen;
 
+        /// <summary>Freezes or unfreezes it for everyone (anyone may: the host makes it so).</summary>
+        public void SetFrozen(bool frozen)
+        {
+            if (!IsSpawned)
+                m_FrozenBeforeSpawn = frozen;
+            else if (IsServer)
+                m_Frozen.Value = frozen;
+            else
+                SetFrozenRpc(frozen);
+        }
+
+        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+        void SetFrozenRpc(bool frozen) => m_Frozen.Value = frozen;
+
         /// <summary>
         /// This flag is used to prevent multiple attempts at requesting ownership.
         /// </summary>

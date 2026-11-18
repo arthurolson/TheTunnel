@@ -162,6 +162,84 @@ static class MoleculeLibraryBuilder
         return log;
     }
 
+    const string k_FreezeCheckboxPath = "Assets/Tunnel/MoleculeFreezeCheckbox.prefab";
+
+    /// <summary>
+    /// Makes the Freeze checkbox that appears above a molecule held or pointed at (see
+    /// <see cref="MoleculeFreezeCheckbox"/>): the TS Menu's look (its canvas, panel and a Containers list row), a
+    /// single row, and puts it in TunnelPrefabs.asset.
+    /// </summary>
+    [MenuItem("Tunnel/Molecules/Build Freeze Checkbox")]
+    public static string BuildFreezeCheckbox()
+    {
+        const float canvasScale = 0.0006f, width = 300f, height = 76f;
+        var segment = PrefabUtility.LoadPrefabContents(k_SegmentPath);
+        try
+        {
+            var control = segment.transform.Find("Control Panel");
+            var root = new GameObject("Molecule Freeze Checkbox");
+
+            var canvasObject = new GameObject("Freeze Canvas", typeof(RectTransform));
+            canvasObject.layer = control.gameObject.layer;
+            var canvas = (RectTransform)canvasObject.transform;
+            canvas.SetParent(root.transform, false);
+            foreach (var type in new[] { typeof(Canvas), typeof(UnityEngine.UI.CanvasScaler), typeof(UnityEngine.UI.GraphicRaycaster), typeof(UnityEngine.XR.Interaction.Toolkit.UI.TrackedDeviceGraphicRaycaster) })
+            {
+                var source = control.GetComponent(type);
+                if (source != null && UnityEditorInternal.ComponentUtility.CopyComponent(source))
+                    UnityEditorInternal.ComponentUtility.PasteComponentAsNew(canvasObject);
+            }
+            canvas.sizeDelta = new Vector2(width, height);
+            canvas.pivot = new Vector2(0.5f, 0f); // sits on top of the molecule
+            canvas.localScale = Vector3.one * canvasScale;
+            canvas.localPosition = Vector3.zero;
+            canvas.localRotation = Quaternion.identity;
+
+            var menuPanel = control.Find("Menu Panel").GetComponent<UnityEngine.UI.Image>();
+            var background = new GameObject("Background", typeof(RectTransform));
+            background.layer = canvasObject.layer;
+            var backgroundRect = (RectTransform)background.transform;
+            backgroundRect.SetParent(canvas, false);
+            backgroundRect.anchorMin = Vector2.zero;
+            backgroundRect.anchorMax = Vector2.one;
+            backgroundRect.offsetMin = backgroundRect.offsetMax = Vector2.zero;
+            var image = background.AddComponent<UnityEngine.UI.Image>();
+            image.sprite = menuPanel.sprite;
+            image.type = menuPanel.type;
+            image.color = menuPanel.color;
+
+            var rowObject = Object.Instantiate(control.Find("Container List/Box Row").gameObject, canvas, false);
+            rowObject.name = "Freeze";
+            var rowRect = (RectTransform)rowObject.transform;
+            rowRect.anchorMin = rowRect.anchorMax = new Vector2(0.5f, 0.5f);
+            rowRect.pivot = new Vector2(0.5f, 0.5f);
+            rowRect.sizeDelta = new Vector2(width - 20f, height - 16f);
+            rowRect.anchoredPosition = Vector2.zero;
+            var button = rowObject.GetComponent<UnityEngine.UI.Button>();
+            button.onClick = new UnityEngine.UI.Button.ButtonClickedEvent();
+            button.interactable = true;
+            var label = rowObject.GetComponentInChildren<TMPro.TMP_Text>(true);
+            label.text = "□  Freeze";
+            rowObject.SetActive(true);
+
+            var checkbox = root.AddComponent<MoleculeFreezeCheckbox>();
+            checkbox.Configure(canvas, button);
+            var prefab = PrefabUtility.SaveAsPrefabAsset(root, k_FreezeCheckboxPath).GetComponent<MoleculeFreezeCheckbox>();
+            Object.DestroyImmediate(root);
+            var registry = AssetDatabase.LoadAssetAtPath<TunnelPrefabRegistry>(k_RegistryPath);
+            registry.freezeCheckbox = prefab;
+            EditorUtility.SetDirty(registry);
+            AssetDatabase.SaveAssets();
+            string log = $"[Molecules] made {k_FreezeCheckboxPath} and put it in the registry";
+            Debug.Log(log);
+            return log;
+        }
+        finally
+        {
+            PrefabUtility.UnloadPrefabContents(segment);
+        }
+    }
+
     [MenuItem("Tunnel/Molecules/Update Molecule Library")]
     public static void UpdateLibrary()
     {

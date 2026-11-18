@@ -124,6 +124,31 @@ public class MoleculeGravity : MonoBehaviour
             m_NetworkPhysics.PresetFrozen(frozen);
     }
 
+    /// <summary>
+    /// Freezes it where it is, or lets it move again, for everyone (the Freeze checkbox that appears beside a molecule
+    /// held or pointed at, see <see cref="MoleculeFreezeCheckbox"/>).
+    /// </summary>
+    public void SetFrozen(bool frozen)
+    {
+        m_LocalFrozen = frozen;
+        if (m_NetworkPhysics != null && m_NetworkPhysics.IsSpawned)
+            m_NetworkPhysics.SetFrozen(frozen);
+        Debug.Log($"[Molecules] {name} {(frozen ? "frozen where it is" : "free to move again")}");
+    }
+
+    /// <summary>A hand or ray on this headset is holding it or pointing at it: its Freeze checkbox shows.</summary>
+    public static event System.Action<MoleculeGravity> attention;
+
+    /// <summary>Someone here is pointing at it (or holding it).</summary>
+    public bool isHovered => m_Grab != null && m_Grab.isHovered;
+
+    // The container a frozen molecule was parked in, and where in it (its position and turn, not its scale): when the
+    // container is moved, the molecule moves with it.
+    TunnelContainer m_FrozenIn;
+    Vector3 m_FrozenLocalPosition;
+    Quaternion m_FrozenLocalRotation;
+    bool m_WasFrozen;
+
     /// <summary>Whether it is parked where it was placed, frozen until first grabbed or pushed.</summary>
     public bool isParked => m_Rigidbody != null && m_Rigidbody.constraints != RigidbodyConstraints.None;
 
@@ -180,6 +205,8 @@ public class MoleculeGravity : MonoBehaviour
         if (TryGetComponent(out m_Grab))
         {
             m_Grab.selectEntered.AddListener(OnGrabbed);
+            m_Grab.hoverEntered.AddListener(_ => attention?.Invoke(this));
+            m_Grab.selectEntered.AddListener(_ => attention?.Invoke(this));
             m_Grab.selectExited.AddListener(OnReleased);
         }
     }
@@ -234,12 +261,76 @@ public class MoleculeGravity : MonoBehaviour
         released?.Invoke(this);
     }
 
-    /// <summary>Still, where it is: a frozen molecule let go of (a throw doesn't carry it off).</summary>
+    /// <summary>
+    /// Still, where it is: a frozen molecule let go of (a throw doesn't carry it off). In a container, it keeps its
+    /// place in it from now on.
+    /// </summary>
     void Park()
     {
-        m_Rigidbody.linearVelocity = Vector3.zero;
-        m_Rigidbody.angularVelocity = Vector3.zero;
+        if (!m_Rigidbody.isKinematic)
+        {
+            m_Rigidbody.linearVelocity = Vector3.zero;
+            m_Rigidbody.angularVelocity = Vector3.zero;
+        }
         m_Rigidbody.constraints = RigidbodyConstraints.FreezeAll;
+        m_FrozenIn = TunnelContainer.At(m_Rigidbody.worldCenterOfMass);
+        if (m_FrozenIn != null)
+        {
+            var c = m_FrozenIn.transform;
+            var inverse = Quaternion.Inverse(c.rotation);
+            m_FrozenLocalPosition = inverse * (transform.position - c.position);
+            m_FrozenLocalRotation = inverse * transform.rotation;
+        }
+    }
+
+    /// <summary>Free to move again: unfrozen, as when it was first pushed after being placed.</summary>
+    void Unpark()
+    {
+        m_FrozenIn = null;
+        m_Rigidbody.constraints = RigidbodyConstraints.None;
+        if (m_NetworkPhysics != null)
+            m_NetworkPhysics.ReleaseSpawnLock();
+        m_Rigidbody.WakeUp();
+    }
+
+    /// <summary>
+    /// A frozen molecule: parked whenever nobody holds it, kept in its place in the container it was parked in as that
+    /// moves, and set free when unfrozen. Only where it is simulated (its owner's headset); the others follow over the
+    /// network.
+    /// </summary>
+    void KeepFrozen()
+    {
+        bool frozen = isFrozen;
+        if (!simulatedHere || isHeld)
+        {
+            m_WasFrozen = frozen;
+            return;
+        }
+        if (frozen != m_WasFrozen)
+        {
+            m_WasFrozen = frozen;
+            if (frozen)
+                Park();
+            else
+                Unpark();
+            return;
+        }
+        if (!frozen)
+            return;
+        if (m_Rigidbody.constraints != RigidbodyConstraints.FreezeAll)
+            Park();
+        if (m_FrozenIn != null)
+        {
+            var c = m_FrozenIn.transform;
+            var position = c.position + c.rotation * m_FrozenLocalPosition;
+            var rotation = c.rotation * m_FrozenLocalRotation;
+            if ((position - transform.position).sqrMagnitude > 1e-10f || Quaternion.Angle(rotation, transform.rotation) > 0.01f)
+            {
+                m_Rigidbody.position = position;
+                m_Rigidbody.rotation = rotation;
+                transform.SetPositionAndRotation(position, rotation);
+            }
+        }
     }
 
     /// <summary>
@@ -445,9 +536,7 @@ public class MoleculeGravity : MonoBehaviour
         float angularDrag = (gravityOn ? m_FallingAngularDrag : m_FloatingAngularDrag) * viscosity;
         // Only the player whose headset moves it (its owner) heats it; the others see it through the network.
         bool heated = container != null && container.temperature > 0f && !m_Rigidbody.isKinematic && simulatedHere && !isFrozen;
-        // A frozen molecule stays parked whenever no hand holds it (as when it was let go on another headset).
-        if (isFrozen && !isHeld && simulatedHere && m_Rigidbody.constraints != RigidbodyConstraints.FreezeAll && !m_Rigidbody.isKinematic)
-            Park();
+        KeepFrozen();
         if (heated)
         {
             // Heat moves a molecule still parked where it was placed, as a push does.

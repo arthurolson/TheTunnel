@@ -44,6 +44,11 @@ public static class MoleculeToyGeometry
         public List<Material> materials;
         public bool atoms;
         public MoleculeColliderFit.Fit fit, box, ellipsoid;
+        /// <summary>
+        /// For a flat molecule (a membrane): boxes side by side in the fitted box's frame, each only as thick as the
+        /// molecule is there, so things can come close to its surface (centres and sizes in that frame); else empty.
+        /// </summary>
+        public List<(Vector3 center, Vector3 size)> columns = new();
         public float radius;       // toy units, from its centre
         public int subunits;       // the model's mesh parts
         public string detail = ""; // how it was simplified (or not)
@@ -146,7 +151,7 @@ public static class MoleculeToyGeometry
     /// The tightest collider around every vertex: an oriented box or an ellipsoid, whichever is smaller. Only maths
     /// on the points, so a headset can run it off the main thread (it takes seconds for a large molecule).
     /// </summary>
-    public static void FitCollider(Geometry g, List<Vector3> points)
+    public static void FitCollider(Geometry g, List<Vector3> points, bool followFlatShapes = false)
     {
         g.box = MoleculeColliderFit.Box(points);
         // The plain measured box (width, height and depth along the toy's own axes) when it's smaller than the search's.
@@ -155,6 +160,77 @@ public static class MoleculeToyGeometry
             g.box = aabb;
         g.ellipsoid = MoleculeColliderFit.Ellipsoid(points);
         g.fit = g.box.volume <= g.ellipsoid.volume ? g.box : g.ellipsoid;
+        g.columns.Clear();
+        if (followFlatShapes)
+            FitColumns(g, points);
+    }
+
+    /// <summary>
+    /// For a flat molecule (its fitted box's thinnest side under a third of its longest), boxes in a grid over its two
+    /// long sides, each spanning only the molecule's own thickness in its cell, when together they enclose under three
+    /// quarters of the single collider's volume. Every vertex stays inside one of them.
+    /// </summary>
+    static void FitColumns(Geometry g, List<Vector3> points)
+    {
+        var box = g.box;
+        var s = box.size;
+        int thin = s.x <= s.y && s.x <= s.z ? 0 : s.y <= s.z ? 1 : 2;
+        int a = (thin + 1) % 3, b = (thin + 2) % 3;
+        float longest = Mathf.Max(s[a], s[b]);
+        if (s[thin] > longest / 3f)
+            return;
+        // Square cells, 24 along the long side (no more than 24 x 24 boxes in all): a membrane's boxes are then about
+        // as thick as it is in each (its lipids' head groups and its tilt across the cell), under half its overall depth.
+        int na = Mathf.Clamp(Mathf.RoundToInt(24f * s[a] / longest), 1, 24), nb = Mathf.Clamp(Mathf.RoundToInt(24f * s[b] / longest), 1, 24);
+        var inverse = Quaternion.Inverse(box.rotation);
+        var lo = -s * 0.5f;
+        var min = new float[na, nb];
+        var max = new float[na, nb];
+        var cellLo = new Vector2[na, nb];
+        var cellHi = new Vector2[na, nb];
+        var used = new bool[na, nb];
+        foreach (var p in points)
+        {
+            var l = inverse * (p - box.center); // in the box's frame, its centre at the origin
+            int i = Mathf.Clamp((int)((l[a] - lo[a]) / s[a] * na), 0, na - 1);
+            int j = Mathf.Clamp((int)((l[b] - lo[b]) / s[b] * nb), 0, nb - 1);
+            if (!used[i, j])
+            {
+                used[i, j] = true;
+                min[i, j] = max[i, j] = l[thin];
+                cellLo[i, j] = cellHi[i, j] = new Vector2(l[a], l[b]);
+            }
+            else
+            {
+                min[i, j] = Mathf.Min(min[i, j], l[thin]);
+                max[i, j] = Mathf.Max(max[i, j], l[thin]);
+                cellLo[i, j] = Vector2.Min(cellLo[i, j], new Vector2(l[a], l[b]));
+                cellHi[i, j] = Vector2.Max(cellHi[i, j], new Vector2(l[a], l[b]));
+            }
+        }
+        var columns = new List<(Vector3, Vector3)>();
+        float volume = 0f;
+        for (int i = 0; i < na; i++)
+            for (int j = 0; j < nb; j++)
+            {
+                if (!used[i, j])
+                    continue;
+                // The cell's points' own extent (so the boxes don't reach past the molecule's edge), at least a sliver.
+                Vector3 c = Vector3.zero, size = Vector3.zero;
+                c[a] = (cellLo[i, j].x + cellHi[i, j].x) * 0.5f;
+                c[b] = (cellLo[i, j].y + cellHi[i, j].y) * 0.5f;
+                c[thin] = (min[i, j] + max[i, j]) * 0.5f;
+                size[a] = Mathf.Max(cellHi[i, j].x - cellLo[i, j].x, 1e-4f);
+                size[b] = Mathf.Max(cellHi[i, j].y - cellLo[i, j].y, 1e-4f);
+                size[thin] = Mathf.Max(max[i, j] - min[i, j], 1e-4f);
+                columns.Add((c, size));
+                volume += size.x * size.y * size.z;
+            }
+        if (volume < 0.75f * g.fit.volume)
+        {
+            g.columns = columns;
+            g.fit = box; // the columns lie in the fitted box's frame
+        }
     }
 
     /// <summary>The box of the points' width, height and depth along the toy's own axes.</summary>
@@ -186,6 +262,7 @@ public static class MoleculeToyGeometry
         public float[] rotation; // x, y, z, w
         public float[] size;     // box: full size; ellipsoid: semi-axes
         public float volume;
+        public float[] boxes; // a flat molecule's boxes in that frame: centre x, y, z and size x, y, z for each
 
         public bool isValid => (kind == "box" || kind == "ellipsoid") && center is { Length: 3 } && rotation is { Length: 4 } && size is { Length: 3 };
 
@@ -197,6 +274,14 @@ public static class MoleculeToyGeometry
             size = new[] { f.size.x, f.size.y, f.size.z },
             volume = f.volume,
         };
+
+        public static SavedFit From(Geometry g)
+        {
+            var saved = From(g.fit);
+            if (g.columns.Count > 0)
+                saved.boxes = g.columns.SelectMany(c => new[] { c.center.x, c.center.y, c.center.z, c.size.x, c.size.y, c.size.z }).ToArray();
+            return saved;
+        }
 
         public MoleculeColliderFit.Fit ToFit() => new()
         {
@@ -213,6 +298,11 @@ public static class MoleculeToyGeometry
     {
         g.fit = saved.ToFit();
         g.box = g.ellipsoid = g.fit;
+        g.columns.Clear();
+        if (saved.boxes != null)
+            for (int i = 0; i + 5 < saved.boxes.Length; i += 6)
+                g.columns.Add((new Vector3(saved.boxes[i], saved.boxes[i + 1], saved.boxes[i + 2]),
+                    new Vector3(saved.boxes[i + 3], saved.boxes[i + 4], saved.boxes[i + 5])));
     }
 
     /// <summary>
@@ -271,7 +361,21 @@ public static class MoleculeToyGeometry
         holder.transform.localPosition = g.fit.center;
         holder.transform.localRotation = g.fit.rotation;
         holder.transform.localScale = Vector3.one;
-        if (g.fit.kind == MoleculeColliderFit.Kind.Box)
+        if (g.columns.Count > 0)
+        {
+            // A flat molecule: its boxes side by side, following its surface. Added while their holder is off, so the
+            // body works out its mass and inertia once, not once per box.
+            bool wasActive = holder.activeSelf;
+            holder.SetActive(false);
+            foreach (var (columnCenter, columnSize) in g.columns)
+            {
+                var column = holder.AddComponent<BoxCollider>();
+                column.center = columnCenter;
+                column.size = columnSize;
+            }
+            holder.SetActive(wasActive);
+        }
+        else if (g.fit.kind == MoleculeColliderFit.Kind.Box)
         {
             holder.AddComponent<BoxCollider>().size = g.fit.size;
         }
@@ -299,6 +403,12 @@ public static class MoleculeToyGeometry
         }
         float sphereVolume = 4f / 3f * Mathf.PI * g.radius * g.radius * g.radius;
         var size = fittedSize * toMeters * 100f;
+        if (g.columns.Count > 0)
+        {
+            float columnsVolume = g.columns.Sum(c => c.size.x * c.size.y * c.size.z);
+            return $"outer radius {g.radius / k_UnitsPerAngstrom:0} Å; collider {g.columns.Count} boxes following its surface " +
+                $"({columnsVolume / g.fit.volume:P0} of one box's volume); {size.x:0.00} × {size.y:0.00} × {size.z:0.00} cm at ×1";
+        }
         return $"outer radius {g.radius / k_UnitsPerAngstrom:0} Å; collider {g.fit.kind} " +
             $"(box {g.box.volume / sphereVolume:P0}, ellipsoid {g.ellipsoid.volume / sphereVolume:P0} of the outer sphere's volume); " +
             $"{size.x:0.00} × {size.y:0.00} × {size.z:0.00} cm at ×1{grab}";

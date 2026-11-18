@@ -20,6 +20,17 @@ own copy, and makes the toy itself with the Editor's code (`MoleculeToyGeometry`
 
 Until its model arrives, the toy shows the download's progress, and a sphere of the model's size holds its place.
 
+- **Colliders.** A toy's collider is fitted once: ahead of time in the repository (a `collider` in its sidecar, fitted
+  in the Unity Editor), or on each headset the first time, in the background, and kept there. A flat molecule, such as
+  the Membrane, gets a grid of boxes that follows its surface instead of one box, so things can come close to it.
+- **Freezing.** Holding a molecule, or pointing at it, shows a Freeze checkbox just above it, for a few seconds after
+  too.
+  - Ticked, the molecule stays where it is put: you can still grab and move it, and it parks wherever you let go.
+  - Inside a container, it keeps its place in the container when that is moved.
+  - Unticked, it moves with the physics again.
+  - This works for built-in molecules too, and everyone in a session sees it.
+- **The spawn gun** takes repository molecules too. Its copies share one set of geometry on each headset.
+
 ## Adding a molecule, end to end
 
 You can ask Claude in one line, for example "load the attached molecule in the proteins folder and call it HIV
@@ -44,7 +55,7 @@ protease". By hand, in a clone of TheTunnelAsset:
    git add -A && git commit -m "Add HIV protease" && git push
    ```
 5. **In the headset:** open the Molecules list again (close it and open it). It re-reads the repository each time it
-   opens, and HIV protease is there under Proteins.
+   opens, and HIV protease is there under Proteins. GitHub can take up to 5 minutes to serve a list you just pushed.
 
 For an image or video the steps are the same, in `image/` or `video/`. It appears in the Viewer's lists the next time
 they're opened. The repository's README covers each kind, files over 95 MB, and the schema.

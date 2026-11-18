@@ -59,6 +59,9 @@ public class TunnelPrefabRegistry : ScriptableObject
         "one network prefab for them all, each made from its model in the headset.")]
     public GameObject repositoryMolecule;
 
+    [Tooltip("The Freeze checkbox that appears above a molecule held or pointed at (Tunnel > Molecules > Build Freeze Checkbox).")]
+    public MoleculeFreezeCheckbox freezeCheckbox;
+
     [Tooltip("Filled in by Tunnel > Molecules > Update Molecule Library from the folders in Assets/Molecules, " +
         "grouped by category in the order of TunnelPrefabRegistry.categories.")]
     public List<Molecule> molecules = new();

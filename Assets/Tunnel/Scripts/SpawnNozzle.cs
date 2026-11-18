@@ -153,7 +153,7 @@ public class SpawnNozzle : NetworkBehaviour
     }
 
     /// <summary>The most copies of the attached molecule one spray makes (the triangle budget's limit, at most 100).</summary>
-    public int maxCopies => MaxCopies(PrefabOf(loaded));
+    public int maxCopies => MaxCopies(loaded, PrefabOf(loaded));
 
     /// <summary>Its latest message, for its menu.</summary>
     public string message { get; private set; } = "";
@@ -308,10 +308,10 @@ public class SpawnNozzle : NetworkBehaviour
     void ShowAttached(MoleculeGravity molecule)
     {
         var prefab = PrefabOf(molecule);
-        int most = MaxCopies(prefab);
-        string limit = most < k_MaxCount ? $" (at most {most} of these: {Triangles(prefab) / 1000}k triangles each)" : "";
+        int most = MaxCopies(molecule, prefab);
+        string limit = most < k_MaxCount ? $" (at most {most} of these: {TrianglesOf(molecule, prefab) / 1000}k triangles each)" : "";
         ShareMessage($"{NameOf(molecule)} attached{limit}. Set the copies, then Spawn.");
-        Debug.Log($"[Nozzle] {molecule.name} attached at ×{MagnificationOf(molecule):0.#}, {Triangles(prefab)} triangles, at most {most} copies per spray");
+        Debug.Log($"[Nozzle] {molecule.name} attached at ×{MagnificationOf(molecule):0.#}, {TrianglesOf(molecule, prefab)} triangles, at most {most} copies per spray");
     }
 
     float MagnificationOf(MoleculeGravity molecule)
@@ -478,7 +478,7 @@ public class SpawnNozzle : NetworkBehaviour
     public static int CopiesFor(int requested, int trianglesEach, int budget) =>
         Mathf.Clamp(Mathf.Min(requested, trianglesEach > 0 ? Mathf.Max(1, budget / trianglesEach) : k_MaxCount), k_MinCount, k_MaxCount);
 
-    int MaxCopies(GameObject prefab) => prefab == null ? k_MaxCount : CopiesFor(k_MaxCount, Triangles(prefab), m_TriangleBudget);
+    int MaxCopies(MoleculeGravity molecule, GameObject prefab) => prefab == null ? k_MaxCount : CopiesFor(k_MaxCount, TrianglesOf(molecule, prefab), m_TriangleBudget);
 
     // On the host (or here when not connected).
     void StartSpraying(int requested)
@@ -492,12 +492,14 @@ public class SpawnNozzle : NetworkBehaviour
             ShareMessage(molecule == null ? "Attach a molecule first: let go of one at the cup at the nozzle's back." : $"{molecule.name} isn't in the Molecules list, so it can't be copied.");
             return;
         }
-        int n = CopiesFor(requested, Triangles(prefab), m_TriangleBudget);
-        string capped = n < Mathf.Clamp(requested, k_MinCount, k_MaxCount) ? $" (at most {n} of these: {Triangles(prefab) / 1000}k triangles each)" : "";
-        Debug.Log($"[Nozzle] spraying {n} of {NameOf(molecule)} (asked for {requested}; {Triangles(prefab)} triangles each, budget {m_TriangleBudget})");
+        int triangles = TrianglesOf(molecule, prefab);
+        int n = CopiesFor(requested, triangles, m_TriangleBudget);
+        string capped = n < Mathf.Clamp(requested, k_MinCount, k_MaxCount) ? $" (at most {n} of these: {triangles / 1000}k triangles each)" : "";
+        Debug.Log($"[Nozzle] spraying {n} of {NameOf(molecule)} (asked for {requested}; {triangles} triangles each, budget {m_TriangleBudget})");
         ShareMessage($"Spawning {n} {NameOf(molecule)}{capped}...");
         SetProgress(0, n);
-        m_Spraying = StartCoroutine(Spray(prefab, molecule.transform.localScale, TunnelMoleculeMenu.WorldRadius(molecule.gameObject), NameOf(molecule), n));
+        string assetId = molecule.TryGetComponent(out RepositoryMolecule repository) ? repository.assetId : null;
+        m_Spraying = StartCoroutine(Spray(prefab, molecule.transform.localScale, TunnelMoleculeMenu.WorldRadius(molecule.gameObject), NameOf(molecule), n, assetId));
     }
 
     void StopSpraying(string why)
@@ -528,7 +530,7 @@ public class SpawnNozzle : NetworkBehaviour
         }
     }
 
-    IEnumerator Spray(GameObject prefab, Vector3 scale, float radius, string moleculeName, int n)
+    IEnumerator Spray(GameObject prefab, Vector3 scale, float radius, string moleculeName, int n, string assetId = null)
     {
         float next = 0f;
         float blockedSince = -1f;
@@ -551,7 +553,7 @@ public class SpawnNozzle : NetworkBehaviour
                 continue;
             }
             blockedSince = -1f;
-            MakeCopy(prefab, scale, position, SprayDirection());
+            MakeCopy(prefab, scale, position, SprayDirection(), assetId);
             doneSoFar++;
             SetProgress(doneSoFar, n);
             next = Time.time + m_Interval;
@@ -590,11 +592,15 @@ public class SpawnNozzle : NetworkBehaviour
     /// One copy, made as the Molecules list makes a molecule: sized and placed before it wakes (its network transform
     /// takes its pose when it's created), then spawned for everyone; it isn't parked, so it flies off.
     /// </summary>
-    GameObject MakeCopy(GameObject prefab, Vector3 scale, Vector3 position, Vector3 direction)
+    GameObject MakeCopy(GameObject prefab, Vector3 scale, Vector3 position, Vector3 direction, string assetId = null)
     {
         var holder = new GameObject("Nozzle Copy Holder");
         holder.SetActive(false);
         var copy = Instantiate(prefab, holder.transform);
+        // A molecule from the asset repository: the copy is made from the same molecule (its geometry shared on each
+        // headset with the one on the cup).
+        if (assetId != null && copy.TryGetComponent(out RepositoryMolecule repository))
+            repository.Preset(assetId);
         copy.transform.localScale = scale;
         copy.transform.SetPositionAndRotation(position, Random.rotation);
         if (copy.TryGetComponent(out NetworkPhysicsInteractable networkPhysics))
@@ -622,6 +628,9 @@ public class SpawnNozzle : NetworkBehaviour
     {
         if (molecule == null || m_Prefabs == null || !molecule.TryGetComponent(out NetworkObject networkObject))
             return null;
+        // A molecule from the asset repository: the one toy they all are, given the molecule's id (see MakeCopy).
+        if (molecule.TryGetComponent(out RepositoryMolecule _))
+            return m_Prefabs.repositoryMolecule;
         uint id = networkObject.PrefabIdHash;
         foreach (var entry in m_Prefabs.molecules)
             if (entry != null && entry.prefab != null && entry.prefab.TryGetComponent(out NetworkObject prefabObject) && prefabObject.PrefabIdHash == id)
@@ -633,12 +642,35 @@ public class SpawnNozzle : NetworkBehaviour
     {
         if (molecule == null)
             return "";
+        if (molecule.TryGetComponent(out RepositoryMolecule repository))
+            return TunnelAssetCatalog.MenuName(TunnelAssetCatalog.Get(repository.assetId)) is { Length: > 0 } menuName ? menuName : repository.assetId;
         var prefab = PrefabOf(molecule);
         if (prefab != null)
             foreach (var entry in m_Prefabs.molecules)
                 if (entry.prefab == prefab)
                     return entry.name;
         return molecule.name.Replace("(Clone)", "").Replace("_Networked", "").Replace("Toy_", "").Trim();
+    }
+
+    /// <summary>
+    /// Triangles drawn for one copy of this molecule: its prefab's, or, for a molecule from the asset repository (whose
+    /// one prefab has no parts of its own), its own.
+    /// </summary>
+    int TrianglesOf(MoleculeGravity molecule, GameObject prefab) =>
+        molecule != null && molecule.TryGetComponent(out RepositoryMolecule _) ? CountTriangles(molecule.gameObject) : Triangles(prefab);
+
+    static int CountTriangles(GameObject thing)
+    {
+        long triangles = 0;
+        foreach (var filter in thing.GetComponentsInChildren<MeshFilter>(true))
+        {
+            var mesh = filter.sharedMesh;
+            if (mesh == null || !filter.TryGetComponent(out MeshRenderer _))
+                continue;
+            for (int i = 0; i < mesh.subMeshCount; i++)
+                triangles += mesh.GetIndexCount(i) / 3;
+        }
+        return (int)Mathf.Min(triangles, int.MaxValue);
     }
 
     /// <summary>Triangles drawn for one copy of a prefab (all its meshes).</summary>

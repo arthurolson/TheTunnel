@@ -245,8 +245,9 @@ public static class TunnelAssetCatalog
     static async Task<bool> Read(string url)
     {
         string json = null;
-        string fresh = url.StartsWith("http") ? url + (url.Contains("?") ? "&" : "?") + "t=" + DateTimeOffset.UtcNow.ToUnixTimeSeconds() : url;
-        using (var request = UnityWebRequest.Get(fresh))
+        // raw.githubusercontent.com keeps a file for up to 5 minutes (query strings don't get round it), so a list just
+        // pushed can take that long to arrive.
+        using (var request = UnityWebRequest.Get(url))
         {
             request.timeout = 20;
             var operation = request.SendWebRequest();

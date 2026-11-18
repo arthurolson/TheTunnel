@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using TMPro;
 using Unity.Collections;
 using Unity.Netcode;
@@ -63,6 +64,14 @@ public class RepositoryMolecule : NetworkBehaviour
         m_Visual = visual;
     }
 
+    void Awake()
+    {
+        if (m_ChainMaterials != null)
+            foreach (var material in m_ChainMaterials)
+                if (material != null)
+                    s_ChainMaterialSet.Add(material); // the app's own: never freed
+    }
+
     void Start()
     {
         if (!IsSpawned)
@@ -103,6 +112,7 @@ public class RepositoryMolecule : NetworkBehaviour
     public override void OnDestroy()
     {
         m_Building++;
+        ReleaseShared();
         foreach (var thing in m_Owned)
             if (thing != null)
                 Destroy(thing);
@@ -120,56 +130,59 @@ public class RepositoryMolecule : NetworkBehaviour
         _ = BuildToy(id, ++m_Building);
     }
 
+    /// <summary>
+    /// A molecule's geometry, colours and collider, made once per headset and shared by every toy of it there (the
+    /// spawn nozzle sprays dozens): freed when the last of them goes.
+    /// </summary>
+    class Shared
+    {
+        public Task<MoleculeToyGeometry.Geometry> making;
+        public int users;
+        public Action<string> progress; // the first toy's progress label
+    }
+
+    static readonly Dictionary<string, Shared> s_Shared = new();
+
+    string m_SharedKey;
+
     async Awaitable BuildToy(string id, int building)
     {
         await TunnelAssetCatalog.Ready();
         var asset = TunnelAssetCatalog.Resolve(id);
         string title = asset != null ? TunnelAssetCatalog.MenuName(asset) : id;
+        string category = TunnelAssetCatalog.CategoryOf(asset);
         name = $"Toy_{title}_Repository";
         ShowLabel($"Loading {title}...");
         SizePlaceholder(asset);
 
-        GameObject model = null;
         try
         {
-            model = await TunnelAssets.Load(id, null, progress =>
+            ReleaseShared();
+            string key = $"{asset?.id ?? id}|{category}";
+            if (!s_Shared.TryGetValue(key, out var shared))
             {
-                if (building == m_Building && this != null)
-                    ShowLabel(progress < 1f ? $"Downloading {title}: {progress * 100f:F0}%" : $"Making {title}...");
-            });
-            if (this == null || building != m_Building)
-                return;
-            model.SetActive(false); // only its meshes are wanted
-            var filters = model.GetComponentsInChildren<MeshFilter>(true).Where(f => f.sharedMesh != null).ToList();
-            if (filters.Count == 0)
-                throw new TunnelAssets.LoadException($"{title} has nothing to draw");
-            string category = TunnelAssetCatalog.CategoryOf(asset);
-            var geometry = MoleculeToyGeometry.Build(model.transform, filters, title, category, m_ChainMaterials, false,
-                angstromsPerUnit: AngstromsPerUnit(asset), fitCollider: false);
-            // Its collider: fitted ahead of time (in the asset list), or saved here from before; otherwise fitted now, off
-            // the main thread (it takes seconds for a large molecule) so the headset keeps drawing, and saved.
-            string savedPath = SavedFitPath(asset, category);
-            var saved = asset.collider != null && asset.collider.isValid ? asset.collider : ReadSavedFit(savedPath);
-            if (saved != null)
-                MoleculeToyGeometry.UseSavedFit(geometry, saved);
-            else
+                s_Shared[key] = shared = new Shared();
+                shared.progress = text => { if (this != null && building == m_Building) ShowLabel(text); };
+                shared.making = MakeGeometry(id, asset, title, category, m_ChainMaterials, text => shared.progress?.Invoke(text));
+            }
+            shared.users++;
+            m_SharedKey = key;
+            MoleculeToyGeometry.Geometry geometry;
+            try
             {
-                ShowLabel($"Fitting {title}'s collider...");
-                var points = MoleculeToyGeometry.Points(geometry);
-                MoleculeColliderFit.Prepare();
-                await System.Threading.Tasks.Task.Run(() => MoleculeToyGeometry.FitCollider(geometry, points));
-                WriteSavedFit(savedPath, MoleculeToyGeometry.SavedFit.From(geometry.fit));
+                geometry = await shared.making;
+            }
+            catch
+            {
+                s_Shared.Remove(key); // try again next time
+                m_SharedKey = null;
+                throw;
             }
             if (this == null || building != m_Building)
-            {
-                foreach (var m in geometry.meshes)
-                    Destroy(m);
                 return;
-            }
+
             var visual = m_Visual != null ? m_Visual : transform.GetChild(0);
             string report = MoleculeToyGeometry.Assemble(gameObject, visual, geometry, title, m_MetersPerUnit, m_Owned.Add);
-            m_Owned.AddRange(geometry.meshes);
-            m_Owned.AddRange(geometry.materials.Where(m => m_ChainMaterials == null || !m_ChainMaterials.Contains(m)));
             if (TryGetComponent(out MoleculeGravity gravity))
                 gravity.volume = (float)MoleculeToyGeometry.EnclosedVolume(gameObject);
             HideLabel();
@@ -181,7 +194,7 @@ public class RepositoryMolecule : NetworkBehaviour
             isBuilt = true;
             status = "";
             Debug.Log($"[Molecules] made {title} ({id}, {category}) from the asset repository: {geometry.detail}{geometry.meshes.Count} part(s), " +
-                $"{geometry.subunits} subunits, {report}");
+                $"{geometry.subunits} subunits, {report}{(shared.users > 1 ? $" ({shared.users} on this headset share its geometry)" : "")}");
             built?.Invoke();
         }
         catch (Exception e)
@@ -195,12 +208,80 @@ public class RepositoryMolecule : NetworkBehaviour
             else
                 Debug.LogException(e);
         }
+    }
+
+    /// <summary>
+    /// Makes a molecule's geometry from its model: downloaded (or the headset's copy), turned into the toy's parts as
+    /// the Editor makes them, its collider fitted ahead of time (in the asset list), saved on the headset, or fitted now
+    /// off the main thread (seconds for a large molecule, the headset drawing on meanwhile) and saved.
+    /// </summary>
+    static async Task<MoleculeToyGeometry.Geometry> MakeGeometry(string id, TunnelAssetCatalog.Asset asset, string title, string category,
+        Material[] chainMaterials, Action<string> progress)
+    {
+        GameObject model = null;
+        try
+        {
+            model = await TunnelAssets.Load(id, null, p =>
+                progress(p < 1f ? $"Downloading {title}: {p * 100f:F0}%" : $"Making {title}..."));
+            model.SetActive(false); // only its meshes are wanted
+            var filters = model.GetComponentsInChildren<MeshFilter>(true).Where(f => f.sharedMesh != null).ToList();
+            if (filters.Count == 0)
+                throw new TunnelAssets.LoadException($"{title} has nothing to draw");
+            var geometry = MoleculeToyGeometry.Build(model.transform, filters, title, category, chainMaterials, false,
+                angstromsPerUnit: AngstromsPerUnit(asset), fitCollider: false);
+            string savedPath = SavedFitPath(asset, category);
+            var saved = asset != null && asset.collider != null && asset.collider.isValid ? asset.collider : ReadSavedFit(savedPath);
+            if (saved != null)
+                MoleculeToyGeometry.UseSavedFit(geometry, saved);
+            else
+            {
+                progress($"Fitting {title}'s collider...");
+                var points = MoleculeToyGeometry.Points(geometry);
+                MoleculeColliderFit.Prepare();
+                await Task.Run(() => MoleculeToyGeometry.FitCollider(geometry, points, followFlatShapes: true));
+                WriteSavedFit(savedPath, MoleculeToyGeometry.SavedFit.From(geometry));
+            }
+            return geometry;
+        }
         finally
         {
             if (model != null)
-                Destroy(model); // its toy has its own meshes now; the model's are freed
+                Destroy(model); // the toy has its own meshes now; the model's are freed
         }
     }
+
+    /// <summary>This toy no longer uses its shared geometry; the last one frees it.</summary>
+    void ReleaseShared()
+    {
+        if (m_SharedKey == null || !s_Shared.TryGetValue(m_SharedKey, out var shared))
+            return;
+        m_SharedKey = null;
+        if (--shared.users > 0)
+            return;
+        foreach (var pair in s_Shared.Where(p => p.Value == shared).ToList())
+            s_Shared.Remove(pair.Key);
+        _ = FreeWhenMade(shared.making);
+    }
+
+    static async Task FreeWhenMade(Task<MoleculeToyGeometry.Geometry> making)
+    {
+        try
+        {
+            var g = await making;
+            foreach (var mesh in g.meshes)
+                if (mesh != null)
+                    Destroy(mesh);
+            foreach (var material in g.materials)
+                if (material != null && !s_ChainMaterialSet.Contains(material))
+                    Destroy(material);
+        }
+        catch
+        {
+            // It was never made: nothing to free.
+        }
+    }
+
+    static readonly HashSet<Material> s_ChainMaterialSet = new();
 
     /// <summary>
     /// Tells the parts that found the toy's collider when it appeared (the placeholder sphere) about the fitted one:
@@ -234,7 +315,7 @@ public class RepositoryMolecule : NetworkBehaviour
     {
         var model = asset != null && !asset.isGlb && !string.IsNullOrEmpty(asset.surface) ? TunnelAssetCatalog.Get(asset.surface) ?? asset : asset;
         string key = !string.IsNullOrEmpty(model?.sha256) ? model.sha256 : model?.id ?? "unknown";
-        return System.IO.Path.Combine(TunnelAssets.CacheFolder, $"{key}-{(category ?? "").Replace(' ', '_')}-collider-v1.json");
+        return System.IO.Path.Combine(TunnelAssets.CacheFolder, $"{key}-{(category ?? "").Replace(' ', '_')}-collider-v2.json");
     }
 
     static MoleculeToyGeometry.SavedFit ReadSavedFit(string path)
