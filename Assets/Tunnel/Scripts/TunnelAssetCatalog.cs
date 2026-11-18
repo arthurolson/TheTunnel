@@ -63,6 +63,7 @@ public static class TunnelAssetCatalog
         public int instances;     // a virus instance list
         public string[] proteins;
         public float[] extent;    // the model's size along x, y, z in its own units (Å for molecules)
+        public MoleculeToyGeometry.SavedFit collider; // a molecule toy's collider, fitted ahead of time (toy units)
         public Coordinates coordinates;
         public License license;
 

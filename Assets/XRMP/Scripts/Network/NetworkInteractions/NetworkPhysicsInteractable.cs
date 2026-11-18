@@ -42,6 +42,17 @@ namespace XRMultiplayer
         protected NetworkVariable<bool> m_LockedOnSpawn = new(true, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
 
         /// <summary>
+        /// Frozen where it is put (The Tunnel: a molecule placed with the Molecules list's "Place frozen" ticked): it can
+        /// be grabbed and moved, and parks again wherever it is let go, for everyone.
+        /// </summary>
+        public bool frozen => IsSpawned ? m_Frozen.Value : m_FrozenBeforeSpawn;
+        readonly NetworkVariable<bool> m_Frozen = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+        bool m_FrozenBeforeSpawn;
+
+        /// <summary>Sets <see cref="frozen"/> before it is shared (the host places it).</summary>
+        public void PresetFrozen(bool frozen) => m_FrozenBeforeSpawn = frozen;
+
+        /// <summary>
         /// This flag is used to prevent multiple attempts at requesting ownership.
         /// </summary>
         protected bool m_RequestingOwnership = false;
@@ -115,6 +126,8 @@ namespace XRMultiplayer
             base.OnNetworkSpawn();
 
             m_ResettingObject.OnValueChanged += OnObjectPhysicsReset;
+            if (IsServer && m_FrozenBeforeSpawn)
+                m_Frozen.Value = true;
             if (IsOwner)
             {
                 m_LockedOnSpawn.Value = spawnLocked;

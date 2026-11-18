@@ -306,6 +306,12 @@ public class TunnelMoleculeMenu : NetworkBehaviour
             .ToList();
     }
 
+    /// <summary>
+    /// "Place frozen", ticked: molecules placed from the list arrive frozen where they are put (see
+    /// <see cref="MoleculeGravity.isFrozen"/>). Each player's own; it stays ticked for the session.
+    /// </summary>
+    public bool placeFrozen { get; set; }
+
     void BuildList()
     {
         if (m_ListContent == null || m_RowTemplate == null)
@@ -316,6 +322,22 @@ public class TunnelMoleculeMenu : NetworkBehaviour
 
         var molecules = Entries();
         float y = 0f;
+
+        // The checkbox at the top of the list: a row that ticks and unticks.
+        var freeze = Instantiate(m_RowTemplate, m_ListContent);
+        freeze.name = "Place Frozen";
+        freeze.gameObject.SetActive(true);
+        ((RectTransform)freeze.transform).anchoredPosition = new Vector2(0f, -y);
+        var freezeLabel = freeze.GetComponentInChildren<TMP_Text>(true);
+        void ShowFreeze() => freezeLabel.text = (placeFrozen ? "■" : "□") + "  Place frozen <size=70%><color=#AAA>(stay where put)</color></size>";
+        ShowFreeze();
+        freeze.onClick.AddListener(() =>
+        {
+            placeFrozen = !placeFrozen;
+            ShowFreeze();
+            Debug.Log($"[Molecules] place frozen: {placeFrozen}");
+        });
+        y += m_RowSpacing;
         string category = null;
         for (int i = 0; i < molecules.Count; i++)
         {
@@ -377,13 +399,13 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         Debug.Log($"[Molecules] chose {molecules[index].name} at ×{mag}: " +
             (IsSpawned ? (IsServer ? "placing it for everyone" : "asking the host to place it") : "not connected, placing it here only"));
         if (IsSpawned)
-            SpawnMoleculeRpc(index, mag);
+            SpawnMoleculeRpc(index, mag, placeFrozen);
         else
-            SpawnMolecule(index, mag);
+            SpawnMolecule(index, mag, placeFrozen);
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    void SpawnMoleculeRpc(int index, int mag) => SpawnMolecule(index, mag);
+    void SpawnMoleculeRpc(int index, int mag, bool frozen) => SpawnMolecule(index, mag, frozen);
 
     /// <summary>
     /// Places a molecule from the asset repository, as a built-in one is placed: a <see cref="RepositoryMolecule"/>
@@ -400,15 +422,15 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         Debug.Log($"[Molecules] chose {displayName} ({assetId}, from the asset repository) at ×{mag}: " +
             (IsSpawned ? (IsServer ? "placing it for everyone" : "asking the host to place it") : "not connected, placing it here only"));
         if (IsSpawned)
-            SpawnRepositoryRpc(new FixedString128Bytes(assetId), mag);
+            SpawnRepositoryRpc(new FixedString128Bytes(assetId), mag, placeFrozen);
         else
-            SpawnRepository(assetId, mag);
+            SpawnRepository(assetId, mag, placeFrozen);
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    void SpawnRepositoryRpc(FixedString128Bytes assetId, int mag) => SpawnRepository(assetId.ToString(), mag);
+    void SpawnRepositoryRpc(FixedString128Bytes assetId, int mag, bool frozen) => SpawnRepository(assetId.ToString(), mag, frozen);
 
-    void SpawnRepository(string assetId, int mag)
+    void SpawnRepository(string assetId, int mag, bool frozen = false)
     {
         mag = Mathf.Clamp(mag, k_MinMagnification, k_MaxMagnification);
         var prefab = m_Prefabs != null ? m_Prefabs.repositoryMolecule : null;
@@ -428,6 +450,8 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         molecule.transform.rotation = m_Geometry.transform.rotation;
         var repository = molecule.GetComponent<RepositoryMolecule>();
         repository.Preset(assetId);
+        if (frozen && molecule.TryGetComponent(out MoleculeGravity physics))
+            physics.PresetFrozen(true);
         // Its size from the asset list, so it is placed clear of the list and other molecules before its model comes.
         var extent = RepositoryMolecule.ExtentInAngstroms(asset);
         if (extent != Vector3.zero)
@@ -448,10 +472,10 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         var networkObject = molecule.GetComponent<NetworkObject>();
         if (IsSpawned && networkObject != null)
             networkObject.Spawn(true);
-        ShareStatus($"{name} placed beside this list at ×{mag}; each headset is making it from the asset repository.");
+        ShareStatus($"{name} placed beside this list at ×{mag}{(frozen ? ", frozen" : "")}; each headset is making it from the asset repository.");
     }
 
-    void SpawnMolecule(int index, int mag)
+    void SpawnMolecule(int index, int mag, bool frozen = false)
     {
         mag = Mathf.Clamp(mag, k_MinMagnification, k_MaxMagnification);
         if (m_Prefabs == null || index < 0 || index >= m_Prefabs.molecules.Count || m_Geometry == null)
@@ -469,9 +493,11 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         molecule.transform.localScale = prefab.transform.localScale * mag;
         molecule.transform.rotation = m_Geometry.transform.rotation;
         molecule.transform.position = PlaceOnWall(molecule);
+        if (frozen && molecule.TryGetComponent(out MoleculeGravity physics))
+            physics.PresetFrozen(true);
         molecule.transform.SetParent(null, true);
         Destroy(holder);
-        Debug.Log($"[Molecules] placed {m_Prefabs.molecules[index].name} at ×{mag}, radius {WorldRadius(molecule):F3} m, at {m_Geometry.transform.InverseTransformPoint(molecule.transform.position):F3} in the segment " +
+        Debug.Log($"[Molecules] placed {m_Prefabs.molecules[index].name} at ×{mag}{(frozen ? ", frozen" : "")}, radius {WorldRadius(molecule):F3} m, at {m_Geometry.transform.InverseTransformPoint(molecule.transform.position):F3} in the segment " +
             $"(walls at x = ±{m_Geometry.width * 0.5f:F3})");
 
         var networkObject = molecule.GetComponent<NetworkObject>();
@@ -482,8 +508,8 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         float across = TunnelMovie.SizeOf(prefab, mag) * 100f;
         string name = m_Prefabs.molecules[index].name;
         ShareStatus(across < 3f
-            ? $"{name} placed beside this list at ×{mag}: only {across:0.#} cm across. Raise the magnification to see it better."
-            : $"{name} placed beside this list at ×{mag}, {across:0} cm across.");
+            ? $"{name} placed beside this list at ×{mag}{(frozen ? ", frozen" : "")}: only {across:0.#} cm across. Raise the magnification to see it better."
+            : $"{name} placed beside this list at ×{mag}{(frozen ? ", frozen" : "")}, {across:0} cm across.");
     }
 
     /// <summary>

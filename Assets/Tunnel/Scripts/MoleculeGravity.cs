@@ -108,6 +108,22 @@ public class MoleculeGravity : MonoBehaviour
     /// <summary>Every molecule in the scene.</summary>
     public static readonly System.Collections.Generic.List<MoleculeGravity> all = new();
 
+    /// <summary>
+    /// Frozen where it is put: placed with the Molecules list's "Place frozen" ticked. It can be grabbed and moved, and
+    /// parks again wherever it is let go; pushes, heat and gravity don't move it. Shared with everyone.
+    /// </summary>
+    public bool isFrozen => m_NetworkPhysics != null && m_NetworkPhysics.IsSpawned ? m_NetworkPhysics.frozen : m_LocalFrozen;
+
+    bool m_LocalFrozen;
+
+    /// <summary>Freezes it (see <see cref="isFrozen"/>) before it is placed and shared.</summary>
+    public void PresetFrozen(bool frozen)
+    {
+        m_LocalFrozen = frozen;
+        if (m_NetworkPhysics != null || TryGetComponent(out m_NetworkPhysics))
+            m_NetworkPhysics.PresetFrozen(frozen);
+    }
+
     /// <summary>Whether it is parked where it was placed, frozen until first grabbed or pushed.</summary>
     public bool isParked => m_Rigidbody != null && m_Rigidbody.constraints != RigidbodyConstraints.None;
 
@@ -213,7 +229,17 @@ public class MoleculeGravity : MonoBehaviour
     {
         if (args.isCanceled || m_Grab.isSelected || args.interactorObject is UnityEngine.XR.Interaction.Toolkit.Interactors.XRSocketInteractor)
             return;
+        if (isFrozen)
+            Park();
         released?.Invoke(this);
+    }
+
+    /// <summary>Still, where it is: a frozen molecule let go of (a throw doesn't carry it off).</summary>
+    void Park()
+    {
+        m_Rigidbody.linearVelocity = Vector3.zero;
+        m_Rigidbody.angularVelocity = Vector3.zero;
+        m_Rigidbody.constraints = RigidbodyConstraints.FreezeAll;
     }
 
     /// <summary>
@@ -246,8 +272,8 @@ public class MoleculeGravity : MonoBehaviour
 
     void OnCollisionEnter(Collision collision)
     {
-        // Something moving into a parked molecule sets it free, so the push moves it.
-        if (m_Rigidbody.constraints == RigidbodyConstraints.None || collision.rigidbody == null)
+        // Something moving into a parked molecule sets it free, so the push moves it (not a frozen one).
+        if (m_Rigidbody.constraints == RigidbodyConstraints.None || collision.rigidbody == null || isFrozen)
             return;
         m_Rigidbody.constraints = RigidbodyConstraints.None;
         if (m_NetworkPhysics != null)
@@ -418,7 +444,10 @@ public class MoleculeGravity : MonoBehaviour
         float drag = (gravityOn ? m_FallingDrag : m_FloatingDrag) * viscosity;
         float angularDrag = (gravityOn ? m_FallingAngularDrag : m_FloatingAngularDrag) * viscosity;
         // Only the player whose headset moves it (its owner) heats it; the others see it through the network.
-        bool heated = container != null && container.temperature > 0f && !m_Rigidbody.isKinematic && simulatedHere;
+        bool heated = container != null && container.temperature > 0f && !m_Rigidbody.isKinematic && simulatedHere && !isFrozen;
+        // A frozen molecule stays parked whenever no hand holds it (as when it was let go on another headset).
+        if (isFrozen && !isHeld && simulatedHere && m_Rigidbody.constraints != RigidbodyConstraints.FreezeAll && !m_Rigidbody.isKinematic)
+            Park();
         if (heated)
         {
             // Heat moves a molecule still parked where it was placed, as a push does.

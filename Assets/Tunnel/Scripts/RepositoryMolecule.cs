@@ -146,11 +146,20 @@ public class RepositoryMolecule : NetworkBehaviour
             string category = TunnelAssetCatalog.CategoryOf(asset);
             var geometry = MoleculeToyGeometry.Build(model.transform, filters, title, category, m_ChainMaterials, false,
                 angstromsPerUnit: AngstromsPerUnit(asset), fitCollider: false);
-            // The collider fit takes seconds for a large molecule: off the main thread, so the headset keeps drawing.
-            ShowLabel($"Fitting {title}'s collider...");
-            var points = MoleculeToyGeometry.Points(geometry);
-            MoleculeColliderFit.Prepare();
-            await System.Threading.Tasks.Task.Run(() => MoleculeToyGeometry.FitCollider(geometry, points));
+            // Its collider: fitted ahead of time (in the asset list), or saved here from before; otherwise fitted now, off
+            // the main thread (it takes seconds for a large molecule) so the headset keeps drawing, and saved.
+            string savedPath = SavedFitPath(asset, category);
+            var saved = asset.collider != null && asset.collider.isValid ? asset.collider : ReadSavedFit(savedPath);
+            if (saved != null)
+                MoleculeToyGeometry.UseSavedFit(geometry, saved);
+            else
+            {
+                ShowLabel($"Fitting {title}'s collider...");
+                var points = MoleculeToyGeometry.Points(geometry);
+                MoleculeColliderFit.Prepare();
+                await System.Threading.Tasks.Task.Run(() => MoleculeToyGeometry.FitCollider(geometry, points));
+                WriteSavedFit(savedPath, MoleculeToyGeometry.SavedFit.From(geometry.fit));
+            }
             if (this == null || building != m_Building)
             {
                 foreach (var m in geometry.meshes)
@@ -218,6 +227,44 @@ public class RepositoryMolecule : NetworkBehaviour
         if (TryGetComponent(out MoleculeGravity gravity))
             gravity.CollidersChanged();
         Debug.Log($"[Molecules] {name}: hands and rays now take hold of its {string.Join(", ", colliders.Select(c => c.GetType().Name))}");
+    }
+
+    /// <summary>Where this headset keeps a molecule's fitted collider (by its file's checksum and how it was made).</summary>
+    static string SavedFitPath(TunnelAssetCatalog.Asset asset, string category)
+    {
+        var model = asset != null && !asset.isGlb && !string.IsNullOrEmpty(asset.surface) ? TunnelAssetCatalog.Get(asset.surface) ?? asset : asset;
+        string key = !string.IsNullOrEmpty(model?.sha256) ? model.sha256 : model?.id ?? "unknown";
+        return System.IO.Path.Combine(TunnelAssets.CacheFolder, $"{key}-{(category ?? "").Replace(' ', '_')}-collider-v1.json");
+    }
+
+    static MoleculeToyGeometry.SavedFit ReadSavedFit(string path)
+    {
+        try
+        {
+            if (!System.IO.File.Exists(path))
+                return null;
+            var saved = JsonUtility.FromJson<MoleculeToyGeometry.SavedFit>(System.IO.File.ReadAllText(path));
+            return saved != null && saved.isValid ? saved : null;
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[Molecules] couldn't read the saved collider {path}: {e.Message}");
+            return null;
+        }
+    }
+
+    static void WriteSavedFit(string path, MoleculeToyGeometry.SavedFit saved)
+    {
+        try
+        {
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));
+            System.IO.File.WriteAllText(path, JsonUtility.ToJson(saved));
+            Debug.Log($"[Molecules] saved its collider: {path}");
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[Molecules] couldn't save the collider: {e.Message}");
+        }
     }
 
     /// <summary>

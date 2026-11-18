@@ -149,8 +149,70 @@ public static class MoleculeToyGeometry
     public static void FitCollider(Geometry g, List<Vector3> points)
     {
         g.box = MoleculeColliderFit.Box(points);
+        // The plain measured box (width, height and depth along the toy's own axes) when it's smaller than the search's.
+        var aabb = MeasuredBox(points);
+        if (aabb.volume < g.box.volume)
+            g.box = aabb;
         g.ellipsoid = MoleculeColliderFit.Ellipsoid(points);
         g.fit = g.box.volume <= g.ellipsoid.volume ? g.box : g.ellipsoid;
+    }
+
+    /// <summary>The box of the points' width, height and depth along the toy's own axes.</summary>
+    public static MoleculeColliderFit.Fit MeasuredBox(List<Vector3> points)
+    {
+        Vector3 min = Vector3.positiveInfinity, max = Vector3.negativeInfinity;
+        foreach (var p in points)
+        {
+            min = Vector3.Min(min, p);
+            max = Vector3.Max(max, p);
+        }
+        var size = max - min;
+        return new MoleculeColliderFit.Fit
+        {
+            kind = MoleculeColliderFit.Kind.Box,
+            center = (min + max) * 0.5f,
+            rotation = Quaternion.identity,
+            size = size,
+            volume = size.x * size.y * size.z,
+        };
+    }
+
+    /// <summary>A fitted collider as saved (on the headset, or with a molecule in the asset repository), toy units.</summary>
+    [System.Serializable]
+    public class SavedFit
+    {
+        public string kind; // "box" or "ellipsoid"
+        public float[] center;
+        public float[] rotation; // x, y, z, w
+        public float[] size;     // box: full size; ellipsoid: semi-axes
+        public float volume;
+
+        public bool isValid => (kind == "box" || kind == "ellipsoid") && center is { Length: 3 } && rotation is { Length: 4 } && size is { Length: 3 };
+
+        public static SavedFit From(MoleculeColliderFit.Fit f) => new()
+        {
+            kind = f.kind == MoleculeColliderFit.Kind.Box ? "box" : "ellipsoid",
+            center = new[] { f.center.x, f.center.y, f.center.z },
+            rotation = new[] { f.rotation.x, f.rotation.y, f.rotation.z, f.rotation.w },
+            size = new[] { f.size.x, f.size.y, f.size.z },
+            volume = f.volume,
+        };
+
+        public MoleculeColliderFit.Fit ToFit() => new()
+        {
+            kind = kind == "box" ? MoleculeColliderFit.Kind.Box : MoleculeColliderFit.Kind.Ellipsoid,
+            center = new Vector3(center[0], center[1], center[2]),
+            rotation = new Quaternion(rotation[0], rotation[1], rotation[2], rotation[3]),
+            size = new Vector3(size[0], size[1], size[2]),
+            volume = volume,
+        };
+    }
+
+    /// <summary>Uses a saved collider instead of fitting one.</summary>
+    public static void UseSavedFit(Geometry g, SavedFit saved)
+    {
+        g.fit = saved.ToFit();
+        g.box = g.ellipsoid = g.fit;
     }
 
     /// <summary>
