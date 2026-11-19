@@ -23,12 +23,15 @@ Until its model arrives, the toy shows the download's progress, and a sphere of 
 - **Colliders.** A toy's collider is fitted once: ahead of time in the repository (a `collider` in its sidecar, fitted
   in the Unity Editor), or on each headset the first time, in the background, and kept there. A flat molecule, such as
   the Membrane, gets a grid of boxes that follows its surface instead of one box, so things can come close to it.
-- **Freezing.** The Molecules list has a Freeze checkbox at its top, next to the name of the molecule last held.
-  - Molecules placed while it is ticked arrive frozen where they are put. You can still grab and move them, and they
-    park wherever you let go.
-  - Ticking or unticking it also freezes or unfreezes the molecule last held.
+- **Freezing.** Each molecule in the Molecules list has a Freeze checkbox at the right of its row.
+  - Ticking it freezes every molecule of that kind in the tunnel where it is, and new ones placed from the list arrive
+    frozen. You can still grab and move them, and they park wherever you let go.
+  - Unticking it lets them all go.
   - Inside a container, a frozen molecule keeps its place in the container when that is moved.
-  - This works for built-in molecules too, and everyone in a session sees it.
+  - This works for built-in molecules too, and everyone in a session sees them freeze. The ticks are your headset's.
+    The spawn nozzle's copies aren't frozen, so they still fly.
+- **Clear all** in the TS Menu (press it twice) takes away everything not on a tunnel wall, molecules included, except
+  those inside a box set into a wall.
 - **Splat-box menu.** While a splat-box is snapped into a tunnel wall, a small button beside it hides its menu and
   brings it back (on your headset only).
 - **The spawn gun** takes repository molecules too. Its copies share one set of geometry on each headset.

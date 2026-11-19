@@ -88,6 +88,8 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         float m_LastLocalEditTime = float.NegativeInfinity;
 
         static readonly int k_WindowStencilComp = Shader.PropertyToID("_WindowStencilComp");
+        const int k_SeeThroughShellQueue = 2900; // Transparent - 100
+
         const string k_TileBreakup = "_WALL_TILE_BREAKUP";
 
         Material m_OpaqueInstance;
@@ -106,6 +108,13 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
                 m_TransparentInstance = new Material(m_TransparentMaterial);
             if (m_FloorMaterial != null)
                 m_FloorInstance = new Material(m_FloorMaterial);
+            // See-through walls and floor are drawn before every other see-through thing, so whatever is inside the
+            // tunnel (a Viewer's picture, a browser, signs) is always drawn over them. In the same queue, the closer
+            // centre of the whole tunnel would put the walls over a Viewer hung on them.
+            if (m_TransparentInstance != null)
+                m_TransparentInstance.renderQueue = k_SeeThroughShellQueue;
+            if (m_FloorInstance != null)
+                m_FloorInstance.renderQueue = k_SeeThroughShellQueue - 1;
             // The shell leaves a hole where a mixed reality box's window marks the screen (stencil 16, see
             // TunnelContainer), whatever the material assets were saved with.
             foreach (var shell in new[] { m_OpaqueInstance, m_TransparentInstance })

@@ -21,6 +21,12 @@ What has been built, what is in progress, and where each build is. Updated as wo
 - Co-location: a printed QR code on the floor (Printables/) lines up every player's headset with the same real room.
   Players aligned this way see each other's real bodies instead of avatars.
 - Shared TS Menu: everyone sees the same menus and objects.
+- TS Menu > Clear all (pressed twice within 4 s) takes away, for everyone, everything not on a tunnel wall: molecules
+  (except inside a box set into a wall), containers and splat-boxes not set into a wall, Viewers and browsers not
+  hanging on a wall, signs, palettes and painting copies not lying on a wall, and the spawn nozzle
+  (TunnelClearAll; button made by Tunnel > Menu > Add Clear All Button).
+- See-through walls and floor draw before every other see-through thing (queue 2900), so a Viewer or browser hung
+  on a wall is never painted over by the wall (it used to vanish until pulled toward the middle).
 - Wall textures (TS Menu > Textures): built-in ones ship in the app; a fine surface (White Stucco) repeats at about
   0.5 m (16 times round the profile) instead of one image stretched round the whole tunnel (TunnelTextureLibrary
   ImageSizeOnWall). Its repeat is hidden: the wall shows small hexagonal patches of the image, each randomly
@@ -253,6 +259,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
   shared one (blue). Log and snapshots in files/ARMarker on the headset.
 
 ### Viewer
+- A Viewer hung on a see-through tunnel wall shows its picture (19.11.2026.2: the wall used to be drawn over it).
 - Shared panel for images, videos and spatial (stereo) photos and videos. Quest stereo captures and screenshots are
   recognized as spatial.
 - Lists the media built into the app and the headset's own captures by date, with < and > to step through them.

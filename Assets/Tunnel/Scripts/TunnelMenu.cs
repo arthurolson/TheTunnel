@@ -10,8 +10,8 @@ using XRMultiplayer;
 
 /// <summary>
 /// The Tunnel Segment's "TS Menu" button: opens and closes the panel holding the segment's buttons
-/// (Colors, Textures, Molecules, Containers, Signage, Delete, New Browser, New Viewer, Add Segment, Remove Segment,
-/// Align to QR). The colour chooser, the texture list, the molecule list, the container list and the signage list open
+/// (Colors, Textures, Molecules, Containers, Signage, Delete, Clear all, New Browser, New Viewer, Add Segment, Remove
+/// Segment, Align to QR). The colour chooser, the texture list, the molecule list, the container list and the signage list open
 /// beside it, one at a time; closing the menu also closes them. Everyone sees
 /// the same menu: whoever presses a button opens or closes it for all players (the colour chooser shares itself the
 /// same way). Works locally when not connected.
@@ -19,6 +19,8 @@ using XRMultiplayer;
 /// calls up the eraser in front of whoever pressed it (see <see cref="TunnelEraser"/>); held in a hand, the eraser
 /// deletes for everyone whatever deletable thing it touches (see <see cref="Delete"/>). Turning it off removes the
 /// eraser. Grabbing things no longer deletes them, so people can go on holding things while Delete is on.
+/// Clear all, pressed twice within a few seconds (the first press asks "press again"), takes away for everyone
+/// everything placed in the tunnel that isn't on a tunnel wall (see <see cref="TunnelClearAll"/>).
 /// </summary>
 public class TunnelMenu : NetworkBehaviour
 {
@@ -72,6 +74,16 @@ public class TunnelMenu : NetworkBehaviour
 
     [SerializeField]
     TMP_Text m_DeleteLabel;
+
+    [SerializeField]
+    Button m_ClearAllButton;
+
+    [SerializeField]
+    TMP_Text m_ClearAllLabel;
+
+    [SerializeField]
+    [Tooltip("Seconds the second press of Clear all has to come in.")]
+    float m_ClearAllConfirmTime = 4f;
 
     [SerializeField]
     [Tooltip("The eraser that Delete calls up (made by Tunnel > Eraser > Build Eraser).")]
@@ -143,6 +155,8 @@ public class TunnelMenu : NetworkBehaviour
             m_SignageButton.onClick.AddListener(() => ToggleSidePanel(SidePanel.Signage));
         if (m_DeleteButton != null)
             m_DeleteButton.onClick.AddListener(ToggleDeleteMode);
+        if (m_ClearAllButton != null)
+            m_ClearAllButton.onClick.AddListener(OnClearAllPressed);
         // The appearance component toggles the chooser itself; just keep the lists out of its way.
         if (m_ColorsButton != null)
             m_ColorsButton.onClick.AddListener(() => SetState(isOpen, SidePanel.None));
@@ -252,6 +266,54 @@ public class TunnelMenu : NetworkBehaviour
     }
 
     void OnDeleteChanged(bool previous, bool current) => ShowDeleteMode(current);
+
+    const string k_ClearAllText = "Clear all";
+    const string k_ClearAllConfirmText = "<color=#FF6B5B>Clear all: press again</color>";
+    Coroutine m_ClearAllConfirm;
+
+    // First press: asks for a second within a few seconds. Second press: the host clears.
+    void OnClearAllPressed()
+    {
+        if (m_ClearAllConfirm == null)
+        {
+            m_ClearAllConfirm = StartCoroutine(WaitForClearAllConfirm());
+            PlayerHudNotification.Instance?.ShowText("Press Clear all again to take away everything not on a tunnel wall", 3f);
+            return;
+        }
+        StopCoroutine(m_ClearAllConfirm);
+        m_ClearAllConfirm = null;
+        SetClearAllLabel(k_ClearAllText);
+        Debug.Log($"[TS Menu] Clear all confirmed ({(IsSpawned ? (IsServer ? "clearing for everyone" : "asking the host") : "not connected, here only")})");
+        if (IsSpawned)
+            ClearAllRpc();
+        else
+            ShowCleared(TunnelClearAll.Clear());
+    }
+
+    IEnumerator WaitForClearAllConfirm()
+    {
+        SetClearAllLabel(k_ClearAllConfirmText);
+        yield return new WaitForSeconds(m_ClearAllConfirmTime);
+        SetClearAllLabel(k_ClearAllText);
+        m_ClearAllConfirm = null;
+    }
+
+    void SetClearAllLabel(string text)
+    {
+        if (m_ClearAllLabel != null)
+            m_ClearAllLabel.text = text;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void ClearAllRpc() => ClearedRpc(TunnelClearAll.Clear());
+
+    [Rpc(SendTo.Everyone)]
+    void ClearedRpc(int count) => ShowCleared(count);
+
+    static void ShowCleared(int count) =>
+        PlayerHudNotification.Instance?.ShowText(count == 0
+            ? "Clear all: nothing to clear (only things on the walls are left)"
+            : $"Clear all: took away {count} {(count == 1 ? "thing" : "things")}; what's on the walls stays", 3f);
 
     static void ShowDeleteMode(bool on) =>
         PlayerHudNotification.Instance?.ShowText(on

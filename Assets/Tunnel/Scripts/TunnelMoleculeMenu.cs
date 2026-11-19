@@ -231,7 +231,6 @@ public class TunnelMoleculeMenu : NetworkBehaviour
     public override void OnDestroy()
     {
         TunnelAssetCatalog.changed -= OnCatalogChanged;
-        MoleculeGravity.selected -= OnMoleculeSelected;
         base.OnDestroy();
         if (m_MagnificationSlider != null)
             m_MagnificationSlider.onValueChanged.RemoveAllListeners();
@@ -254,8 +253,6 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         if (show)
         {
             BuildList();
-            MoleculeGravity.selected -= OnMoleculeSelected;
-            MoleculeGravity.selected += OnMoleculeSelected;
             // Molecules just added to the asset repository: read its list again, and show them when it comes.
             TunnelAssetCatalog.changed += OnCatalogChanged;
             _ = TunnelAssetCatalog.Refresh();
@@ -310,36 +307,86 @@ public class TunnelMoleculeMenu : NetworkBehaviour
     }
 
     /// <summary>
-    /// The list's Freeze checkbox, at its top. Ticked, molecules placed from the list arrive frozen where they are put
-    /// (see <see cref="MoleculeGravity.isFrozen"/>). Ticking or unticking it also freezes or unfreezes the molecule last
-    /// held on this headset, whose name it shows. Each player's own; it stays as set for the session.
+    /// Each molecule's Freeze checkbox, at the right of its row. Ticked, every molecule of that kind in the tunnel is
+    /// frozen where it is (see <see cref="MoleculeGravity.isFrozen"/>), and new ones placed from the list arrive frozen;
+    /// unticked, they are all let go. Frozen or let go for everyone; the ticks are this headset's, kept for the session
+    /// (the spawn nozzle's copies are left alone, so they still fly).
     /// </summary>
-    public bool placeFrozen { get; set; }
+    static readonly HashSet<string> s_FrozenKinds = new();
 
-    Button m_FreezeRow;
+    // A molecule kind's key: "built-in:<registry name>" or "repository:<asset id>".
+    static string KindKey(Entry entry) => entry.builtIn >= 0 ? $"built-in:{entry.name}" : $"repository:{entry.assetId}";
 
-    /// <summary>Ticks or unticks the Freeze checkbox: new molecules, and the one last held, follow it.</summary>
-    public void SetFreeze(bool frozen)
+    /// <summary>Whether molecules of this list row's kind are to be frozen (its checkbox is ticked).</summary>
+    static bool IsKindFrozen(Entry entry) => s_FrozenKinds.Contains(KindKey(entry));
+
+    /// <summary>Whether a molecule in the tunnel is of this row's kind.</summary>
+    bool IsOfKind(MoleculeGravity molecule, Entry entry)
     {
-        placeFrozen = frozen;
-        var last = MoleculeGravity.lastSelected;
-        if (last != null && last.isFrozen != frozen)
-            last.SetFrozen(frozen);
-        Debug.Log($"[Molecules] Freeze {(frozen ? "ticked" : "unticked")}{(last != null ? $": {MoleculeName(last)} {(frozen ? "frozen" : "free again")}" : "")}");
-        ShowFreeze();
+        if (molecule.TryGetComponent(out RepositoryMolecule repository))
+            return entry.builtIn < 0 && repository.assetId == entry.assetId;
+        if (entry.builtIn < 0 || m_Prefabs == null || entry.builtIn >= m_Prefabs.molecules.Count)
+            return false;
+        var prefab = m_Prefabs.molecules[entry.builtIn].prefab;
+        return prefab != null && molecule.name.Replace("(Clone)", "").Trim() == prefab.name;
     }
 
-    void ShowFreeze()
+    /// <summary>
+    /// Ticks or unticks a row's Freeze checkbox: every molecule of that kind in the tunnel is frozen or let go, and new
+    /// ones placed from the list follow it.
+    /// </summary>
+    void SetKindFrozen(Entry entry, bool frozen)
     {
-        if (m_FreezeRow == null)
-            return;
-        var last = MoleculeGravity.lastSelected;
-        string applies = last != null ? $"new ones and {MoleculeName(last)}" : "new molecules";
-        m_FreezeRow.GetComponentInChildren<TMP_Text>(true).text =
-            $"{(placeFrozen ? "■" : "□")}  Freeze  <size=70%><color=#AAA>({applies})</color></size>";
+        if (frozen)
+            s_FrozenKinds.Add(KindKey(entry));
+        else
+            s_FrozenKinds.Remove(KindKey(entry));
+        int changed = 0;
+        foreach (var molecule in FindObjectsByType<MoleculeGravity>(FindObjectsSortMode.None))
+        {
+            if (!IsOfKind(molecule, entry) || molecule.isFrozen == frozen)
+                continue;
+            molecule.SetFrozen(frozen);
+            changed++;
+        }
+        Debug.Log($"[Molecules] Freeze {entry.name}: {(frozen ? "ticked" : "unticked")}, {changed} in the tunnel {(frozen ? "frozen" : "let go")}");
+        ShareStatus(frozen
+            ? $"{entry.name}: {Count(changed)} frozen where {(changed == 1 ? "it is" : "they are")}; new ones arrive frozen."
+            : $"{entry.name}: {Count(changed)} let go.");
     }
 
-    void OnMoleculeSelected(MoleculeGravity molecule) => ShowFreeze();
+    static string Count(int n) => n == 0 ? "none in the tunnel" : n == 1 ? "1" : $"all {n}";
+
+    // A row's checkbox: a small button at the row's right end (the row's own button keeps the rest).
+    void AddFreezeBox(Button row, Entry entry)
+    {
+        var box = Instantiate(m_RowTemplate, row.transform);
+        box.name = "Freeze";
+        box.gameObject.SetActive(true);
+        var rect = (RectTransform)box.transform;
+        rect.anchorMin = new Vector2(1f, 0f);
+        rect.anchorMax = new Vector2(1f, 1f);
+        rect.pivot = new Vector2(1f, 0.5f);
+        rect.sizeDelta = new Vector2(k_FreezeBoxWidth, -8f);
+        rect.anchoredPosition = new Vector2(-4f, 0f);
+        var label = box.GetComponentInChildren<TMP_Text>(true);
+        var labelRect = (RectTransform)label.transform;
+        labelRect.offsetMin = new Vector2(10f, 0f);
+        labelRect.offsetMax = new Vector2(-6f, 0f);
+        label.fontSize = row.GetComponentInChildren<TMP_Text>(true).fontSize * 0.85f;
+        void Show() => label.text = $"{(IsKindFrozen(entry) ? "■" : "□")} Freeze";
+        Show();
+        box.onClick.AddListener(() =>
+        {
+            SetKindFrozen(entry, !IsKindFrozen(entry));
+            Show();
+        });
+        // The name stops short of the checkbox.
+        var nameRect = (RectTransform)row.GetComponentInChildren<TMP_Text>(true).transform;
+        nameRect.offsetMax = new Vector2(-(k_FreezeBoxWidth + 10f), nameRect.offsetMax.y);
+    }
+
+    const float k_FreezeBoxWidth = 118f;
 
     /// <summary>A molecule's name as the list shows it.</summary>
     public static string MoleculeName(MoleculeGravity molecule)
@@ -365,15 +412,6 @@ public class TunnelMoleculeMenu : NetworkBehaviour
         var molecules = Entries();
         float y = 0f;
 
-        // The Freeze checkbox at the top: for molecules placed from now on, and the one last held.
-        m_FreezeRow = Instantiate(m_RowTemplate, m_ListContent);
-        m_FreezeRow.name = "Freeze";
-        m_FreezeRow.gameObject.SetActive(true);
-        ((RectTransform)m_FreezeRow.transform).anchoredPosition = new Vector2(0f, -y);
-        m_FreezeRow.onClick.AddListener(() => SetFreeze(!placeFrozen));
-        ShowFreeze();
-        y += m_RowSpacing;
-
         string category = null;
         for (int i = 0; i < molecules.Count; i++)
         {
@@ -391,6 +429,7 @@ public class TunnelMoleculeMenu : NetworkBehaviour
             row.gameObject.SetActive(true);
             ((RectTransform)row.transform).anchoredPosition = new Vector2(0f, -y);
             row.GetComponentInChildren<TMP_Text>(true).text = entry.name;
+            AddFreezeBox(row, entry);
             if (entry.builtIn >= 0)
                 row.onClick.AddListener(() => Choose(entry.builtIn));
             else
@@ -431,13 +470,14 @@ public class TunnelMoleculeMenu : NetworkBehaviour
             return;
 
         int mag = magnification;
+        bool frozen = IsKindFrozen(new Entry { name = molecules[index].name, builtIn = index });
         ShareStatus($"Placing {molecules[index].name} at ×{mag}...");
         Debug.Log($"[Molecules] chose {molecules[index].name} at ×{mag}: " +
             (IsSpawned ? (IsServer ? "placing it for everyone" : "asking the host to place it") : "not connected, placing it here only"));
         if (IsSpawned)
-            SpawnMoleculeRpc(index, mag, placeFrozen);
+            SpawnMoleculeRpc(index, mag, frozen);
         else
-            SpawnMolecule(index, mag, placeFrozen);
+            SpawnMolecule(index, mag, frozen);
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
@@ -454,13 +494,14 @@ public class TunnelMoleculeMenu : NetworkBehaviour
             return;
         int mag = magnification;
         displayName ??= TunnelAssetCatalog.MenuName(TunnelAssetCatalog.Get(assetId));
+        bool frozen = IsKindFrozen(new Entry { builtIn = -1, assetId = assetId });
         ShareStatus($"Placing {displayName} at ×{mag}...");
         Debug.Log($"[Molecules] chose {displayName} ({assetId}, from the asset repository) at ×{mag}: " +
             (IsSpawned ? (IsServer ? "placing it for everyone" : "asking the host to place it") : "not connected, placing it here only"));
         if (IsSpawned)
-            SpawnRepositoryRpc(new FixedString128Bytes(assetId), mag, placeFrozen);
+            SpawnRepositoryRpc(new FixedString128Bytes(assetId), mag, frozen);
         else
-            SpawnRepository(assetId, mag, placeFrozen);
+            SpawnRepository(assetId, mag, frozen);
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]

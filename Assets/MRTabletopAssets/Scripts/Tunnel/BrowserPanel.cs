@@ -181,6 +181,9 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         /// <summary>Unsnapped from the tunnel: the panel stays where it is let go (see <see cref="SetFree"/>).</summary>
         public bool isFree => m_Free;
 
+        /// <summary>Whether the panel hangs on a tunnel wall (snapped to it), as everyone sees it.</summary>
+        public bool isOnWall => IsSpawned ? m_NetAttached.Value : m_AttachedTunnel != null;
+
         /// <summary>Called when the panel is unsnapped or snapped back, by anyone.</summary>
         public event System.Action freeChanged;
 
