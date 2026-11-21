@@ -10,7 +10,7 @@ using XRMultiplayer;
 
 /// <summary>
 /// The Tunnel Segment's "TS Menu" button: opens and closes the panel holding the segment's buttons
-/// (Colors, Textures, Molecules, Containers, Signage, Delete, Clear all, New Browser, New Viewer, Add Segment, Remove
+/// (Colors, Textures, Molecules, Containers, Signage, Delete, Clear all, New figure, New Browser, New Viewer, Add Segment, Remove
 /// Segment, Align to QR). The colour chooser, the texture list, the molecule list, the container list and the signage list open
 /// beside it, one at a time; closing the menu also closes them. Everyone sees
 /// the same menu: whoever presses a button opens or closes it for all players (the colour chooser shares itself the
@@ -19,6 +19,8 @@ using XRMultiplayer;
 /// calls up the eraser in front of whoever pressed it (see <see cref="TunnelEraser"/>); held in a hand, the eraser
 /// deletes for everyone whatever deletable thing it touches (see <see cref="Delete"/>). Turning it off removes the
 /// eraser. Grabbing things no longer deletes them, so people can go on holding things while Delete is on.
+/// New figure calls up a little person in front of whoever pressed it, which they drive with the left thumbstick (see
+/// <see cref="TunnelFigure"/>).
 /// Clear all, pressed twice within a few seconds (the first press asks "press again"), takes away for everyone
 /// everything placed in the tunnel that isn't on a tunnel wall (see <see cref="TunnelClearAll"/>).
 /// </summary>
@@ -98,6 +100,17 @@ public class TunnelMenu : NetworkBehaviour
     float m_EraserDrop = 0.25f;
 
     [SerializeField]
+    Button m_NewFigureButton;
+
+    [SerializeField]
+    [Tooltip("The figure New figure calls up (made by Tunnel > Figure > Build Figure).")]
+    TunnelFigure m_FigurePrefab;
+
+    [SerializeField]
+    [Tooltip("How far in front of whoever presses New figure it appears (meters).")]
+    float m_FigureDistance = 0.6f;
+
+    [SerializeField]
     TunnelSegmentAppearance m_Appearance;
 
     [SerializeField]
@@ -157,6 +170,8 @@ public class TunnelMenu : NetworkBehaviour
             m_DeleteButton.onClick.AddListener(ToggleDeleteMode);
         if (m_ClearAllButton != null)
             m_ClearAllButton.onClick.AddListener(OnClearAllPressed);
+        if (m_NewFigureButton != null)
+            m_NewFigureButton.onClick.AddListener(OnNewFigurePressed);
         // The appearance component toggles the chooser itself; just keep the lists out of its way.
         if (m_ColorsButton != null)
             m_ColorsButton.onClick.AddListener(() => SetState(isOpen, SidePanel.None));
@@ -263,6 +278,46 @@ public class TunnelMenu : NetworkBehaviour
         Debug.Log($"[Eraser] placed at {pose.position:F2}");
         if (IsSpawned && eraser.TryGetComponent(out NetworkObject networkObject))
             networkObject.Spawn(true);
+    }
+
+    // New figure: a figure stands in front of whoever pressed it, at the height of their hands, and they drive it.
+    void OnNewFigurePressed()
+    {
+        var head = Camera.main != null ? Camera.main.transform : null;
+        var pose = head != null ? TunnelMoleculeMenu.NozzlePose(head.position, head.forward, m_FigureDistance, 0.45f)
+            : new Pose(transform.position - transform.forward * m_FigureDistance, Quaternion.LookRotation(-transform.forward));
+        // It faces whoever called it up.
+        pose.rotation = Quaternion.LookRotation(-(pose.rotation * Vector3.forward), Vector3.up);
+        Debug.Log($"[Figure] New figure pressed ({(IsSpawned ? "for everyone" : "not connected, here only")})");
+        if (IsSpawned)
+            NewFigureRpc(pose.position, pose.rotation);
+        else
+            PlaceFigure(pose, null);
+        PlayerHudNotification.Instance?.ShowText("New figure: walk it with the left stick (push all the way to run), X jumps; pick it up to move it", 4f);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void NewFigureRpc(Vector3 position, Quaternion rotation, RpcParams rpcParams = default) =>
+        PlaceFigure(new Pose(position, rotation), rpcParams.Receive.SenderClientId);
+
+    /// <summary>On the host (or here, not connected): puts a new figure at this pose, owned by (driven by) the presser.</summary>
+    void PlaceFigure(Pose pose, ulong? driver)
+    {
+        if (m_FigurePrefab == null)
+        {
+            Debug.LogWarning("[Figure] no figure to call up (run Tunnel > Figure > Build Figure)");
+            return;
+        }
+        // Placed before it wakes up, so its network transform starts with this pose.
+        var holder = new GameObject("Figure Holder");
+        holder.SetActive(false);
+        var figure = Instantiate(m_FigurePrefab, holder.transform);
+        figure.transform.SetPositionAndRotation(pose.position, pose.rotation);
+        figure.transform.SetParent(null, true);
+        Destroy(holder);
+        Debug.Log($"[Figure] placed at {pose.position:F2}");
+        if (IsSpawned && driver.HasValue && figure.TryGetComponent(out NetworkObject networkObject))
+            networkObject.SpawnWithOwnership(driver.Value, true);
     }
 
     void OnDeleteChanged(bool previous, bool current) => ShowDeleteMode(current);

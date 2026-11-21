@@ -43,7 +43,7 @@ public class TunnelEraser : NetworkBehaviour
     public static readonly Type[] deletableTypes =
     {
         typeof(MoleculeGravity), typeof(TunnelContainer), typeof(TunnelPalette), typeof(TunnelMarker),
-        typeof(PaintingCopy), typeof(SpawnNozzle), typeof(TunnelSign),
+        typeof(PaintingCopy), typeof(SpawnNozzle), typeof(TunnelSign), typeof(TunnelFigure),
     };
 
     /// <summary>The eraser in the tunnel, if there is one.</summary>

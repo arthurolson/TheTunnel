@@ -76,6 +76,8 @@ public static class TunnelClearAll
                 Add(copy);
         foreach (var nozzle in Object.FindObjectsByType<SpawnNozzle>(FindObjectsSortMode.None))
             Add(nozzle);
+        foreach (var figure in Object.FindObjectsByType<TunnelFigure>(FindObjectsSortMode.None))
+            Add(figure);
         return targets;
     }
 
