@@ -17,7 +17,8 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// changes everything (Clear all, a third segment, another colour, the paint wiped), checks the saved state and
 /// presses Restore twice. Then it compares what's in the tunnel with what was there when it was saved: each thing's
 /// kind and settings, its segment, its pose in that segment and its size; the segments' number, colours and paint.
-/// Saved states go to a folder of the test's own, removed afterwards. Runs from Tunnel > Menu > Test Saved States (in
+/// Saved states go to a folder of the test's own, removed afterwards; sharing them sees an empty repository and no
+/// token, so nothing goes to GitHub (SharedStatesEditorTests checks sharing). Runs from Tunnel > Menu > Test Saved States (in
 /// Play mode, SampleScene; not connected, or with this Editor hosting a session) and logs PASS or FAIL with the tag
 /// [SaveState]; it runs over a few seconds.
 /// </summary>
@@ -92,6 +93,12 @@ static class SaveStateEditorTests
         if (Directory.Exists(folder))
             Directory.Delete(folder, true);
         TunnelStateStore.folder = folder;
+        var previousSend = TunnelSharedStates.send;
+        string previousToken = TunnelSharedStates.tokenOverride;
+        TunnelSharedStates.send = (method, url, data, token) =>
+            System.Threading.Tasks.Task.FromResult(new TunnelSharedStates.Reply { code = 404, text = "{\"message\":\"Not Found\"}" });
+        TunnelSharedStates.tokenOverride = "";
+        TunnelSharedStates.ResetForTests();
         IEnumerator body = Body(report, Check);
         while (true)
         {
@@ -110,6 +117,9 @@ static class SaveStateEditorTests
             yield return body.Current;
         }
         TunnelStateStore.folder = previousFolder;
+        TunnelSharedStates.send = previousSend;
+        TunnelSharedStates.tokenOverride = previousToken;
+        TunnelSharedStates.ResetForTests();
         try { Directory.Delete(folder, true); } catch { }
         report.Insert(0, failures == 0 ? "PASS " : $"FAIL ({failures}) ");
         lastReport = report.ToString();
@@ -319,15 +329,19 @@ static class SaveStateEditorTests
         var saved = Describe(out string savedSegments);
         menu.ShowList(true);
         Field<Button>(menu, "m_SaveButton").onClick.Invoke();
-        var names = TunnelStateStore.Names();
-        Check(names.Count == 1 && names[0] == "State 1", $"Save now kept State 1 ({string.Join(", ", names)})");
-        var state = TunnelStateStore.Load("State 1");
+        var ids = TunnelStateStore.Ids();
+        Check(ids.Count == 1 && TunnelStateStore.Name(ids[0]) == "State 1", $"Save now kept State 1 ({string.Join(", ", ids)})");
+        string firstId = ids.FirstOrDefault();
+        var state = TunnelStateStore.Load(firstId);
         Check(state != null && state.segments.Count == 2, $"State 1 reads back: {state?.Summary()}");
         Check(state != null && state.segments[1].paint.ops.Count >= 2 && state.containers.Any(c => c.state.molecules.Count == 2),
             "it holds the paint and the box's two molecules");
-        Check(menu.saved.Count == 1 && menu.saved[0].info.Contains("2 segments"), $"the list shows it: \"{menu.saved.FirstOrDefault().info}\"");
+        Check(menu.saved.Count == 1 && menu.saved[0].info.Contains("2 segments") && menu.saved[0].local,
+            $"the list shows it, not uploaded (no token): \"{menu.saved.FirstOrDefault().info}\"");
         Field<Button>(menu, "m_SaveButton").onClick.Invoke();
-        Check(TunnelStateStore.Names().Count == 2 && TunnelStateStore.Names()[1] == "State 2", "saving again keeps State 2 beside it");
+        ids = TunnelStateStore.Ids();
+        Check(ids.Count == 2 && TunnelStateStore.Name(ids[1]) == "State 2", "saving again keeps State 2 beside it");
+        string secondId = ids.LastOrDefault();
 
         // Change everything.
         TunnelClearAll.Clear();
@@ -339,7 +353,7 @@ static class SaveStateEditorTests
         Check(TunnelSaveState.Segments().Count == 3, "changed: a third segment added, everything cleared, the colour and paint changed");
 
         // Restore State 1 (pressed twice).
-        menu.CheckSaved("State 1");
+        menu.CheckSaved(firstId);
         var restore = Field<Button>(menu, "m_RestoreButton");
         restore.onClick.Invoke();
         Check(!TunnelSaveState.busy, "a first press of Restore only asks for a second");
@@ -386,9 +400,11 @@ static class SaveStateEditorTests
             report.AppendLine($"        {thing}");
 
         // Delete.
-        menu.CheckSaved("State 2");
+        menu.CheckSaved(secondId);
         Field<Button>(menu, "m_DeleteButton").onClick.Invoke();
-        Check(TunnelStateStore.Names().SequenceEqual(new[] { "State 1" }), "Delete removed State 2 from the list");
+        for (int i = 0; i < 3; i++)
+            yield return null;
+        Check(TunnelStateStore.Ids().SequenceEqual(new[] { firstId }), "Delete removed State 2 from the list");
         menu.ShowList(false);
     }
 

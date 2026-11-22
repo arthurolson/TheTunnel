@@ -68,7 +68,11 @@ static class SaveStateBuilder
             status.sizeDelta = new Vector2(500f, 64f);
             var statusText = status.GetComponent<TMP_Text>();
             statusText.fontSize = 18f;
+            statusText.enableAutoSizing = true; // a message and the line on how sharing stands
+            statusText.fontSizeMin = 12f;
+            statusText.fontSizeMax = 18f;
             statusText.textWrappingMode = TextWrappingModes.Normal;
+            statusText.overflowMode = TextOverflowModes.Truncate;
 
             var save = Row(rowSource.gameObject, listRect, "Save Now Button", "Save now", new Vector2(0f, 155f), new Vector2(460f, 56f), true);
             save.GetComponentInChildren<TMP_Text>(true).fontStyle = FontStyles.Bold;

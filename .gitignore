@@ -67,3 +67,6 @@ crashlytics-build.properties
 /Assets/Molecules/viral capsids/SARS/*.glb
 /Assets/Molecules/assemblies/E. coli 50S ribosome/Source~/10QM-gaussian.glb
 /Assets/Molecules/assemblies/Hi-res Ribosome/10QM-gaussian.glb
+
+# ---- A GitHub token for uploading saved states lives only on a headset (github-token.txt), never here ----
+github-token.txt

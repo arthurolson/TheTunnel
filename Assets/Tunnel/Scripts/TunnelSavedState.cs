@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using UnityEngine;
 
 /// <summary>
@@ -19,6 +20,8 @@ using UnityEngine;
 public class TunnelSavedState
 {
     public int format = 1;
+    [Tooltip("When it was saved (UTC) and three random letters, such as 20261122-140531-k7q: its file name, here and in the asset repository.")]
+    public string id;
     public string name;
     public string saved;
     public string savedFrom; // the app's version
@@ -42,6 +45,45 @@ public class TunnelSavedState
     /// <summary>How many things it holds, counting the molecules inside containers.</summary>
     public int thingCount => molecules.Count + containers.Sum(c => 1 + (c.state?.molecules.Count ?? 0)) + panels.Count + signs.Count
         + palettes.Count + paintingCopies.Count + figures.Count + nozzles.Count;
+
+    static readonly string[] k_SecretParameters =
+    {
+        "token", "access_token", "id_token", "refresh_token", "auth", "authorization", "key", "apikey", "api_key", "sig",
+        "signature", "password", "pass", "pwd", "secret", "session", "sessionid", "sid", "code", "ticket",
+        "x-amz-signature", "x-amz-credential", "x-amz-security-token", "x-goog-signature", "x-goog-credential",
+    };
+
+    /// <summary>
+    /// Takes private bits out of the web addresses it holds (a browser's page, a Viewer's URL), as a shared state is
+    /// public: a user name and password in the address, and query parameters such as token, key, sig or session.
+    /// </summary>
+    public void Scrub()
+    {
+        foreach (var panel in panels)
+        {
+            panel.url = ScrubUrl(panel.url);
+            if (panel.mediaIsUrl)
+                panel.mediaSource = ScrubUrl(panel.mediaSource);
+        }
+    }
+
+    /// <summary>The address without a user name or password, or query parameters that look like keys.</summary>
+    public static string ScrubUrl(string url)
+    {
+        if (string.IsNullOrEmpty(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri) || (uri.Scheme != "http" && uri.Scheme != "https"))
+            return url;
+        bool userInfo = !string.IsNullOrEmpty(uri.UserInfo);
+        var parameters = uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries);
+        var kept = parameters.Where(p =>
+        {
+            string key = Uri.UnescapeDataString(p.Split('=')[0]).ToLowerInvariant();
+            return !k_SecretParameters.Contains(key);
+        }).ToArray();
+        if (!userInfo && kept.Length == parameters.Length)
+            return url;
+        var builder = new UriBuilder(uri) { UserName = "", Password = "", Query = string.Join("&", kept) };
+        return builder.Uri.AbsoluteUri;
+    }
 
     /// <summary>A short description for the list: "2 segments · 14 things · paint".</summary>
     public string Summary()
@@ -166,37 +208,57 @@ public class PlacedNozzle
 }
 
 /// <summary>
-/// The saved states kept on this headset (on the host in a session): one file per state in the app's own storage
-/// (Saved States/&lt;name&gt;.json under Application.persistentDataPath, beside a small &lt;name&gt;.txt with its date
-/// and summary for the list), so they are still there after the app restarts. Only the host reads and writes them;
-/// the other players see the host's list.
+/// The saved states made on this headset (on the host in a session) that aren't shared yet: one file per state in the
+/// app's own storage (Saved States/&lt;id&gt;.json under Application.persistentDataPath, beside a small &lt;id&gt;.txt with
+/// its name, date and summary for the list), so they are still there after the app restarts. Once
+/// <see cref="TunnelSharedStates"/> has put one in the asset repository for every headset, it moves out of here into
+/// the copy of the shared saves kept on the headset. A state's id is when it was saved (UTC) and three random letters,
+/// such as 20261122-140531-k7q, so two headsets never make the same file; its name, State 1, State 2..., is what the
+/// list shows.
 /// </summary>
 public static class TunnelStateStore
 {
     const string k_Prefix = "State ";
+    static readonly Regex k_Id = new(@"^\d{8}-\d{6}-[a-z0-9]{3}$");
+    static readonly System.Random s_Random = new();
+    static string s_Migrated;
 
     /// <summary>Fires on this headset after a state is saved or deleted here.</summary>
     public static event Action changed;
 
-    /// <summary>The folder (changed only by the Editor test, which works in a folder of its own).</summary>
+    /// <summary>The folder (changed only by the Editor tests, which work in a folder of their own).</summary>
     public static string folder { get; set; } = null;
 
-    static string Folder => folder ?? Path.Combine(Application.persistentDataPath, "Saved States");
+    public static string Folder => folder ?? Path.Combine(Application.persistentDataPath, "Saved States");
 
-    static string PathOf(string name) => Path.Combine(Folder, name + ".json");
+    public static string PathOf(string id) => Path.Combine(Folder, id + ".json");
 
-    static string InfoPathOf(string name) => Path.Combine(Folder, name + ".txt");
+    public static string InfoPathOf(string id) => Path.Combine(Folder, id + ".txt");
 
-    /// <summary>The saved states' names, oldest first.</summary>
-    public static List<string> Names()
+    /// <summary>True for a state's id (20261122-140531-k7q).</summary>
+    public static bool IsId(string id) => !string.IsNullOrEmpty(id) && k_Id.IsMatch(id);
+
+    /// <summary>A new id for a state saved at this time (UTC).</summary>
+    public static string NewId(DateTime utc)
+    {
+        const string letters = "abcdefghijkmnpqrstuvwxyz23456789";
+        var tail = new char[3];
+        lock (s_Random)
+            for (int i = 0; i < tail.Length; i++)
+                tail[i] = letters[s_Random.Next(letters.Length)];
+        return utc.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + new string(tail);
+    }
+
+    /// <summary>The ids of the states saved here and not shared yet, oldest first.</summary>
+    public static List<string> Ids()
     {
         try
         {
             if (!Directory.Exists(Folder))
                 return new List<string>();
-            return Directory.GetFiles(Folder, "*.json")
-                .OrderBy(File.GetLastWriteTimeUtc)
-                .Select(Path.GetFileNameWithoutExtension).ToList();
+            Migrate();
+            return Directory.GetFiles(Folder, "*.json").Select(Path.GetFileNameWithoutExtension).Where(IsId)
+                .OrderBy(id => id, StringComparer.Ordinal).ToList();
         }
         catch (Exception e)
         {
@@ -205,61 +267,112 @@ public static class TunnelStateStore
         }
     }
 
-    /// <summary>A saved state's date and summary for the list ("21 Nov 14:05 · 2 segments · 14 things"), or "".</summary>
-    public static string Info(string name)
+    // States saved by 22.11.2026.1 were named files (State 1.json): they get an id from when they were written, and
+    // keep their name.
+    static void Migrate()
     {
-        try
+        if (s_Migrated == Folder)
+            return;
+        s_Migrated = Folder;
+        foreach (var path in Directory.GetFiles(Folder, "*.json"))
         {
-            string path = InfoPathOf(Clean(name));
-            return File.Exists(path) ? File.ReadAllText(path).Trim() : "";
-        }
-        catch (Exception)
-        {
-            return "";
+            string stem = Path.GetFileNameWithoutExtension(path);
+            if (IsId(stem))
+                continue;
+            try
+            {
+                var state = JsonUtility.FromJson<TunnelSavedState>(File.ReadAllText(path));
+                if (state == null)
+                    continue;
+                state.id = NewId(File.GetLastWriteTimeUtc(path));
+                if (string.IsNullOrEmpty(state.name))
+                    state.name = stem;
+                Write(state);
+                File.Delete(path);
+                string oldInfo = Path.Combine(Folder, stem + ".txt");
+                if (File.Exists(oldInfo))
+                    File.Delete(oldInfo);
+                Debug.Log($"[SaveState] \"{state.name}\" from an earlier version is now {state.id}");
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[SaveState] couldn't bring \"{stem}\" from an earlier version: {e.Message}");
+            }
         }
     }
 
-    public static bool Exists(string name) => !string.IsNullOrEmpty(name) && File.Exists(PathOf(Clean(name)));
+    /// <summary>The two lines of a state's .txt: its name, then its date and summary ("21 Nov 14:05 · 2 segments · 14 things").</summary>
+    public static string InfoText(TunnelSavedState state)
+    {
+        var when = DateTime.TryParse(state.saved, CultureInfo.InvariantCulture, DateTimeStyles.None, out var t) ? t : DateTime.Now;
+        return $"{state.name}\n{when.ToString("d MMM HH:mm", CultureInfo.InvariantCulture)} · {state.Summary()}";
+    }
 
-    /// <summary>A name usable as a file name (at most 40 characters; "State" if nothing is left).</summary>
+    /// <summary>A .txt's name and info (its first line, if it only has one, is the info).</summary>
+    public static (string name, string info) ParseInfo(string text, string id)
+    {
+        var lines = (text ?? "").Replace("\r", "").Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToArray();
+        return lines.Length >= 2 ? (lines[0], lines[1]) : (id, lines.Length == 1 ? lines[0] : "");
+    }
+
+    static (string name, string info) Read(string id)
+    {
+        try
+        {
+            string path = InfoPathOf(id);
+            return ParseInfo(File.Exists(path) ? File.ReadAllText(path) : "", id);
+        }
+        catch (Exception)
+        {
+            return (id, "");
+        }
+    }
+
+    /// <summary>A state's name as the list shows it (State 3), or its id if it has none.</summary>
+    public static string Name(string id) => Read(id).name;
+
+    /// <summary>A state's date and summary for the list ("21 Nov 14:05 · 2 segments · 14 things"), or "".</summary>
+    public static string Info(string id) => Read(id).info;
+
+    public static bool Exists(string id) => IsId(id) && File.Exists(PathOf(id));
+
+    /// <summary>The next number not yet used among these names: State 1, State 2, ... (one more than the highest).</summary>
+    public static string NextName(IEnumerable<string> namesInUse)
+    {
+        int highest = 0;
+        foreach (var name in namesInUse)
+            if (name != null && name.StartsWith(k_Prefix, StringComparison.Ordinal) && int.TryParse(name.Substring(k_Prefix.Length), out int n))
+                highest = Mathf.Max(highest, n);
+        return k_Prefix + (highest + 1);
+    }
+
+    /// <summary>A name for the list: one line, at most 40 characters ("State" if nothing is left).</summary>
     public static string Clean(string name)
     {
-        name = (name ?? "").Replace("\n", " ").Replace("\r", " ").Trim();
-        foreach (char c in Path.GetInvalidFileNameChars())
-            name = name.Replace(c, ' ');
-        foreach (char c in "/\\:*?\"<>|")
-            name = name.Replace(c, ' ');
+        name = (name ?? "").Replace("\n", " ").Replace("\r", " ").Replace("\t", " ").Trim();
         while (name.Contains("  "))
             name = name.Replace("  ", " ");
-        name = name.Trim().TrimEnd('.');
         if (name.Length > 40)
             name = name.Substring(0, 40).Trim();
         return name.Length == 0 ? "State" : name;
     }
 
-    /// <summary>The next number not yet used: State 1, State 2, ... (one more than the highest kept).</summary>
-    public static string NextName()
-    {
-        int highest = 0;
-        foreach (var name in Names())
-            if (name.StartsWith(k_Prefix, StringComparison.Ordinal) && int.TryParse(name.Substring(k_Prefix.Length), out int n))
-                highest = Mathf.Max(highest, n);
-        return k_Prefix + (highest + 1);
-    }
-
-    /// <summary>Writes a state under its name (replacing one of that name), with its date and summary. True if written.</summary>
+    /// <summary>
+    /// Writes a new state here, with its name, date and summary, under a new id (kept in it). Private bits of web
+    /// addresses are taken out first, as a shared state is public (<see cref="TunnelSavedState.Scrub"/>). True if written.
+    /// </summary>
     public static bool Save(TunnelSavedState state)
     {
         if (state == null)
             return false;
         state.name = Clean(state.name);
+        if (!IsId(state.id))
+            state.id = NewId(DateTime.UtcNow);
+        state.Scrub();
         try
         {
-            Directory.CreateDirectory(Folder);
-            File.WriteAllText(PathOf(state.name), JsonUtility.ToJson(state));
-            var when = DateTime.TryParse(state.saved, CultureInfo.InvariantCulture, DateTimeStyles.None, out var t) ? t : DateTime.Now;
-            File.WriteAllText(InfoPathOf(state.name), $"{when.ToString("d MMM HH:mm", CultureInfo.InvariantCulture)} · {state.Summary()}");
-            Debug.Log($"[SaveState] saved \"{state.name}\" ({state.Summary()}) to {PathOf(state.name)}");
+            Write(state);
+            Debug.Log($"[SaveState] saved \"{state.name}\" ({state.Summary()}) as {PathOf(state.id)}");
         }
         catch (Exception e)
         {
@@ -270,43 +383,57 @@ public static class TunnelStateStore
         return true;
     }
 
-    /// <summary>A saved state, or null if there's none of that name (or it can't be read).</summary>
-    public static TunnelSavedState Load(string name)
+    static void Write(TunnelSavedState state)
     {
-        if (!Exists(name))
-            return null;
+        Directory.CreateDirectory(Folder);
+        File.WriteAllText(PathOf(state.id), JsonUtility.ToJson(state));
+        File.WriteAllText(InfoPathOf(state.id), InfoText(state));
+    }
+
+    /// <summary>A state saved here, or null if there's none with that id (or it can't be read).</summary>
+    public static TunnelSavedState Load(string id) => Exists(id) ? Parse(File.ReadAllText(PathOf(id)), id) : null;
+
+    /// <summary>A state from its file's text, or null if it can't be read.</summary>
+    public static TunnelSavedState Parse(string json, string id)
+    {
         try
         {
-            var state = JsonUtility.FromJson<TunnelSavedState>(File.ReadAllText(PathOf(Clean(name))));
+            var state = JsonUtility.FromJson<TunnelSavedState>(json);
             if (state != null)
-                state.name = Clean(name);
+            {
+                state.id = id;
+                state.name = Clean(string.IsNullOrEmpty(state.name) ? id : state.name);
+            }
             return state;
         }
         catch (Exception e)
         {
-            Debug.LogWarning($"[SaveState] couldn't read the saved state \"{name}\": {e.Message}");
+            Debug.LogWarning($"[SaveState] couldn't read the saved state {id}: {e.Message}");
             return null;
         }
     }
 
-    /// <summary>Removes a saved state. True if there was one.</summary>
-    public static bool Delete(string name)
+    /// <summary>Removes a state saved here. True if there was one.</summary>
+    public static bool Delete(string id)
     {
-        if (!Exists(name))
+        if (!Exists(id))
             return false;
         try
         {
-            File.Delete(PathOf(Clean(name)));
-            if (File.Exists(InfoPathOf(Clean(name))))
-                File.Delete(InfoPathOf(Clean(name)));
-            Debug.Log($"[SaveState] deleted the saved state \"{name}\"");
+            File.Delete(PathOf(id));
+            if (File.Exists(InfoPathOf(id)))
+                File.Delete(InfoPathOf(id));
+            Debug.Log($"[SaveState] deleted the saved state {id}");
         }
         catch (Exception e)
         {
-            Debug.LogWarning($"[SaveState] couldn't delete the saved state \"{name}\": {e.Message}");
+            Debug.LogWarning($"[SaveState] couldn't delete the saved state {id}: {e.Message}");
             return false;
         }
         changed?.Invoke();
         return true;
     }
+
+    /// <summary>Tells the lists that states moved out of here (shared now).</summary>
+    public static void NotifyChanged() => changed?.Invoke();
 }
