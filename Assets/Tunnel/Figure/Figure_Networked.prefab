@@ -370,8 +370,8 @@ SkinnedMeshRenderer:
   m_BlendShapeWeights: []
   m_RootBone: {fileID: 8760353684430307602}
   m_AABB:
-    m_Center: {x: -0.023139149, y: 0.017865792, z: -0.82147443}
-    m_Extent: {x: 0.67038715, y: 0.24787067, z: 0.8863262}
+    m_Center: {x: -0.023139149, y: 0.017865792, z: -0.81859905}
+    m_Extent: {x: 0.67038715, y: 0.24787067, z: 0.8834508}
   m_DirtyAABB: 0
 --- !u!1 &2854648464076124896
 GameObject:
@@ -457,9 +457,9 @@ CapsuleCollider:
   m_Enabled: 1
   serializedVersion: 2
   m_Radius: 0.3135215
-  m_Height: 1.7015381
+  m_Height: 1.6953449
   m_Direction: 1
-  m_Center: {x: 0, y: 0.85076904, z: 0}
+  m_Center: {x: 0, y: 0.84767246, z: 0}
 --- !u!1 &4009769957361349737
 GameObject:
   m_ObjectHideFlags: 0
@@ -775,7 +775,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0.1562, y: 0.0233, z: -0.0007}
-  m_LocalScale: {x: 0.17631108, y: 0.17631108, z: 0.17631108}
+  m_LocalScale: {x: 0.17695515, y: 0.17695515, z: 0.17695515}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 8088287686302352136}
@@ -1105,7 +1105,7 @@ MonoBehaviour:
   m_JumpHeight: 0.3
   m_TurnSpeed: 540
   m_StepHeight: 0.25
-  m_BaseHeight: 1.7015381
+  m_BaseHeight: 1.6953449
   m_DeadZone: 0.15
 --- !u!1 &6603810250990496511
 GameObject:
