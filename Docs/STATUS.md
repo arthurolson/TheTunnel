@@ -113,6 +113,43 @@ What has been built, what is in progress, and where each build is. Updated as wo
   test: Tunnel > Signage > Test Signage (in Play mode). Log tag [Sign].
 - The TS Menu's Align to QR status line sits under the menu panel again (it had overlapped the bottom buttons).
 
+### Saved states
+- TS Menu > Saved states (under New figure) opens a list beside the menu. Save now keeps everything set up in every
+  segment as a numbered state (State 1, State 2, ...), listed newest first with when it was saved and what it holds
+  ("22 Nov 10:23 · 2 segments · 14 things · paint"). Tap one, then Restore, pressed twice within 4 s, puts it back for
+  everyone, replacing what's in the tunnel now (on the walls too, unlike Clear all). Delete removes the checked one.
+- Kept on the host in files/Saved States/<name>.json (with a small <name>.txt for the list), so states survive
+  restarts. In a session everyone sees the host's list; Save, Restore and Delete from any headset are done by the
+  host, and what it puts back is spawned for everyone. Not connected, it works locally.
+- What a state holds:
+  - the number of segments: Restore adds them at the tunnel's end or removes them from it;
+  - each segment's colour, wall texture and wall paint (replayed stroke by stroke);
+  - molecules (built-in and from the asset repository): size, frozen or parked, motion;
+  - boxes, spheres and splat-boxes: size, mixed reality and which face is the front (a box set into a wall opens
+    the wall again), viscosity, heat and motion, the movie chosen (kept whole, so a movie someone made comes back
+    even if it was deleted), its binding time, sites' size and capture radius, whether its controls show, and the
+    molecules inside, in the container's frame (the 3D movie's starting-state format, MovieSnapshot, reused and
+    extended with repository ids, Freeze and the front face);
+  - Viewers (what they show, content only, video loop, time and pause) and browsers (page, content only), with
+    their size and whether they hang on a wall or stand free;
+  - signs (text, style, size), palettes with their markers, painting copies with their marks, New figures and their
+    size, and the spawn nozzle with its Copies setting and the molecule on its cup;
+  - the Molecules list's magnification.
+- Poses are kept in the frame of the segment each thing is in, counted along the tunnel from its first segment, so a
+  state comes back in the same place in the tunnel even if the tunnel stands somewhere else in the room.
+- Code: TunnelSavedState (the data and the store), TunnelSaveState (save and restore, on the host), TunnelSaveStateMenu
+  (the list). Built by Tunnel > Menu > Add Saved States (run it again after Build Figure, Build Signage or Build Spawn
+  Nozzle so it has their latest prefabs). Log tag [SaveState].
+- Editor test: Tunnel > Menu > Test Saved States (in Play mode in SampleScene). It sets up 14 things in two segments
+  plus paint and a segment colour, saves through the list, then clears all, adds a third segment and changes the
+  colour and paint, restores through the list and compares. It passes not connected and with the Editor hosting a
+  session (22.11.2026): 14 of 14 things in the same segment, within 2 mm and 1°, the same size and settings;
+  segments, colours and paint as saved.
+- Not kept: anything bound or playing in a 3D movie (a state comes back with the movie chosen but not started, and
+  bound antibodies or ligands come back free where they were); a palette's colours, mode and the marker's size; the
+  New movie menu and the movie panel's place; each molecule kind's Freeze checkbox in the Molecules list; gravity;
+  the eraser; a browser's scroll position and history; Space Setup and where the tunnel stands in the room.
+
 ### Containers
 - Box and sphere containers. A box has quarter-inch rod edges, and a Collider check box sets whether its walls hold
   molecules in.
@@ -304,6 +341,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
 | Molecule categories, EGFR, EGFR ligand, Ligand binding | 15.11.2026.1 on a headset: the user saw no binding (no log). Fixed after it (capture sphere on the pocket's mouth, Start warms a container with no heat, a movie can be changed after it has played); Editor runs now bind within seconds at x10–x20 with the default 10 Å. Next: headset (Ligand binding at x10 and x20 with ~15 ligands: a binding within half a minute, the glide down the channel, Cys775, the light blue; the [Movie] reports in adb logcat; grabbing EGFR at x1 and the ligand's 2 cm grab collider; frame rate with many 42k-triangle ligands on Quest 3S) and two players (movie choice, capture radius, bindings, colour and Cys775 the same for both; late joiner). |
 | Magnification x20, New movie menu, movies as data | Built and passing their Editor tests, not connected (15.11.2026.2, runs on both Quest 3s). 15.11.2026.3: each movie has its own magnification (Ligand binding x20, Antibody action x1), choosing one sets the Molecules list to it, and Match size; passing their Editor tests, not yet launch-tested. Next: headset (choosing Ligand binding turning the list to x20; the yellow size note and Match size on molecules placed at another size; the Magnification slider's stops by ray and poke; molecules at x20, about 25 cm for EGFR; New movie... and the New movie menu: its place beside the movie menu, the keyboard for the name, ◄ ►, the swatches, Create filling the box, Delete's second tap; the picker stopping a playing movie) and two players (a client creating and deleting a movie, the list the same for both, the host keeping it after a restart; late joiner). |
 | New figure (a little person on the left stick) | 21.11.2026.1 on a Quest 3: looks right in passthrough. Since then the face is a high-resolution face scan of the same person (24k triangles, its own 2048 texture FigureFace.png), set into the front of the head and weighted to the head and neck bones; the old face is pushed behind it and the front of the neck slimmed so the collar stays clear in walk, run and jump poses (Editor renders). 21.11.2026.3 on the Quest 3: the face looked bigger than the head behind it, like a mask. Since then the old head above the neck is replaced by a smooth new skull as wide as the face (its own 512 texture FigureSkull.png, painted from the scan's skin and hair colours, fading to grainy grey-brown hair), and the figure wears black-rimmed semi-round glasses (their own black material Glasses, on the head bone). 21.11.2026.4 on the Quest 3: the glasses sat too high. Since then they are 13 mm lower with the bridge on the nose and tilted 10° so the arms rise to ear height, and the arms are new straight tubes that bend down behind the ears; 21.11.2026.5 on the Quest 3: the glasses look right. A 3D model of a real person made from a phone video with open-source tools only (COLMAP camera poses, carving from the person's outlines, MediaPipe for the joints; work files and scripts in ~/tunnel/figure-work and ~/tunnel/rig-tools, outside the repo), rigged in Blender to Quaternius's CC0 animation skeleton and exported to Assets/Tunnel/Figure/Model. Tunnel > Figure > Build Figure makes the 30 cm prefab, its animator (idle, walk, jog, sprint, jump, fall, land) and the TS Menu's New figure button under Clear all. Editor test, not connected: New figure in SampleScene puts the figure in front of the presser; it walks, runs, jumps, lands and steps up a 4 cm ledge, with its feet on the ground. Rough edges: the right foot hangs a little higher than the left, and there's a dark band at the waist. Next: headset (stick and X on a real controller, walking on Space Setup floors and tables, picking up and two-hand scaling, frame rate with 55k triangles on Quest 3S) and two players (the driver's motion and animation seen by the other, ownership moving with a grab, late joiner). |
+| Saved states | Built and passing its Editor test, not connected and with the Editor as host (22.11.2026); not yet built. Next: headset (the list by ray and poke, Save now and Restore with a few dozen things, how long a restore with a lot of paint takes on Quest 3S) and two players (a client saving and restoring through the host, everything appearing for both, a late joiner, a restore after the app restarts). |
 | Grab diagnostics | Every grab and release is logged (since 08.11.2026.1), to track down grabs that don't take. Still on. |
 
 ## Builds and headsets

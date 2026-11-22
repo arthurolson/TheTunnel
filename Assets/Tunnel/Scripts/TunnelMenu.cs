@@ -10,9 +10,9 @@ using XRMultiplayer;
 
 /// <summary>
 /// The Tunnel Segment's "TS Menu" button: opens and closes the panel holding the segment's buttons
-/// (Colors, Textures, Molecules, Containers, Signage, Delete, Clear all, New figure, New Browser, New Viewer, Add Segment, Remove
-/// Segment, Align to QR). The colour chooser, the texture list, the molecule list, the container list and the signage list open
-/// beside it, one at a time; closing the menu also closes them. Everyone sees
+/// (Colors, Textures, Molecules, Containers, Signage, Delete, Clear all, New figure, Saved states, New Browser, New Viewer, Add
+/// Segment, Remove Segment, Align to QR). The colour chooser, the texture list, the molecule list, the container list, the signage
+/// list and the saved states list open beside it, one at a time; closing the menu also closes them. Everyone sees
 /// the same menu: whoever presses a button opens or closes it for all players (the colour chooser shares itself the
 /// same way). Works locally when not connected.
 /// Delete is one switch for everyone, like the rest of the menu: turning it on (the label reads Delete: ON in red)
@@ -23,6 +23,8 @@ using XRMultiplayer;
 /// <see cref="TunnelFigure"/>).
 /// Clear all, pressed twice within a few seconds (the first press asks "press again"), takes away for everyone
 /// everything placed in the tunnel that isn't on a tunnel wall (see <see cref="TunnelClearAll"/>).
+/// Saved states opens the list that saves everything set up in every segment and brings a saved setup back for
+/// everyone (see <see cref="TunnelSaveStateMenu"/>).
 /// </summary>
 public class TunnelMenu : NetworkBehaviour
 {
@@ -33,6 +35,7 @@ public class TunnelMenu : NetworkBehaviour
         Molecules,
         Containers,
         Signage,
+        SavedStates,
     }
 
     [SerializeField]
@@ -111,6 +114,15 @@ public class TunnelMenu : NetworkBehaviour
     float m_FigureDistance = 0.6f;
 
     [SerializeField]
+    Button m_SavedStatesButton;
+
+    [SerializeField]
+    TMP_Text m_SavedStatesLabel;
+
+    [SerializeField]
+    TunnelSaveStateMenu m_SavedStates;
+
+    [SerializeField]
     TunnelSegmentAppearance m_Appearance;
 
     [SerializeField]
@@ -172,6 +184,8 @@ public class TunnelMenu : NetworkBehaviour
             m_ClearAllButton.onClick.AddListener(OnClearAllPressed);
         if (m_NewFigureButton != null)
             m_NewFigureButton.onClick.AddListener(OnNewFigurePressed);
+        if (m_SavedStatesButton != null)
+            m_SavedStatesButton.onClick.AddListener(() => ToggleSidePanel(SidePanel.SavedStates));
         // The appearance component toggles the chooser itself; just keep the lists out of its way.
         if (m_ColorsButton != null)
             m_ColorsButton.onClick.AddListener(() => SetState(isOpen, SidePanel.None));
@@ -543,6 +557,15 @@ public class TunnelMenu : NetworkBehaviour
         ShowMolecules(side == SidePanel.Molecules);
         ShowContainers(side == SidePanel.Containers);
         ShowSignage(side == SidePanel.Signage);
+        ShowSavedStates(side == SidePanel.SavedStates);
+    }
+
+    void ShowSavedStates(bool show)
+    {
+        if (m_SavedStates != null)
+            m_SavedStates.ShowList(show);
+        if (m_SavedStatesLabel != null)
+            m_SavedStatesLabel.text = show ? "Hide Saved states" : "Saved states";
     }
 
     void ShowSignage(bool show)

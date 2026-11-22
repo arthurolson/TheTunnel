@@ -102,10 +102,16 @@ public class TunnelSegmentActions : NetworkBehaviour
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     void AddSegmentRpc() => SpawnSegment();
 
-    void SpawnSegment()
+    /// <summary>
+    /// Server (or offline): adds a segment at the far end of this segment's tunnel, as Add Segment does, and returns
+    /// it (null if it couldn't). Used when a saved state with more segments is put back.
+    /// </summary>
+    public GameObject AddSegmentAtEnd() => SpawnSegment();
+
+    GameObject SpawnSegment()
     {
         if (m_Prefabs == null || m_Prefabs.tunnelSegment == null || m_Geometry == null)
-            return;
+            return null;
 
         // The new segment's near end meets the far end of the tunnel's last segment.
         var tail = m_Link != null ? m_Link.Tail() : null;
@@ -122,6 +128,7 @@ public class TunnelSegmentActions : NetworkBehaviour
             link.LinkTo(tail);
         if (m_Texture != null && !string.IsNullOrEmpty(m_Texture.textureName) && segment.TryGetComponent<TunnelSegmentTexture>(out var texture))
             texture.SetTexture(m_Texture.textureName);
+        return segment;
     }
 
     #endregion

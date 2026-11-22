@@ -1384,6 +1384,7 @@ public class TunnelMovie : NetworkBehaviour
         c.temperatureSetting = m_Container.temperature;
         c.temperatureCelsius = TunnelContainer.Kelvin(m_Container.temperature) - 273.15f;
         c.motion = m_Container.motion.ToString();
+        c.frontFace = m_Container.frontFace;
 
         foreach (var molecule in MoleculeGravity.all)
         {
@@ -1403,6 +1404,8 @@ public class TunnelMovie : NetworkBehaviour
                 spin = body.isKinematic ? Vector3.zero : inverse * body.angularVelocity,
                 parked = molecule.isParked,
                 antibodiesBound = molecule.TryGetComponent(out CapsidSites capsid) ? capsid.bindingCount : 0,
+                assetId = molecule.TryGetComponent(out RepositoryMolecule repository) ? repository.assetId : "",
+                frozen = molecule.isFrozen,
             });
         }
         return snapshot;
@@ -1490,6 +1493,8 @@ public class ContainerState
     public float temperatureSetting;
     public float temperatureCelsius;
     public string motion;
+    [Tooltip("Which face of a mixed reality box is its open front (-1 in older states: not kept).")]
+    public int frontFace = -1;
 }
 
 [Serializable]
@@ -1503,4 +1508,8 @@ public class MoleculeState
     public Vector3 spin;
     public bool parked;
     public int antibodiesBound;
+    [Tooltip("For a molecule from the asset repository, its asset id (empty for one built into the app).")]
+    public string assetId;
+    [Tooltip("Frozen where it was put (the Molecules list's Freeze); false in older states.")]
+    public bool frozen;
 }

@@ -178,6 +178,25 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
         /// <summary>Width over height of the screen.</summary>
         public float aspect => m_Aspect;
 
+        /// <summary>The screen's width (meters).</summary>
+        public float width => m_Width;
+
+        bool m_PresetFree;
+
+        /// <summary>
+        /// Sets up a panel before it appears (a saved state being put back): its screen's width and shape, and whether
+        /// it stands free (unsnapped) or hangs on the nearest wall where it is put.
+        /// </summary>
+        public void Preset(float width, float aspect, bool free)
+        {
+            if (aspect > 0f)
+                m_Aspect = Mathf.Clamp(aspect, k_MinAspect, k_MaxAspect);
+            if (width > 0f)
+                m_Width = ClampWidth(width);
+            m_Free = free;
+            m_PresetFree = free;
+        }
+
         /// <summary>Unsnapped from the tunnel: the panel stays where it is let go (see <see cref="SetFree"/>).</summary>
         public bool isFree => m_Free;
 
@@ -240,6 +259,8 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
                 m_NetWidth.Value = m_Width;
             if (IsServer && m_NetAspect.Value < 0f)
                 m_NetAspect.Value = m_Aspect;
+            if (IsServer && m_PresetFree)
+                m_NetFree.Value = true;
 
             ApplyNetSize();
             ApplyNetOffsets();

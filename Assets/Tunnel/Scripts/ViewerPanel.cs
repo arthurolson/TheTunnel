@@ -338,6 +338,17 @@ public class ViewerPanel : NetworkBehaviour
         Request(urlKind, url, true, string.IsNullOrEmpty(name) ? url : name);
     }
 
+    /// <summary>
+    /// Shows what a saved state had on this Viewer, for everyone: an entry's name or an address, of the kind it was,
+    /// under the title it had (see <see cref="TunnelSavedState"/>).
+    /// </summary>
+    public void OpenSaved(ViewerMediaKind savedKind, string savedSource, bool savedIsUrl, string savedTitle)
+    {
+        if (string.IsNullOrEmpty(savedSource))
+            return;
+        Request(savedKind, savedSource, savedIsUrl, string.IsNullOrEmpty(savedTitle) ? savedSource : savedTitle);
+    }
+
     /// <summary>Empties the screen for everyone (a video stops).</summary>
     public void Clear()
     {

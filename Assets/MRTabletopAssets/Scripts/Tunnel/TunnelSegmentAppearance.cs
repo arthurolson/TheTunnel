@@ -238,6 +238,18 @@ namespace UnityEngine.XR.Templates.MRTTabletopAssets
             ApplyColor(hsva, true);
         }
 
+        /// <summary>
+        /// Server (or offline): gives this segment a colour for everyone (hue, saturation, value and opacity, 0-1 each),
+        /// as when a saved state is put back.
+        /// </summary>
+        public void SetColor(Vector4 hsva)
+        {
+            m_LocalHsva = hsva;
+            ApplyColor(hsva, true);
+            if (IsSpawned && IsServer)
+                m_Hsva.Value = hsva;
+        }
+
         /// <summary>Opens or closes the colour chooser (for everyone, when connected).</summary>
         public void SetChooserOpen(bool open)
         {

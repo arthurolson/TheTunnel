@@ -3,14 +3,14 @@ using UnityEngine;
 /// <summary>
 /// Spaces the TS Menu's buttons in its menu panel, in a fixed order, one every 56 units from the top, and sizes the
 /// panel to hold them (its top stays where it is). Buttons not in the prefab are skipped. Used by the builders that
-/// add buttons (Containers, Delete, Clear all, New figure, Paint, Signage).
+/// add buttons (Containers, Delete, Clear all, New figure, Saved states, Paint, Signage).
 /// </summary>
 static class TunnelMenuLayout
 {
     static readonly string[] k_Order =
     {
         "Colors Button", "Textures Button", "Molecules Button", "Containers Button", "Signage Button", "Paint Button", "Delete Button", "Clear All Button",
-        "New Figure Button",
+        "New Figure Button", "Saved States Button",
         "New Browser Button", "New Viewer Button", "Add Segment Button", "Remove Segment Button", "Align Button",
     };
 

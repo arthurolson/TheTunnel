@@ -304,6 +304,32 @@ public class TunnelContainer : NetworkBehaviour
         base.OnNetworkSpawn();
         m_MixedReality.OnValueChanged += OnMixedRealityChanged;
         m_Front.OnValueChanged += OnFrontChanged;
+        if (IsServer && m_Preset)
+        {
+            m_MixedReality.Value = m_LocalMixedReality;
+            m_Front.Value = (byte)m_LocalFront;
+            m_Viscosity.Value = m_LocalViscosity;
+            m_Temperature.Value = m_LocalTemperature;
+            m_Motion.Value = (byte)m_LocalMotion;
+        }
+        ShowMixedReality();
+    }
+
+    bool m_Preset;
+
+    /// <summary>
+    /// Sets up a container before it appears (a saved state being put back, see <see cref="TunnelSavedState"/>): a
+    /// mixed reality box or not, which face is its open front, and the medium's viscosity, heat and motion. A mixed
+    /// reality box placed exactly against a tunnel wall opens the wall there by itself.
+    /// </summary>
+    public void Preset(bool mixedReality, int front, float viscosity, float temperature, Motion motion)
+    {
+        m_Preset = true;
+        m_LocalMixedReality = mixedReality && isBox;
+        m_LocalFront = front >= 0 && front < 6 ? front : k_DefaultFront;
+        m_LocalViscosity = Mathf.Clamp01(viscosity);
+        m_LocalTemperature = Mathf.Clamp(temperature, 0f, k_MaxTemperature);
+        m_LocalMotion = motion;
         ShowMixedReality();
     }
 

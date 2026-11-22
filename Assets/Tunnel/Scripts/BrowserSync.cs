@@ -67,6 +67,23 @@ public class BrowserSync : NetworkBehaviour
     /// </summary>
     public bool UsedRecently(float seconds) => Time.unscaledTime - m_LastLocalInteraction < seconds;
 
+    /// <summary>
+    /// The page the panel shows: this headset's copy's address, else the driver's last report, else the page it opened
+    /// on (kept in a saved state, see <see cref="TunnelSavedState"/>).
+    /// </summary>
+    public string currentUrl
+    {
+        get
+        {
+            string url = browser != null ? browser.GetUrl() : null;
+            if (!string.IsNullOrEmpty(url))
+                return url;
+            if (IsSpawned && m_Url.Value.Length > 0)
+                return m_Url.Value.ToString();
+            return browser != null ? browser.url : "";
+        }
+    }
+
     /// <summary>Whether the given player is the driver, as the host sees it.</summary>
     public bool IsDriverId(ulong clientId) =>
         m_Driver.Value == clientId || (m_Driver.Value == k_NoDriver && clientId == NetworkManager.ServerClientId);

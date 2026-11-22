@@ -295,6 +295,76 @@ public class TunnelSegmentPaint : NetworkBehaviour
         Debug.Log($"[Paint] copied {stamps} stamps from {name} to {(target != null ? target.name : "nothing")}");
     }
 
+    /// <summary>
+    /// Everything painted here, in order, to keep in a saved state (see <see cref="TunnelSavedState"/>): known on the
+    /// host or when not connected. Empty if nothing was painted.
+    /// </summary>
+    public PaintMarks SaveMarks()
+    {
+        var marks = new PaintMarks();
+        foreach (var (kind, style, packed) in m_History)
+        {
+            if (kind == OpKind.Stamps && (packed == null || packed.Length == 0))
+                continue;
+            var bytes = packed != null ? new byte[packed.Length * 2] : System.Array.Empty<byte>();
+            if (packed != null)
+                System.Buffer.BlockCopy(packed, 0, bytes, 0, bytes.Length);
+            marks.ops.Add(new PaintMarks.Op
+            {
+                endStroke = kind == OpKind.EndStroke,
+                mode = (int)style.mode,
+                color = style.color,
+                diameter = style.diameter,
+                stamps = System.Convert.ToBase64String(bytes),
+            });
+        }
+        return marks;
+    }
+
+    /// <summary>
+    /// Takes every mark off here and paints the saved ones back, in order, for everyone (on the host or when not
+    /// connected), a few thousand stamps a frame so the network keeps up.
+    /// </summary>
+    public System.Collections.IEnumerator RestoreMarks(PaintMarks marks)
+    {
+        Clear();
+        if (marks == null || marks.ops.Count == 0)
+            yield break;
+        yield return null;
+        int stamps = 0, thisFrame = 0;
+        var uvs = new List<Vector2>();
+        foreach (var op in marks.ops)
+        {
+            if (this == null)
+                yield break;
+            if (op.endStroke)
+            {
+                EndStroke();
+                continue;
+            }
+            byte[] bytes;
+            try { bytes = System.Convert.FromBase64String(op.stamps ?? ""); }
+            catch (System.FormatException) { continue; }
+            var packed = new ushort[bytes.Length / 2];
+            System.Buffer.BlockCopy(bytes, 0, packed, 0, packed.Length * 2);
+            uvs.Clear();
+            uvs.AddRange(Unpack(packed));
+            if (uvs.Count == 0)
+                continue;
+            Draw(new PaintStyle((PaintMode)op.mode, op.color, op.diameter), uvs);
+            stamps += uvs.Count;
+            thisFrame += uvs.Count;
+            if (thisFrame >= 4000)
+            {
+                thisFrame = 0;
+                yield return null;
+            }
+        }
+        if (this != null)
+            EndStroke();
+        Debug.Log($"[SaveState] painted {stamps} saved stamps back on {name}");
+    }
+
     // At most this many stamps, evenly picked along the way (the first and last kept).
     static Vector2[] Thin(List<Vector2> uvs, int most)
     {
