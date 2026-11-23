@@ -373,7 +373,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
 | Where | Version |
 |---|---|
 | Latest build (Builds/TheTunnelDev.apk) | 23.11.2026.3 |
-| Meta store, ArtDev channel | 23.11.2026.1 (uploaded with Developer Hub) |
+| Meta store, ArtDev channel | 23.11.2026.3 (uploaded with Developer Hub) |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |
 | Quest 3S 3497C10HC4041K | 23.11.2026.3 (Space Setup done 23.11.2026) |
