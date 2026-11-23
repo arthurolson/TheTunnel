@@ -1,4 +1,5 @@
 using TMPro;
+using Unity.XR.CoreUtils;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.XR.Interaction.Toolkit.Interactors;
@@ -41,6 +42,7 @@ public class TunnelTeleport : MonoBehaviour
     float m_RingSize = 0.35f;
 
     bool m_On;
+    XROrigin m_Origin;
     LineRenderer m_Line;
     Transform m_Ring;
     float m_NextTeleport;
@@ -52,8 +54,6 @@ public class TunnelTeleport : MonoBehaviour
     {
         if (m_Button != null)
             m_Button.onClick.AddListener(Toggle);
-        if (m_Provider == null)
-            m_Provider = FindAnyObjectByType<TeleportationProvider>();
         MakeMarker();
         Set(false);
     }
@@ -125,22 +125,25 @@ public class TunnelTeleport : MonoBehaviour
     static bool Pressed(NearFarInteractor interactor) =>
         interactor.selectInput.ReadWasPerformedThisFrame() || interactor.activateInput.ReadWasPerformedThisFrame();
 
+    // Slides the player along the floor so they stand where the ring was: the rig moves sideways only, never up or
+    // down, so the tunnel's floor stays on the real floor (the rig's height is how the tunnel was lined up with it).
     void Go(Vector3 to)
     {
         m_NextTeleport = Time.unscaledTime + 0.5f;
-        if (m_Provider == null)
+        if (m_Origin == null)
+            m_Origin = FindAnyObjectByType<XROrigin>();
+        var head = m_Origin != null && m_Origin.Camera != null ? m_Origin.Camera.transform : Camera.main != null ? Camera.main.transform : null;
+        if (m_Origin == null || head == null)
         {
-            Debug.LogWarning("[Teleport] no Teleportation provider in the scene");
+            Debug.LogWarning("[Teleport] no XR Origin to move");
             return;
         }
-        bool queued = m_Provider.QueueTeleportRequest(new TeleportRequest
-        {
-            destinationPosition = to,
-            destinationRotation = Quaternion.identity,
-            matchOrientation = MatchOrientation.None,
-            requestTime = Time.time,
-        });
-        Debug.Log($"[Teleport] {(queued ? "to" : "could not go to")} {to:F2}");
+        var rig = m_Origin.Origin.transform;
+        var step = new Vector3(to.x - head.position.x, 0f, to.z - head.position.z);
+        float rigY = rig.position.y, headY = head.position.y;
+        rig.position += step;
+        Debug.Log($"[Teleport] to {to:F2}: moved {step.magnitude:F2} m along the floor; rig height {rigY:F2} → {rig.position.y:F2}, " +
+            $"head height {headY:F2} → {head.position.y:F2}, tunnel floor at {to.y:F2}");
     }
 
     void MakeMarker()
