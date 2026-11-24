@@ -339,7 +339,9 @@ What has been built, what is in progress, and where each build is. Updated as wo
   - other players' voices play at their heads and are recorded too.
 - Videos from the asset repository (TheTunnelAsset video/, each with a .meta.json sidecar) are in every headset's
   Videos list with no build. 23.11.2026: three cellPACK videos added (HIV ingredient list, B cell, a cellPACK cell at
-  2880×2160, 18 Mbit/s); they play in the Viewer on the Quest 3S.
+  2880×2160, 18 Mbit/s); they play in the Viewer on the Quest 3S. Since 24.11.2026.1 the same three are also built in
+  (StreamingAssets/Viewer/Videos, named with their catalog titles so each is listed once and plays without the
+  network); the APK grew from 418 MB to 541 MB. Built and signed, not yet launch-tested on a headset.
 
 ### Browser
 - Shared web browser panels.
@@ -375,7 +377,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 23.11.2026.3 |
+| Latest build (Builds/TheTunnelDev.apk) | 24.11.2026.1 (the three cellPACK videos built into the Viewer) |
 | Meta store, ArtDev channel | 23.11.2026.3 (uploaded with Developer Hub) |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |
