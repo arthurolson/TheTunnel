@@ -341,7 +341,8 @@ What has been built, what is in progress, and where each build is. Updated as wo
   Videos list with no build. 23.11.2026: three cellPACK videos added (HIV ingredient list, B cell, a cellPACK cell at
   2880×2160, 18 Mbit/s); they play in the Viewer on the Quest 3S. Since 24.11.2026.1 the same three are also built in
   (StreamingAssets/Viewer/Videos, named with their catalog titles so each is listed once and plays without the
-  network); the APK grew from 418 MB to 541 MB. Built and signed, not yet launch-tested on a headset.
+  network); the APK grew from 418 MB to 541 MB. Installed on the Quest 3 …X0DTC and launch-tested (starts, reads the
+  asset catalog); playing the built-in copies not yet tried.
 
 ### Browser
 - Shared web browser panels.
@@ -384,5 +385,5 @@ What has been built, what is in progress, and where each build is. Updated as wo
 | Quest 3S 3497C10HC4041K | 23.11.2026.3 (Space Setup done 23.11.2026) |
 | Quest 3S 3497C10HC4004X | 16.11.2026.4 |
 | Quest 3 2G0YC1ZF760BMQ | 23.11.2026.1 |
-| Quest 3 2G0YC1ZF7X0DTC | 22.11.2026.2 |
+| Quest 3 2G0YC1ZF7X0DTC | 24.11.2026.1 |
 | Quest 3 2G0YC1ZF8300NP | 23.11.2026.3 |
