@@ -337,6 +337,9 @@ What has been built, what is in progress, and where each build is. Updated as wo
   - an indicator shows whether the mic is being recorded;
   - Mic to recording frees the mic from voice chat, so Quest recordings capture your voice;
   - other players' voices play at their heads and are recorded too.
+- Videos from the asset repository (TheTunnelAsset video/, each with a .meta.json sidecar) are in every headset's
+  Videos list with no build. 23.11.2026: three cellPACK videos added (HIV ingredient list, B cell, a cellPACK cell at
+  2880×2160, 18 Mbit/s); they play in the Viewer on the Quest 3S.
 
 ### Browser
 - Shared web browser panels.
