@@ -16,10 +16,12 @@ using XRMultiplayer;
 /// sightings at the same moment are compared, and once they have differed steadily for about a second this headset's
 /// XR Origin glides by the turn (about the vertical only) and shift that bring its sighting onto the host's
 /// (<see cref="ArMarkerRoomAlignment"/>). The host never moves; players who haven't aligned can be aligned this way too.
-/// A player who teleports (<see cref="TunnelTeleport"/>) moves through the tunnel but not through the real room: the
-/// code and the marker are measured without that player's teleport, so nobody's alignment changes, and two aligned
-/// players who are no longer at the same place in the tunnel see each other's avatars again (each is somewhere else in
-/// the tunnel from where their real body stands).
+/// Players aligned to the code teleport together (<see cref="TunnelTeleport"/>): when one of them teleports, the host
+/// sends the same step to every aligned player at the same place in the tunnel, so their real bodies keep standing
+/// where their places in the tunnel are. A teleport moves players through the tunnel but not through the real room:
+/// the code and the marker are measured without it, so nobody's alignment changes, and aligning puts a player at the
+/// host's place in the tunnel. Two aligned players who are somehow at different places in the tunnel (for at least
+/// a second and a half) see each other's avatars again, since their real bodies no longer stand where they are.
 /// </summary>
 public class CoLocation : NetworkBehaviour
 {
@@ -39,7 +41,11 @@ public class CoLocation : NetworkBehaviour
 
     /// <summary>Two aligned players whose teleports differ by more than this see each other's avatars.</summary>
     const float k_SamePlace = 0.3f;
+    /// <summary>How long two aligned players must be apart before their avatars show (a group teleport reaches each
+    /// headset at a slightly different moment, and shouldn't flash them).</summary>
+    const float k_ApartFor = 1.5f;
     readonly System.Collections.Generic.Dictionary<ulong, bool> m_AvatarHidden = new();
+    readonly System.Collections.Generic.Dictionary<ulong, float> m_ApartSince = new();
 
     QrFloorScanner.Measurement? m_Pending;
     float m_NextAvatarCheck;
@@ -178,8 +184,9 @@ public class CoLocation : NetworkBehaviour
         float turn = Mathf.DeltaAngle(measured.yaw, anchor.w);
         var rotation = Quaternion.Euler(0f, turn, 0f);
 
-        // Turn the origin about the measured point, then slide that point onto the shared one, plus however far this
-        // player has teleported (aligning lines up the real room; it doesn't undo a teleport).
+        // Turn the origin about the measured point, then slide that point onto the shared one, plus however far the
+        // host has teleported: everyone in the room is at the host's place in the tunnel, and teleports together.
+        TunnelTeleport.Adopt(OffsetOf(NetworkManager.ServerClientId));
         var originTransform = origin.transform;
         Vector3 newPosition = sharedPosition + TunnelTeleport.offset + rotation * (originTransform.position - measured.position);
         originTransform.SetPositionAndRotation(newPosition, rotation * originTransform.rotation);
@@ -350,6 +357,12 @@ public class CoLocation : NetworkBehaviour
             // An aligned player's real body shows through passthrough, so their avatar is hidden, unless one of you has
             // teleported away from the other: then the avatar shows where they are in the tunnel.
             bool samePlace = (OffsetOf(player.OwnerClientId) - TunnelTeleport.offset).magnitude < k_SamePlace;
+            if (samePlace)
+                m_ApartSince.Remove(player.OwnerClientId);
+            else if (!m_ApartSince.TryGetValue(player.OwnerClientId, out float since))
+                m_ApartSince[player.OwnerClientId] = Time.unscaledTime;
+            else
+                samePlace = Time.unscaledTime - since < k_ApartFor; // not apart for long enough yet
             bool hide = m_HideColocatedAvatars && CoLocationState.isAligned && m_AlignedClients.Contains(player.OwnerClientId) && samePlace;
             if (m_AvatarHidden.TryGetValue(player.OwnerClientId, out bool wasHidden) ? wasHidden != hide : hide)
                 Debug.Log($"[Teleport] player {player.OwnerClientId}'s avatar {(hide ? "hidden: their real body is where they are in the tunnel" : "shown")} " +
@@ -365,6 +378,47 @@ public class CoLocation : NetworkBehaviour
     }
 
     #region Teleports
+
+    /// <summary>
+    /// Called when this player teleports by <paramref name="step"/>: if other players aligned to the same code are at
+    /// the same place in the tunnel, asks the host to move all of them (this player too) and returns true; otherwise
+    /// returns false and this player moves alone.
+    /// </summary>
+    public bool TryTeleportGroup(Vector3 step)
+    {
+        if (!IsSpawned || !CoLocationState.isAligned)
+            return false;
+        foreach (var id in m_AlignedClients)
+        {
+            if (id != NetworkManager.LocalClientId && (OffsetOf(id) - TunnelTeleport.offset).magnitude < k_SamePlace)
+            {
+                TeleportGroupRpc(step);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void TeleportGroupRpc(Vector3 step, RpcParams rpcParams = default)
+    {
+        ulong sender = rpcParams.Receive.SenderClientId;
+        var from = OffsetOf(sender);
+        var group = new System.Collections.Generic.List<ulong> { sender };
+        foreach (var id in m_AlignedClients)
+        {
+            if (id != sender && NetworkManager.ConnectedClients.ContainsKey(id) && (OffsetOf(id) - from).magnitude < k_SamePlace)
+                group.Add(id);
+        }
+        Debug.Log($"[Teleport] player {sender} teleported {step.magnitude:F2} m: moving players {string.Join(", ", group)} together");
+        MoveGroupRpc(step, sender, group.Count, RpcTarget.Group(group.ToArray(), RpcTargetUse.Temp));
+    }
+
+    [Rpc(SendTo.SpecifiedInParams, InvokePermission = RpcInvokePermission.Server)]
+    void MoveGroupRpc(Vector3 step, ulong by, int players, RpcParams rpcParams = default) =>
+        TunnelTeleport.MoveBy(step, by == NetworkManager.LocalClientId
+            ? $"teleported with the {players - 1} other player{(players == 2 ? "" : "s")} in this room"
+            : $"player {by} teleported, so this player, in the same room, goes too ({players} players)");
 
     void ShareOffset(Vector3 offset)
     {

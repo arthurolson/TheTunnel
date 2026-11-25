@@ -11,8 +11,11 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// Teleport along the tunnel: a "Teleport" check button under the Laser button over the left palm turns it on. While
 /// it is on, point a hand (or a controller) at the tunnel's floor, in any segment: a line and a ring show where you
 /// would land, and a pinch (or the trigger or grip) takes you there, still facing the way you were. Pointing at
-/// anything else (a molecule, a panel, a wall) does what it always does. Only this player moves; everyone else sees
-/// their avatar arrive. Works the same when not connected.
+/// anything else (a molecule, a panel, a wall) does what it always does. Players who share a real room (aligned to
+/// the same QR code, see <see cref="CoLocation"/>) teleport together: when one of them teleports, all of them move by
+/// the same step, so their real bodies stay where their places in the tunnel are. A player on their own, or one who
+/// isn't aligned with the others, moves alone, and everyone else sees their avatar arrive. Works the same when not
+/// connected.
 /// </summary>
 public class TunnelTeleport : MonoBehaviour
 {
@@ -142,6 +145,7 @@ public class TunnelTeleport : MonoBehaviour
 
     // Slides the player along the floor so they stand where the ring was: the rig moves sideways only, never up or
     // down, so the tunnel's floor stays on the real floor (the rig's height is how the tunnel was lined up with it).
+    // Players who share the real room with this one all go the same way (CoLocation sends the step to each of them).
     void Go(Vector3 to)
     {
         m_NextTeleport = Time.unscaledTime + 0.5f;
@@ -153,15 +157,50 @@ public class TunnelTeleport : MonoBehaviour
             Debug.LogWarning("[Teleport] no XR Origin to move");
             return;
         }
-        var rig = m_Origin.Origin.transform;
         var step = new Vector3(to.x - head.position.x, 0f, to.z - head.position.z);
-        float rigY = rig.position.y, headY = head.position.y;
+        if (CoLocation.instance != null && CoLocation.instance.TryTeleportGroup(step))
+        {
+            Debug.Log($"[Teleport] to {to:F2} ({step.magnitude:F2} m): taking the players in this room along");
+            return;
+        }
+        MoveBy(step, $"to {to:F2}, tunnel floor at {to.y:F2}");
+    }
+
+    /// <summary>
+    /// Moves this player through the tunnel (not the real room) by <paramref name="step"/>, sideways only, and adds it
+    /// to <see cref="offset"/>. Used for this player's own teleport and when another player in the same room teleports.
+    /// </summary>
+    public static void MoveBy(Vector3 step, string why)
+    {
+        step.y = 0f;
+        var origin = FindAnyObjectByType<XROrigin>();
+        if (origin == null)
+        {
+            Debug.LogWarning("[Teleport] no XR Origin to move");
+            return;
+        }
+        var rig = origin.Origin.transform;
+        var head = origin.Camera != null ? origin.Camera.transform : null;
+        float rigY = rig.position.y, headY = head != null ? head.position.y : 0f;
         rig.position += step;
         offset += step;
         offsetChanged?.Invoke(offset);
-        Debug.Log($"[Teleport] to {to:F2}: moved {step.magnitude:F2} m along the floor; rig height {rigY:F2} → {rig.position.y:F2}, " +
-            $"head height {headY:F2} → {head.position.y:F2}, tunnel floor at {to.y:F2}; " +
-            $"now {offset.magnitude:F2} m from where the real room puts you");
+        Debug.Log($"[Teleport] {why}: moved {step.magnitude:F2} m along the floor; rig height {rigY:F2} → {rig.position.y:F2}, " +
+            $"head height {headY:F2} → {(head != null ? head.position.y : 0f):F2}; now {offset.magnitude:F2} m from where the real room puts you");
+    }
+
+    /// <summary>
+    /// Takes on another player's teleport as this player's own, without moving anything (the caller places the XR
+    /// Origin): used when aligning to the QR code puts this player where the host is in the tunnel.
+    /// </summary>
+    public static void Adopt(Vector3 newOffset)
+    {
+        newOffset.y = 0f;
+        if ((newOffset - offset).sqrMagnitude < 1e-8f)
+            return;
+        Debug.Log($"[Teleport] joining the host's place in the tunnel: {offset.magnitude:F2} → {newOffset.magnitude:F2} m from where the real room puts you");
+        offset = newOffset;
+        offsetChanged?.Invoke(offset);
     }
 
     void MakeMarker()
