@@ -50,8 +50,23 @@ public class TunnelTeleport : MonoBehaviour
     /// <summary>Whether teleporting is on.</summary>
     public bool isOn => m_On;
 
+    /// <summary>
+    /// How far (in the world, sideways only) this player has teleported in all: where they are in the tunnel minus
+    /// where the real room puts them. Things seen in the real room (the AR marker, the QR code) are shared without it,
+    /// so a teleport never moves them, or the room alignment, for anyone else.
+    /// </summary>
+    public static Vector3 offset { get; private set; }
+
+    /// <summary>Raised on this headset after each teleport, with the new <see cref="offset"/>.</summary>
+    public static event System.Action<Vector3> offsetChanged;
+
+    /// <summary><see cref="offset"/> in the shared tabletop frame (the frame AR marker sightings are given in).</summary>
+    public static Vector3 OffsetIn(Transform table) =>
+        table != null ? Quaternion.Inverse(table.rotation) * offset : offset;
+
     void Awake()
     {
+        offset = Vector3.zero; // the scene (and the XR Origin) starts afresh
         if (m_Button != null)
             m_Button.onClick.AddListener(Toggle);
         MakeMarker();
@@ -142,8 +157,11 @@ public class TunnelTeleport : MonoBehaviour
         var step = new Vector3(to.x - head.position.x, 0f, to.z - head.position.z);
         float rigY = rig.position.y, headY = head.position.y;
         rig.position += step;
+        offset += step;
+        offsetChanged?.Invoke(offset);
         Debug.Log($"[Teleport] to {to:F2}: moved {step.magnitude:F2} m along the floor; rig height {rigY:F2} → {rig.position.y:F2}, " +
-            $"head height {headY:F2} → {head.position.y:F2}, tunnel floor at {to.y:F2}");
+            $"head height {headY:F2} → {head.position.y:F2}, tunnel floor at {to.y:F2}; " +
+            $"now {offset.magnitude:F2} m from where the real room puts you");
     }
 
     void MakeMarker()

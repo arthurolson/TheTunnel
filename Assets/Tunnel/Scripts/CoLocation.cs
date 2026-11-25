@@ -16,6 +16,10 @@ using XRMultiplayer;
 /// sightings at the same moment are compared, and once they have differed steadily for about a second this headset's
 /// XR Origin glides by the turn (about the vertical only) and shift that bring its sighting onto the host's
 /// (<see cref="ArMarkerRoomAlignment"/>). The host never moves; players who haven't aligned can be aligned this way too.
+/// A player who teleports (<see cref="TunnelTeleport"/>) moves through the tunnel but not through the real room: the
+/// code and the marker are measured without that player's teleport, so nobody's alignment changes, and two aligned
+/// players who are no longer at the same place in the tunnel see each other's avatars again (each is somewhere else in
+/// the tunnel from where their real body stands).
 /// </summary>
 public class CoLocation : NetworkBehaviour
 {
@@ -30,6 +34,12 @@ public class CoLocation : NetworkBehaviour
     readonly NetworkVariable<Vector4> m_Anchor = new(Vector4.zero, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<bool> m_HasAnchor = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     NetworkList<ulong> m_AlignedClients;
+    // How far each player has teleported (TunnelTeleport.offset), as they report it.
+    NetworkList<PlayerOffset> m_Offsets;
+
+    /// <summary>Two aligned players whose teleports differ by more than this see each other's avatars.</summary>
+    const float k_SamePlace = 0.3f;
+    readonly System.Collections.Generic.Dictionary<ulong, bool> m_AvatarHidden = new();
 
     QrFloorScanner.Measurement? m_Pending;
     float m_NextAvatarCheck;
@@ -63,12 +73,16 @@ public class CoLocation : NetworkBehaviour
     {
         instance = this;
         m_AlignedClients = new NetworkList<ulong>(); // NetworkLists must be created in Awake
+        m_Offsets = new NetworkList<PlayerOffset>();
     }
 
     public override void OnNetworkSpawn()
     {
         base.OnNetworkSpawn();
         m_Anchor.OnValueChanged += OnAnchorChanged;
+        TunnelTeleport.offsetChanged += ShareOffset;
+        if (TunnelTeleport.offset != Vector3.zero)
+            ShareOffset(TunnelTeleport.offset); // teleported before joining
         if (!IsServer)
         {
             ArMarkerCube.ownSighting += OnOwnMarker;
@@ -80,6 +94,7 @@ public class CoLocation : NetworkBehaviour
     {
         base.OnNetworkDespawn();
         m_Anchor.OnValueChanged -= OnAnchorChanged;
+        TunnelTeleport.offsetChanged -= ShareOffset;
         ArMarkerCube.ownSighting -= OnOwnMarker;
         ArMarkerCube.hostSighting -= OnHostMarker;
         m_MarkerAlignment.Clear();
@@ -121,7 +136,8 @@ public class CoLocation : NetworkBehaviour
             {
                 // The host defines the shared room as it sees it; it doesn't move.
                 var m = measurement.Value;
-                m_Anchor.Value = new Vector4(m.position.x, m.position.y, m.position.z, m.yaw);
+                var room = m.position - TunnelTeleport.offset; // where the code is with the host's teleports taken off
+                m_Anchor.Value = new Vector4(room.x, room.y, room.z, m.yaw);
                 m_HasAnchor.Value = true;
                 MarkAligned();
                 int players = NetworkManager.ConnectedClientsIds.Count;
@@ -162,9 +178,10 @@ public class CoLocation : NetworkBehaviour
         float turn = Mathf.DeltaAngle(measured.yaw, anchor.w);
         var rotation = Quaternion.Euler(0f, turn, 0f);
 
-        // Turn the origin about the measured point, then slide that point onto the shared one.
+        // Turn the origin about the measured point, then slide that point onto the shared one, plus however far this
+        // player has teleported (aligning lines up the real room; it doesn't undo a teleport).
         var originTransform = origin.transform;
-        Vector3 newPosition = sharedPosition + rotation * (originTransform.position - measured.position);
+        Vector3 newPosition = sharedPosition + TunnelTeleport.offset + rotation * (originTransform.position - measured.position);
         originTransform.SetPositionAndRotation(newPosition, rotation * originTransform.rotation);
 
         MarkAligned();
@@ -242,8 +259,9 @@ public class CoLocation : NetworkBehaviour
             return;
         var tableTop = FindAnyObjectByType<TableTop>();
         var table = tableTop != null ? new Pose(tableTop.transform.position, tableTop.transform.rotation) : Pose.identity;
-        var pivot = table.position + table.rotation * correction.pivot;
-        var target = table.position + table.rotation * correction.target;
+        // The sightings have this player's teleport taken off (see ArMarkerCube), so it goes back on here.
+        var pivot = table.position + table.rotation * correction.pivot + TunnelTeleport.offset;
+        var target = table.position + table.rotation * correction.target + TunnelTeleport.offset;
         float shift = Vector3.Distance(pivot, target);
         if (shift > k_MaxMarkerShiftWhenAligned && CoLocationState.isAligned)
         {
@@ -318,13 +336,25 @@ public class CoLocation : NetworkBehaviour
                 if (!NetworkManager.ConnectedClients.ContainsKey(m_AlignedClients[i]))
                     m_AlignedClients.RemoveAt(i);
             }
+            for (int i = m_Offsets.Count - 1; i >= 0; i--)
+            {
+                if (!NetworkManager.ConnectedClients.ContainsKey(m_Offsets[i].client))
+                    m_Offsets.RemoveAt(i);
+            }
         }
 
         foreach (var player in FindObjectsByType<XRINetworkPlayer>(FindObjectsSortMode.None))
         {
             if (player.IsLocalPlayer)
                 continue;
-            bool hide = m_HideColocatedAvatars && CoLocationState.isAligned && m_AlignedClients.Contains(player.OwnerClientId);
+            // An aligned player's real body shows through passthrough, so their avatar is hidden, unless one of you has
+            // teleported away from the other: then the avatar shows where they are in the tunnel.
+            bool samePlace = (OffsetOf(player.OwnerClientId) - TunnelTeleport.offset).magnitude < k_SamePlace;
+            bool hide = m_HideColocatedAvatars && CoLocationState.isAligned && m_AlignedClients.Contains(player.OwnerClientId) && samePlace;
+            if (m_AvatarHidden.TryGetValue(player.OwnerClientId, out bool wasHidden) ? wasHidden != hide : hide)
+                Debug.Log($"[Teleport] player {player.OwnerClientId}'s avatar {(hide ? "hidden: their real body is where they are in the tunnel" : "shown")} " +
+                    $"(they have teleported {OffsetOf(player.OwnerClientId).magnitude:F2} m, this player {TunnelTeleport.offset.magnitude:F2} m)");
+            m_AvatarHidden[player.OwnerClientId] = hide;
             var nameTag = player.GetComponentInChildren<PlayerNameTag>(true);
             foreach (var renderer in player.GetComponentsInChildren<Renderer>(true))
             {
@@ -333,6 +363,58 @@ public class CoLocation : NetworkBehaviour
             }
         }
     }
+
+    #region Teleports
+
+    void ShareOffset(Vector3 offset)
+    {
+        if (IsSpawned)
+            SetOffsetRpc(offset);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void SetOffsetRpc(Vector3 offset, RpcParams rpcParams = default)
+    {
+        var entry = new PlayerOffset { client = rpcParams.Receive.SenderClientId, offset = offset };
+        for (int i = 0; i < m_Offsets.Count; i++)
+        {
+            if (m_Offsets[i].client == entry.client)
+            {
+                m_Offsets[i] = entry;
+                return;
+            }
+        }
+        m_Offsets.Add(entry);
+    }
+
+    /// <summary>How far a player has teleported, as they last reported it (zero if they haven't).</summary>
+    public Vector3 OffsetOf(ulong client)
+    {
+        if (client == NetworkManager.LocalClientId)
+            return TunnelTeleport.offset;
+        foreach (var entry in m_Offsets)
+        {
+            if (entry.client == client)
+                return entry.offset;
+        }
+        return Vector3.zero;
+    }
+
+    public struct PlayerOffset : INetworkSerializable, IEquatable<PlayerOffset>
+    {
+        public ulong client;
+        public Vector3 offset;
+
+        public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+        {
+            serializer.SerializeValue(ref client);
+            serializer.SerializeValue(ref offset);
+        }
+
+        public bool Equals(PlayerOffset other) => client == other.client && offset == other.offset;
+    }
+
+    #endregion
 
     void SetStatus(string text)
     {

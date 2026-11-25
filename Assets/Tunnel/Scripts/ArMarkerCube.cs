@@ -496,9 +496,11 @@ public class ArMarkerCube : NetworkBehaviour
 
     void OnSighted(ArMarkerTracker.Sighting sighting)
     {
+        // Where the real marker is in the shared room: a player who has teleported sees the real room shifted by
+        // how far they went, so that is taken off (the marker stays put for everyone when someone teleports).
         var sample = new ArMarkerSample
         {
-            position = sighting.cubeInTable.position,
+            position = sighting.cubeInTable.position - TunnelTeleport.OffsetIn(m_Table),
             rotation = sighting.cubeInTable.rotation,
             time = Now - sighting.age,
             quality = sighting.quality,
