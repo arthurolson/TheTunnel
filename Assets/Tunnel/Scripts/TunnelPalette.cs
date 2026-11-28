@@ -192,6 +192,12 @@ public class TunnelPalette : NetworkBehaviour
         base.OnDestroy();
     }
 
+    TunnelSegmentGeometry m_RideWall;
+
+    // On a wall when someone moves the tunnel: it goes with it (moved by the headset that moves it, which shares it).
+    void LateUpdate() =>
+        TunnelWallRide.Ride(ref m_RideWall, transform, m_Body, m_WallGap, (m_Grab == null || !m_Grab.isSelected) && (!IsSpawned || IsOwner));
+
     void Update()
     {
         ShowDisks();

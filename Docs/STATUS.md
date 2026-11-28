@@ -184,6 +184,11 @@ What has been built, what is in progress, and where each build is. Updated as wo
   - opaque walls and a glass front;
   - let go against a tunnel wall, a box sets itself into the wall, which opens there;
   - Unsnap from wall pulls the box back out, with the molecules inside;
+  - since 27.11.2026.1, when someone moves the tunnel (handle or height), a box set into its wall goes with it and
+    so do the molecules inside, and so do signs, palettes, painting copies and a movie menu laid on a wall
+    (TunnelWallRide; browsers and Viewers already did). Editor test, offline and hosting: carrying the tunnel 2.5 m
+    and turning it 60° leaves the box exactly where it was in the wall, the molecule inside it, and a sign on the
+    other wall. Not yet tried on headsets or with a second player moving the tunnel;
   - balls on the front corners stretch the front.
 - Splat-box (next to Box in the Containers list): a box that only frames a 3D portrait, a Gaussian splat baked to a
   vertex-coloured mesh. It has no walls, medium, heat or movie. The box fits the splat with a small margin and scales
@@ -378,7 +383,7 @@ What has been built, what is in progress, and where each build is. Updated as wo
 
 | Where | Version |
 |---|---|
-| Latest build (Builds/TheTunnelDev.apk) | 25.11.2026.2 (players lined up by the QR code teleport together) |
+| Latest build (Builds/TheTunnelDev.apk) | 27.11.2026.1 (things set on or into the tunnel's walls move with the tunnel) |
 | Meta store, ArtDev channel | 23.11.2026.3 (uploaded with Developer Hub) |
 | Quest 3S 340YC10GBJ0HBJ | 11.11.2026.2 |
 | Quest 3S 340YC10GBK08KX | 11.11.2026.2 |

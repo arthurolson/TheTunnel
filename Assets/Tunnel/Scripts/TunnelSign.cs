@@ -531,6 +531,7 @@ public class TunnelSign : NetworkBehaviour
 
     void LateUpdate()
     {
+        RideWithWall();
         PlaceEditButton();
         bool show = TunnelSignageMenu.editButtonsShown || menuOpen;
         if (m_EditButton != null && show != m_EditButtonShown)
@@ -614,6 +615,27 @@ public class TunnelSign : NetworkBehaviour
         Debug.Log($"[Sign] \"{FirstLine(text)}\" set on the {(wallSide < 0 ? "-X" : "+X")} wall of {wall.name} at {y:F2} m up");
         XRMultiplayer.PlayerHudNotification.Instance?.ShowText("Sign on the wall: take it in hand to pull it off", 2f);
         return true;
+    }
+
+    TunnelSegmentGeometry m_RideWall;
+
+    /// <summary>
+    /// On a wall when someone moves the tunnel: the sign goes with it (moved by the headset that moves it, which shares
+    /// it; see <see cref="TunnelWallRide"/>).
+    /// </summary>
+    void RideWithWall()
+    {
+        if ((m_Grab != null && m_Grab.isSelected) || (IsSpawned && !IsOwner))
+        {
+            m_RideWall = null;
+            return;
+        }
+        if (m_RideWall != null && TunnelWallRide.Moved(m_RideWall, out var move))
+        {
+            TunnelWallRide.Apply(move, transform, m_Body);
+            return;
+        }
+        m_RideWall = IsOnWall(out var wall) ? wall : null;
     }
 
     /// <summary>Whether it lies flat on a flat tunnel wall now (and which).</summary>

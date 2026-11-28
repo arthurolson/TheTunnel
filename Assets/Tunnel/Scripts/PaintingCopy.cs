@@ -284,6 +284,13 @@ public class PaintingCopy : NetworkBehaviour, IPaintSurface
             StartCoroutine(source.ReplayInto(m_Paint));
     }
 
+    TunnelSegmentGeometry m_RideWall;
+
+    // On a wall when someone moves the tunnel: it goes with it (moved by the headset that moves it, which shares it).
+    void LateUpdate() =>
+        TunnelWallRide.Ride(ref m_RideWall, transform, m_Body, 0.008f,
+            (m_Grab == null || !m_Grab.isSelected) && m_Dragger == null && (!IsSpawned || IsOwner));
+
     void Update()
     {
         var meters = paintCanvasMeters;

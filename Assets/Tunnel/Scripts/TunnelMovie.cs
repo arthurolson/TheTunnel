@@ -1231,6 +1231,7 @@ public class TunnelMovie : NetworkBehaviour
 
     void LateUpdate()
     {
+        RidePanelWithWall();
         if (m_Panel == null || !m_Panel.gameObject.activeSelf || m_Panel.ownPose)
             return;
         if (panelMoved)
@@ -1240,6 +1241,43 @@ public class TunnelMovie : NetworkBehaviour
             m_PanelPlacedAtShared = false;
             PlacePanel(false);
         }
+    }
+
+    UnityEngine.XR.Templates.MRTTabletopAssets.TunnelSegmentGeometry m_PanelWall;
+
+    /// <summary>
+    /// A menu someone laid flat on a tunnel wall goes with the tunnel when someone moves it: the host (or this headset,
+    /// when not connected) moves where it was put by the same amount (see <see cref="TunnelWallRide"/>).
+    /// </summary>
+    void RidePanelWithWall()
+    {
+        if (m_Panel == null || !panelMoved || m_Panel.ownPose || (IsSpawned && !IsServer))
+        {
+            m_PanelWall = null;
+            return;
+        }
+        if (m_PanelWall != null && TunnelWallRide.Moved(m_PanelWall, out var move))
+        {
+            var pose = panelPose;
+            var position = move.MultiplyPoint3x4(pose.position);
+            var rotation = move.rotation * pose.rotation;
+            if (IsSpawned)
+                StorePanelPose(position, rotation);
+            else
+                m_LocalPanelPose = new Pose(position, rotation);
+            return;
+        }
+        m_PanelWall = PanelWallAt(panelPose);
+    }
+
+    // The wall a menu at this pose lies flat on (as SnapPanel lays it), or null.
+    UnityEngine.XR.Templates.MRTTabletopAssets.TunnelSegmentGeometry PanelWallAt(Pose pose)
+    {
+        var middle = pose.position + pose.rotation * new Vector3(0f, m_Panel.centreOffset, 0f);
+        if (!TunnelWallSnap.TryFind(middle, new Vector2(m_Panel.width * 0.5f, m_Panel.totalHeight * 0.5f), m_Panel.back, 0.05f, out var onWall, out var wall))
+            return null;
+        var snapped = onWall.position - onWall.rotation * new Vector3(0f, m_Panel.centreOffset, 0f);
+        return (snapped - pose.position).sqrMagnitude < 1e-4f && Quaternion.Angle(onWall.rotation, pose.rotation) < 2f ? wall : null;
     }
 
     // Moved by someone: the menu goes where they put it (gliding there while it's being carried).

@@ -26,6 +26,7 @@ using XRMultiplayer;
 /// into the tunnel, the rest of the box beyond the wall. There the tunnel wall opens to show it (the front marks the
 /// screen, see Tunnel/Container Window, and the shell leaves that part out), the wall's collider gets a hole there so
 /// molecules pass in and out and lasers reach inside, and the real room's depth doesn't hide what's in the box.
+/// When someone moves the tunnel, a box set into its wall goes with it, molecules and all (see <see cref="TunnelWallRide"/>).
 /// Molecules inside a mixed reality box never collide with the tunnel's walls, wherever it is. Unsnap from wall in the
 /// menu, or grabbing it by its front edges and pulling, brings it back into the tunnel.
 /// Clear contents (on the TS Menu's Containers list) deletes everything inside it for everyone, leaving it empty (see
@@ -615,6 +616,7 @@ public class TunnelContainer : NetworkBehaviour
 
     void LateUpdate()
     {
+        RideWithWall();
         // Once a frame, after everything has moved: where the boxes are, for the occlusion shaders.
         if (s_BoxesSetAt != Time.frameCount)
             SetOcclusionBoxes();
@@ -827,6 +829,89 @@ public class TunnelContainer : NetworkBehaviour
     }
 
     static Vector3 Abs(Vector3 v) => new(Mathf.Abs(v.x), Mathf.Abs(v.y), Mathf.Abs(v.z));
+
+    // Set into a wall: that segment, and where the box sits on it (its pose in the segment's frame), so that when
+    // someone moves the tunnel the box goes with it, and so do the molecules inside.
+    TunnelSegmentGeometry m_RideWall;
+    Matrix4x4 m_PoseOnWall;
+    float m_OffWallSince = -1f;
+
+    /// <summary>
+    /// When the tunnel it's set into is moved, the box moves with it (on the headset that moves it, its owner's, which
+    /// shares it), and each headset moves the molecules inside that it moves, so all of it stays in the wall.
+    /// </summary>
+    void RideWithWall()
+    {
+        if (!isMixedReality || m_Pulling || (m_Grab != null && m_Grab.isSelected))
+        {
+            m_RideWall = null;
+            return;
+        }
+        if (m_RideWall != null && TunnelWallRide.Moved(m_RideWall, out var move))
+        {
+            var segmentNow = TunnelWallRide.PoseOf(m_RideWall);
+            var was = move.inverse * segmentNow * m_PoseOnWall; // where the box sat before the move
+            var scale = Abs(transform.lossyScale);
+            var intoBox = Matrix4x4.TRS(was.GetPosition(), was.rotation, scale).inverse;
+            int carried = 0;
+            if (hasMedium)
+            {
+                foreach (var molecule in MoleculeGravity.all)
+                {
+                    if (molecule == null || !molecule.simulatedHere || molecule.isHeld)
+                        continue;
+                    var body = molecule.body;
+                    var p = intoBox.MultiplyPoint3x4(body.worldCenterOfMass);
+                    if (Mathf.Abs(p.x) > 0.5f || Mathf.Abs(p.y) > 0.5f || Mathf.Abs(p.z) > 0.5f)
+                        continue;
+                    body.position = move.MultiplyPoint3x4(body.position);
+                    body.rotation = move.rotation * body.rotation;
+                    carried++;
+                }
+            }
+            if (!IsSpawned || IsOwner)
+            {
+                var now = segmentNow * m_PoseOnWall;
+                var position = now.GetPosition();
+                var rotation = now.rotation;
+                transform.SetPositionAndRotation(position, rotation);
+                if (m_Body != null)
+                {
+                    m_Body.position = position;
+                    m_Body.rotation = rotation;
+                }
+            }
+            if (Time.time >= m_NextRideLog)
+            {
+                m_NextRideLog = Time.time + 1f;
+                Debug.Log($"[Containers] the tunnel moved: the mixed reality box in its wall goes with it " +
+                    $"({(!IsSpawned || IsOwner ? "moved here" : "moved by its owner")}, {carried} molecule(s) inside moved here)");
+            }
+            m_OffWallSince = -1f;
+            return;
+        }
+
+        // The tunnel is still: keep where the box sits on the wall it's set into.
+        if (isSetInWall)
+        {
+            m_RideWall = m_OpenIn[0];
+            // From the body when it has one: an interpolated body's transform lags a frame behind where it was put.
+            var position = m_Body != null ? m_Body.position : transform.position;
+            var rotation = m_Body != null ? m_Body.rotation : transform.rotation;
+            m_PoseOnWall = TunnelWallRide.PoseOf(m_RideWall).inverse * Matrix4x4.TRS(position, rotation, Vector3.one);
+            m_OffWallSince = -1f;
+        }
+        else if (m_RideWall != null)
+        {
+            // Out of the wall for a second while the tunnel is still (taken out by someone else): it's free.
+            if (m_OffWallSince < 0f)
+                m_OffWallSince = Time.time;
+            else if (Time.time - m_OffWallSince > 1f)
+                m_RideWall = null;
+        }
+    }
+
+    float m_NextRideLog;
 
     /// <summary>The direction its front faces (world): out of the wall it's set into, into the tunnel.</summary>
     public Vector3 frontNormal => transform.TransformDirection(FaceNormal(frontFace)).normalized;
