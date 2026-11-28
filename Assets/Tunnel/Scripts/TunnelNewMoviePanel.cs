@@ -10,7 +10,7 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 
 /// <summary>
 /// The New movie menu, opened by New movie... on a container's 3D movie menu (see <see cref="TunnelMoviePanel"/>) and
-/// shown beside it, for whoever pressed it: it makes a new 3D movie without code (see <see cref="MovieDefinition"/>).
+/// shown beside it: it makes a new 3D movie without code (see <see cref="MovieDefinition"/>).
 /// Top to bottom: its name (tap, then type on the keyboard under it); the receptor, chosen with ◄ ► from the molecules
 /// that carry binding sites (the viruses and EGFR), and the binder, from those that bind that receptor (only pairs with
 /// binding-site data are offered: IGG for the viruses, EGFR ligand for EGFR); the magnification its molecules are made
@@ -22,9 +22,13 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 /// heat and motion (taken from the container when the menu opens). Create stores the movie on the host for everyone,
 /// adds it to every movie menu's list and chooses it here, and fills the container with those molecules at the movie's
 /// own magnification, scattered and moving (what was in it goes first; see <see cref="TunnelMovie.CreateMovie"/>).
-/// It can be taken by the bar along its top and moved, and let go of within 25 cm of a flat tunnel wall it lies flat on
-/// the wall; until it is moved it stays beside the movie menu. What is set on it is this player's own until Create.
-/// Made by Tunnel > Movie > Build 3D Movie.
+/// In a session it is one menu for everyone: New movie... on any headset opens it (or closes it) on every headset,
+/// beside the movie menu as whoever opened it sees it, and everything on it is shared as it is set (the name as it is
+/// typed, with the keyboard out on every headset, the receptor, every slider, the colour and the starting conditions),
+/// so two players see and edit the same movie; each change sends only the setting it changed (see
+/// <see cref="TunnelMovie.EditNewMovie"/>). It can be taken by the bar along its top and moved, for everyone, and let
+/// go of within 25 cm of a flat tunnel wall it lies flat on the wall; until it is moved by hand it goes along when the
+/// movie menu is carried. Works locally when not connected. Made by Tunnel > Movie > Build 3D Movie.
 /// </summary>
 public class TunnelNewMoviePanel : MonoBehaviour
 {
@@ -83,18 +87,44 @@ public class TunnelNewMoviePanel : MonoBehaviour
         public GameObject binderPrefab;
     }
 
+    /// <summary>
+    /// The settings on it, one bit each, so a change sends only what it changed (see <see cref="TunnelMovie.EditNewMovie"/>):
+    /// two players changing different settings at once both keep their change.
+    /// </summary>
+    [System.Flags]
+    public enum DraftFields : ushort
+    {
+        None = 0,
+        Name = 1 << 0,
+        /// <summary>The receptor, with its binder and whether it binds in a pocket.</summary>
+        Receptor = 1 << 1,
+        Magnification = 1 << 2,
+        Receptors = 1 << 3,
+        Binders = 1 << 4,
+        CaptureRadius = 1 << 5,
+        SiteDiameter = 1 << 6,
+        BindingTime = 1 << 7,
+        ColourEffect = 1 << 8,
+        Colour = 1 << 9,
+        Viscosity = 1 << 10,
+        Temperature = 1 << 11,
+        Motion = 1 << 12,
+    }
+
     TunnelMovie m_Movie;
     TunnelMoviePanel m_MoviePanel;
     readonly List<Receptor> m_Receptors = new();
     MovieDefinition m_Draft;
-    int m_Receptor;
-    bool m_NameTyped;
-    bool m_Typing;
-    bool m_Moved;
+    MovieEntry m_DraftFor;
+    bool m_Typing; // its keyboard is out here for the name
+    bool m_ClosingHere; // the keyboard is being put away here because it is away for everyone
+    bool m_SyncingName; // the keyboard is being given the name (typed on another headset)
     bool m_Holding;
-    string m_Note = "";
-    string m_StartNote = "";
+    float m_OwnPoseUntil;
+    float m_NextShare;
+    bool m_PlacedAtShared;
     bool m_Refresh = true;
+    float m_NextRefresh;
 
     public float width => m_Width;
     public float height => m_Height;
@@ -102,8 +132,8 @@ public class TunnelNewMoviePanel : MonoBehaviour
     public float centreOffset => m_BarSpace * 0.5f;
     public float back => 0.012f;
 
-    /// <summary>The movie it makes, as set on it now.</summary>
-    public MovieDefinition draft => m_Draft;
+    /// <summary>The movie it makes, as set on it now (the same for everyone).</summary>
+    public MovieDefinition draft => CurrentDraft();
 
     /// <summary>The molecules it offers as receptors, each with the binder its sites take.</summary>
     public List<Receptor> receptors => m_Receptors;
@@ -113,6 +143,12 @@ public class TunnelNewMoviePanel : MonoBehaviour
 
     /// <summary>Whether its keyboard is out for the name.</summary>
     public bool typing => m_Typing && m_Keyboard != null && m_Keyboard.isOpen;
+
+    /// <summary>
+    /// Whether this headset places it itself: while held here, and a moment after letting go (until everyone's shared
+    /// place for it has caught up).
+    /// </summary>
+    public bool ownPose => m_Holding || Time.unscaledTime < m_OwnPoseUntil;
 
     void Awake()
     {
@@ -134,25 +170,32 @@ public class TunnelNewMoviePanel : MonoBehaviour
         Listen(m_MotionRow, ToggleMotion);
         Listen(m_CreateButton, Create);
         Listen(m_CloseButton, Close);
-        Slide(m_MagnificationSlider, 0, TunnelMoleculeMenu.k_Steps.Length - 1, v => { m_Draft.magnification = TunnelMoleculeMenu.MagnificationAt(v); m_Refresh = true; });
-        Slide(m_ReceptorsSlider, 1, TunnelMovie.k_MaxReceptors, v => { m_Draft.receptors = Mathf.RoundToInt(v); m_Refresh = true; });
-        Slide(m_BindersSlider, 1, TunnelMovie.k_MaxBinders, v => { m_Draft.binders = Mathf.RoundToInt(v); m_Refresh = true; });
+        Slide(m_MagnificationSlider, 0, TunnelMoleculeMenu.k_Steps.Length - 1, v => Edit(DraftFields.Magnification, d => d.magnification = TunnelMoleculeMenu.MagnificationAt(v)));
+        Slide(m_ReceptorsSlider, 1, TunnelMovie.k_MaxReceptors, v => Edit(DraftFields.Receptors | DraftFields.Binders, d =>
+        {
+            d.receptors = Mathf.RoundToInt(v);
+            d.binders = Mathf.Min(d.binders, MostBinders(d));
+        }));
+        Slide(m_BindersSlider, 1, TunnelMovie.k_MaxBinders, v => Edit(DraftFields.Binders, d => d.binders = Mathf.Min(Mathf.RoundToInt(v), MostBinders(d))));
         Slide(m_StrengthSlider, 2, 30, v =>
         {
-            if (m_Draft.pocket)
-                m_Draft.captureRadius = Mathf.Round(v);
+            if (CurrentDraft().pocket)
+                Edit(DraftFields.CaptureRadius, d => d.captureRadius = Mathf.Round(v));
             else
-                m_Draft.siteDiameter = Mathf.Round(v) / 100f;
-            m_Refresh = true;
+                Edit(DraftFields.SiteDiameter, d => d.siteDiameter = Mathf.Round(v) / 100f);
         });
-        Slide(m_TimeSlider, TunnelMovie.k_MinBindingTime, TunnelMovie.k_MaxBindingTime, v => { m_Draft.bindingTime = Mathf.Round(v); m_Refresh = true; });
-        Slide(m_ViscositySlider, 0, 10, v => { m_Draft.viscosity = Mathf.Round(v) / 10f; m_Refresh = true; });
+        Slide(m_TimeSlider, TunnelMovie.k_MinBindingTime, TunnelMovie.k_MaxBindingTime, v => Edit(DraftFields.BindingTime, d => d.bindingTime = Mathf.Round(v)));
+        Slide(m_ViscositySlider, 0, 10, v => Edit(DraftFields.Viscosity, d => d.viscosity = Mathf.Round(v) / 10f));
         if (m_HeatSlider != null)
         {
             m_HeatSlider.minValue = 0f;
             m_HeatSlider.maxValue = TunnelContainer.k_MaxTemperature;
             m_HeatSlider.wholeNumbers = false;
-            m_HeatSlider.onValueChanged.AddListener(v => { m_Draft.temperature = Mathf.Round(v * 20f) / 20f; m_StartNote = ""; m_Refresh = true; });
+            m_HeatSlider.onValueChanged.AddListener(v =>
+            {
+                Edit(DraftFields.Temperature, d => d.temperature = Mathf.Round(v * 20f) / 20f);
+                m_Movie?.SetNewMovieStartNote("");
+            });
         }
         if (m_Keyboard != null)
         {
@@ -200,24 +243,23 @@ public class TunnelNewMoviePanel : MonoBehaviour
 
     void OnDisable()
     {
-        if (m_Keyboard != null && m_Keyboard.isOpen)
-            m_Keyboard.Close(false);
-        m_Typing = false;
+        CloseKeyboardHere();
         m_Holding = false;
     }
 
     /// <summary>
-    /// Opens it for a container's movie, beside its movie menu: a fresh movie to set (EGFR and its ligand if there is
-    /// EGFR, else the first receptor), with the container's medium and heat as they are now.
+    /// New movie... on the movie menu: opens it for everyone, for a container's movie, beside the movie menu as this
+    /// player sees it, with a fresh movie to set (EGFR and its ligand if there is EGFR, else the first receptor) and
+    /// the container's medium and heat as they are now.
     /// </summary>
     public void Open(TunnelMovie movie, TunnelMoviePanel moviePanel)
     {
         m_Movie = movie;
         m_MoviePanel = moviePanel;
-        m_Moved = false;
-        gameObject.SetActive(true);
+        if (movie == null)
+            return;
         FindReceptors();
-        m_Draft = new MovieDefinition
+        var start = new MovieDefinition
         {
             name = "",
             receptors = 1,
@@ -228,36 +270,57 @@ public class TunnelNewMoviePanel : MonoBehaviour
             siteDiameter = TunnelMovie.k_DefaultSiteDiameter,
             bindingTime = TunnelMovie.k_DefaultBindingTime,
         };
-        m_NameTyped = false;
-        m_Note = "";
-        var container = movie != null ? movie.container : null;
-        m_Draft.viscosity = container != null ? container.viscosity : 1f;
-        m_Draft.temperature = container != null ? container.temperature : TunnelContainer.k_RoomTemperature;
-        m_Draft.motion = (container != null ? container.motion : TunnelContainer.Motion.Random).ToString();
-        m_StartNote = "";
-        if (m_Draft.temperature <= 0f)
+        var container = movie.container;
+        start.viscosity = container != null ? container.viscosity : 1f;
+        start.temperature = container != null ? container.temperature : TunnelContainer.k_RoomTemperature;
+        start.motion = (container != null ? container.motion : TunnelContainer.Motion.Random).ToString();
+        string startNote = "";
+        if (start.temperature <= 0f)
         {
             // A movie at absolute zero is a still picture.
-            m_Draft.temperature = TunnelContainer.k_RoomTemperature;
-            m_StartNote = "The container has no heat; 20 °C here so the molecules move.";
+            start.temperature = TunnelContainer.k_RoomTemperature;
+            startNote = "The container has no heat; 20 °C here so the molecules move.";
         }
         int egfr = m_Receptors.FindIndex(r => r.name == "EGFR");
-        ChooseReceptor(egfr >= 0 ? egfr : 0);
-        ShowSettings();
-        PlaceBesideMenu();
-        Debug.Log($"[Movie] New movie menu opened for {(movie != null ? movie.name : "no container")}: {m_Receptors.Count} receptors to choose from " +
+        if (m_Receptors.Count > 0)
+            ApplyReceptor(start, egfr >= 0 ? egfr : 0, false);
+        movie.OpenNewMovie(start.ToEntry(), startNote, BesidePose());
+        Debug.Log($"[Movie] New movie menu opened for {movie.name}: {m_Receptors.Count} receptors to choose from " +
             $"({string.Join(", ", m_Receptors.Select(r => $"{r.name} + {r.binder}"))})");
     }
 
-    /// <summary>Puts it away (Close, or New movie... again on the movie menu).</summary>
-    public void Close()
+    /// <summary>Shows it on this headset, as it is for everyone (by the movie menu, when it is open for everyone).</summary>
+    public void ShowHere(TunnelMovie movie, TunnelMoviePanel moviePanel)
     {
-        if (m_Keyboard != null && m_Keyboard.isOpen)
-            m_Keyboard.Close(false);
+        m_Movie = movie;
+        m_MoviePanel = moviePanel;
+        FindReceptors();
+        gameObject.SetActive(true);
+        m_PlacedAtShared = false;
+        if (!ownPose)
+            FollowSharedPose();
+        m_Refresh = true;
+        ShowSettings();
+    }
+
+    /// <summary>Hides it on this headset (closed for everyone, or the movie menu put away here).</summary>
+    public void HideHere()
+    {
+        CloseKeyboardHere();
         gameObject.SetActive(false);
     }
 
-    // The molecules in the Molecules list with binding sites whose binder is in the list too.
+    /// <summary>Puts it away for everyone (Close, Create, or New movie... again on the movie menu).</summary>
+    public void Close()
+    {
+        if (m_Movie != null)
+            m_Movie.CloseNewMovie();
+        if (m_Movie == null || !m_Movie.newMovieOpen)
+            HideHere();
+    }
+
+    // The molecules in the Molecules list with binding sites whose binder is in the list too (the same list, in the
+    // same order, on every headset).
     void FindReceptors()
     {
         m_Receptors.Clear();
@@ -275,63 +338,94 @@ public class TunnelNewMoviePanel : MonoBehaviour
         }
     }
 
+    /// <summary>The movie as set on it now: everyone's, with this player's own latest change shown at once.</summary>
+    MovieDefinition CurrentDraft()
+    {
+        var entry = m_Movie != null ? m_Movie.newMovieDraft : default;
+        if (m_Draft == null || !entry.Equals(m_DraftFor))
+        {
+            m_DraftFor = entry;
+            m_Draft = entry.ToDefinition();
+            m_Refresh = true;
+        }
+        return m_Draft;
+    }
+
+    /// <summary>Changes these settings on it, for everyone.</summary>
+    void Edit(DraftFields fields, System.Action<MovieDefinition> change)
+    {
+        if (m_Movie == null)
+            return;
+        var edited = CurrentDraft().Clone();
+        change(edited);
+        m_Movie.EditNewMovie(edited.ToEntry(), (ushort)fields);
+        m_Refresh = true;
+    }
+
+    // Where its receptor is in the list (-1 if it isn't one of them).
+    int ReceptorIndex(MovieDefinition movie) => m_Receptors.FindIndex(r => r.name == movie.receptor);
+
     void StepReceptor(int by)
     {
         if (m_Receptors.Count == 0)
             return;
-        ChooseReceptor((m_Receptor + by + m_Receptors.Count) % m_Receptors.Count);
+        int at = Mathf.Max(0, ReceptorIndex(CurrentDraft()));
+        ChooseReceptor((at + by + m_Receptors.Count) % m_Receptors.Count);
     }
 
-    /// <summary>Chooses the receptor (by its place in <see cref="receptors"/>), with its binder and the colour effect that suits it.</summary>
+    /// <summary>Chooses the receptor (by its place in <see cref="receptors"/>), with its binder and the colour effect that suits it, for everyone.</summary>
     public void ChooseReceptor(int index)
     {
-        if (m_Receptors.Count == 0 || m_Draft == null)
+        if (m_Receptors.Count == 0 || m_Movie == null)
             return;
-        m_Receptor = Mathf.Clamp(index, 0, m_Receptors.Count - 1);
-        var receptor = m_Receptors[m_Receptor];
-        m_Draft.receptor = receptor.name;
-        m_Draft.binder = receptor.binder;
-        m_Draft.pocket = receptor.sites.pocket;
+        index = Mathf.Clamp(index, 0, m_Receptors.Count - 1);
+        bool typed = m_Movie.newMovieNameTyped;
+        Edit(DraftFields.Receptor | DraftFields.ColourEffect | DraftFields.Colour | DraftFields.Binders | (typed ? DraftFields.None : DraftFields.Name),
+            d => ApplyReceptor(d, index, typed));
+        Note("");
+    }
+
+    // The receptor, its binder, and the colour effect that suits it; and its name too until someone has typed one.
+    void ApplyReceptor(MovieDefinition movie, int index, bool nameTyped)
+    {
+        var receptor = m_Receptors[index];
+        movie.receptor = receptor.name;
+        movie.binder = receptor.binder;
+        movie.pocket = receptor.sites.pocket;
         // As the built-in movies show them: a pocket solid while bound (light blue), a virus shifting by its sites (green).
-        m_Draft.colourEffect = m_Draft.pocket ? MovieColourEffect.SolidWhileBound : MovieColourEffect.ShiftBySitesTaken;
-        m_Draft.colour = m_Draft.pocket ? k_Colours[1] : k_Colours[0];
-        if (!m_NameTyped)
-            m_Draft.name = MovieLibrary.UniqueName($"{receptor.binder} on {receptor.name}");
-        m_Note = "";
-        ShowSettings();
+        movie.colourEffect = movie.pocket ? MovieColourEffect.SolidWhileBound : MovieColourEffect.ShiftBySitesTaken;
+        movie.colour = movie.pocket ? k_Colours[1] : k_Colours[0];
+        if (!nameTyped)
+            movie.name = MovieLibrary.UniqueName($"{receptor.binder} on {receptor.name}");
+        movie.binders = Mathf.Min(movie.binders, TunnelMovie.MostBinders(receptor.prefab, movie.receptors, receptor.binderPrefab));
     }
 
-    void SetEffect(MovieColourEffect effect)
-    {
-        m_Draft.colourEffect = effect;
-        m_Refresh = true;
-    }
+    void SetEffect(MovieColourEffect effect) => Edit(DraftFields.ColourEffect, d => d.colourEffect = effect);
 
-    void SetColour(int index)
-    {
-        m_Draft.colour = k_Colours[Mathf.Clamp(index, 0, k_Colours.Length - 1)];
-        m_Refresh = true;
-    }
+    void SetColour(int index) => Edit(DraftFields.Colour, d => d.colour = k_Colours[Mathf.Clamp(index, 0, k_Colours.Length - 1)]);
 
-    void ToggleMotion()
-    {
-        m_Draft.motion = m_Draft.motion == nameof(TunnelContainer.Motion.Ballistic) ? nameof(TunnelContainer.Motion.Random) : nameof(TunnelContainer.Motion.Ballistic);
-        m_Refresh = true;
-    }
+    void ToggleMotion() => Edit(DraftFields.Motion, d =>
+        d.motion = d.motion == nameof(TunnelContainer.Motion.Ballistic) ? nameof(TunnelContainer.Motion.Random) : nameof(TunnelContainer.Motion.Ballistic));
 
     void Note(string text)
     {
-        m_Note = text;
+        m_Movie?.SetNewMovieNote(text);
         m_Refresh = true;
     }
 
+    // The most binders a movie allows with the receptors set (the triangle budget, at most 100).
+    int MostBinders(MovieDefinition movie)
+    {
+        int at = ReceptorIndex(movie);
+        return at < 0 ? TunnelMovie.k_MaxBinders : TunnelMovie.MostBinders(m_Receptors[at].prefab, movie.receptors, m_Receptors[at].binderPrefab);
+    }
+
     /// <summary>The most binders it allows with the receptors set (the triangle budget, at most 100).</summary>
-    public int mostBinders => m_Receptors.Count == 0 ? TunnelMovie.k_MaxBinders
-        : TunnelMovie.MostBinders(m_Receptors[m_Receptor].prefab, m_Draft.receptors, m_Receptors[m_Receptor].binderPrefab);
+    public int mostBinders => MostBinders(CurrentDraft());
 
     /// <summary>
     /// Create: stores the movie on the host for everyone, chooses it on this container and fills the container at the
-    /// Molecules list's magnification; then this menu goes.
+    /// movie's magnification; then this menu goes, for everyone.
     /// </summary>
     public void Create()
     {
@@ -340,11 +434,11 @@ public class TunnelNewMoviePanel : MonoBehaviour
             Note("There is no molecule with binding sites to make a movie with.");
             return;
         }
-        var movie = m_Draft.Clone();
+        var movie = CurrentDraft().Clone();
         movie.name = MovieLibrary.CleanName(movie.name);
         if (movie.name.Length == 0)
             movie.name = $"{movie.binder} on {movie.receptor}";
-        movie.binders = Mathf.Min(movie.binders, mostBinders);
+        movie.binders = Mathf.Min(movie.binders, MostBinders(movie));
         m_Movie.CreateMovie(movie);
         Debug.Log($"[Movie] New movie \"{movie.name}\" created from the menu at ×{movie.sizeToUse}");
         Close();
@@ -352,50 +446,113 @@ public class TunnelNewMoviePanel : MonoBehaviour
 
     #region Name
 
+    // The name row: the keyboard comes out, or goes away, on every headset.
     void ToggleKeyboard()
     {
-        if (m_Keyboard == null)
+        if (m_Keyboard == null || m_Movie == null)
             return;
-        if (m_Keyboard.isOpen)
+        if (m_Movie.newMovieTyping)
+            m_Movie.SetNewMovieTyping(false);
+        else
         {
-            m_Keyboard.Close(true);
-            return;
+            m_Movie.SetNewMovieTyping(true);
+            Note("Type its name, then Enter.");
         }
-        m_Typing = true;
-        m_Keyboard.submitOnEnter = true;
-        m_Keyboard.Open(m_Draft.name);
-        Note("Type its name, then Enter.");
+        SyncKeyboard();
+    }
+
+    /// <summary>
+    /// The keyboard on this headset as it is for everyone: out or away, and holding the name as typed (so what another
+    /// player types shows in it too).
+    /// </summary>
+    void SyncKeyboard()
+    {
+        if (m_Keyboard == null || m_Movie == null)
+            return;
+        bool want = m_Movie.newMovieTyping && isActiveAndEnabled;
+        string name = CurrentDraft().name;
+        if (want && !m_Keyboard.isOpen)
+        {
+            m_Typing = true;
+            m_Keyboard.submitOnEnter = true;
+            m_SyncingName = true;
+            m_Keyboard.Open(name);
+            m_SyncingName = false;
+            m_Refresh = true;
+        }
+        else if (!want && m_Keyboard.isOpen)
+            CloseKeyboardHere();
+        else if (want && m_Keyboard.text != name)
+        {
+            // Typed on another headset (this player's own typing is already the name here).
+            m_SyncingName = true;
+            m_Keyboard.Open(name);
+            m_SyncingName = false;
+        }
+    }
+
+    void CloseKeyboardHere()
+    {
+        m_Typing = false;
+        if (m_Keyboard == null || !m_Keyboard.isOpen)
+            return;
+        m_ClosingHere = true;
+        m_Keyboard.Close(false);
+        m_ClosingHere = false;
+        m_Refresh = true;
     }
 
     void OnNameTyped(KeyboardTextEventArgs args)
     {
-        if (!m_Typing)
+        if (!m_Typing || m_SyncingName)
             return;
-        SetName(args.keyboardText);
+        SetTypedName(args.keyboardText);
     }
 
-    /// <summary>Sets the movie's name (as typed: at most 40 characters, nothing a file name can't hold).</summary>
+    // The name as it is being typed: spaces kept (even at its end), at most 40 characters, nothing a file name can't hold.
+    void SetTypedName(string text)
+    {
+        if (m_Movie == null)
+            return;
+        text = (text ?? "").Replace("\r", " ").Replace("\n", " ");
+        foreach (char c in System.IO.Path.GetInvalidFileNameChars())
+            text = text.Replace(c, '_');
+        if (text.Length > MovieLibrary.k_MaxNameLength)
+            text = text.Substring(0, MovieLibrary.k_MaxNameLength);
+        if (text == CurrentDraft().name)
+            return;
+        Edit(DraftFields.Name, d => d.name = text);
+        if (!m_Movie.newMovieNameTyped)
+            m_Movie.SetNewMovieNameTyped(true);
+    }
+
+    /// <summary>Sets the movie's name, for everyone (as typed: at most 40 characters, nothing a file name can't hold).</summary>
     public void SetName(string text)
     {
-        m_Draft.name = MovieLibrary.CleanName(text);
-        m_NameTyped = true;
-        m_Refresh = true;
+        if (m_Movie == null)
+            return;
+        string name = MovieLibrary.CleanName(text);
+        Edit(DraftFields.Name, d => d.name = name);
+        if (!m_Movie.newMovieNameTyped)
+            m_Movie.SetNewMovieNameTyped(true);
     }
 
     void OnNameSubmitted(KeyboardTextEventArgs args)
     {
-        if (!m_Typing)
+        if (!m_Typing || m_SyncingName || m_Movie == null)
             return;
         SetName(args.keyboardText);
-        m_Typing = false;
-        if (m_Keyboard.isOpen)
-            m_Keyboard.Close(true);
+        m_Movie.SetNewMovieTyping(false);
         Note("");
+        SyncKeyboard();
     }
 
+    // Closed by its own key on this headset: away for everyone.
     void OnKeyboardClosed(KeyboardTextEventArgs args)
     {
         m_Typing = false;
+        if (!m_ClosingHere && m_Movie != null && m_Movie.newMovieTyping)
+            m_Movie.SetNewMovieTyping(false);
         m_Refresh = true;
     }
 
@@ -405,57 +562,63 @@ public class TunnelNewMoviePanel : MonoBehaviour
 
     void Update()
     {
-        if (m_Draft == null)
+        if (m_Movie == null)
             return;
-        if (m_Refresh)
+        SyncKeyboard();
+        ShareWhileHeld();
+        CurrentDraft(); // notices a change made by another player
+        // A few times a second for the notes, at once for a change.
+        if (m_Refresh || Time.unscaledTime >= m_NextRefresh)
             ShowSettings();
     }
 
     void ShowSettings()
     {
+        var d = CurrentDraft();
         m_Refresh = false;
-        if (m_Draft == null)
+        m_NextRefresh = Time.unscaledTime + 0.25f;
+        if (m_Movie == null)
             return;
         bool any = m_Receptors.Count > 0;
+        int at = ReceptorIndex(d);
         if (m_Title != null)
             m_Title.text = "New movie";
-        SetRow(m_NameRow, $"Name: <b>{(m_Draft.name.Length > 0 ? m_Draft.name : "(none)")}</b>{(typing ? "<color=#7F7>|</color>" : "")}  <color=#AAA>{(typing ? "typing" : "tap to type")}</color>", true);
-        SetRow(m_ReceptorRow, any ? $"Receptor: <b>{m_Draft.receptor}</b>  <color=#AAA>{(m_Draft.pocket ? "a pocket" : "binding sites")}</color>" : "Receptor: <color=#AAA>none with binding sites</color>", any);
+        SetRow(m_NameRow, $"Name: <b>{(d.name.Length > 0 ? d.name : "(none)")}</b>{(typing ? "<color=#7F7>|</color>" : "")}  <color=#AAA>{(typing ? "typing" : "tap to type")}</color>", true);
+        SetRow(m_ReceptorRow, any ? $"Receptor: <b>{d.receptor}</b>  <color=#AAA>{(d.pocket ? "a pocket" : "binding sites")}</color>" : "Receptor: <color=#AAA>none with binding sites</color>", any);
         SetRow(m_ReceptorPrev, "◄", m_Receptors.Count > 1);
         SetRow(m_ReceptorNext, "►", m_Receptors.Count > 1);
         // One binder per receptor today: no arrows to step through one.
         Show(m_BinderPrev, false);
         Show(m_BinderNext, false);
-        SetRow(m_BinderRow, any ? $"Binder: <b>{m_Draft.binder}</b>  <color=#AAA>binds {m_Draft.receptor}</color>" : "Binder: <color=#AAA>none</color>", any);
+        SetRow(m_BinderRow, any ? $"Binder: <b>{d.binder}</b>  <color=#AAA>binds {d.receptor}</color>" : "Binder: <color=#AAA>none</color>", any);
 
-        int most = mostBinders;
-        if (m_Draft.binders > most)
-            m_Draft.binders = most;
-        SetSlider(m_MagnificationSlider, TunnelMoleculeMenu.StepOf(m_Draft.sizeToUse));
-        string across = m_Receptors.Count > 0 ? $"{m_Draft.receptor} {TunnelMovie.SizeOf(m_Receptors[m_Receptor].prefab, m_Draft.sizeToUse) * 100f:0.#} cm across" : "";
-        SetText(m_MagnificationText, $"Magnification: ×{m_Draft.sizeToUse}  <color=#AAA>{across}</color>");
-        SetSlider(m_ReceptorsSlider, m_Draft.receptors);
+        int most = MostBinders(d);
+        int binders = Mathf.Min(d.binders, most);
+        SetSlider(m_MagnificationSlider, TunnelMoleculeMenu.StepOf(d.sizeToUse));
+        string across = at >= 0 ? $"{d.receptor} {TunnelMovie.SizeOf(m_Receptors[at].prefab, d.sizeToUse) * 100f:0.#} cm across" : "";
+        SetText(m_MagnificationText, $"Magnification: ×{d.sizeToUse}  <color=#AAA>{across}</color>");
+        SetSlider(m_ReceptorsSlider, d.receptors);
         if (m_BindersSlider != null)
             m_BindersSlider.maxValue = TunnelMovie.k_MaxBinders;
-        SetSlider(m_BindersSlider, m_Draft.binders);
-        SetText(m_ReceptorsText, $"Receptors: {m_Draft.receptors}  <color=#AAA>{m_Draft.receptor}</color>");
-        SetText(m_BindersText, $"Binders: {m_Draft.binders}  <color=#AAA>{m_Draft.binder}" +
+        SetSlider(m_BindersSlider, binders);
+        SetText(m_ReceptorsText, $"Receptors: {d.receptors}  <color=#AAA>{d.receptor}</color>");
+        SetText(m_BindersText, $"Binders: {binders}  <color=#AAA>{d.binder}" +
             (most < TunnelMovie.k_MaxBinders ? $", at most {most}</color>" : "</color>"));
-        if (m_Draft.pocket)
+        if (d.pocket)
         {
-            SetSlider(m_StrengthSlider, m_Draft.captureRadius);
-            SetText(m_StrengthText, $"Capture radius: {m_Draft.captureRadius:0} Å  <color=#AAA>round the pocket's mouth</color>");
+            SetSlider(m_StrengthSlider, d.captureRadius);
+            SetText(m_StrengthText, $"Capture radius: {d.captureRadius:0} Å  <color=#AAA>round the pocket's mouth</color>");
         }
         else
         {
-            SetSlider(m_StrengthSlider, m_Draft.siteDiameter * 100f);
-            SetText(m_StrengthText, $"Binding site diameter: {m_Draft.siteDiameter * 100f:0}%  <color=#AAA>of each virus's</color>");
+            SetSlider(m_StrengthSlider, d.siteDiameter * 100f);
+            SetText(m_StrengthText, $"Binding site diameter: {d.siteDiameter * 100f:0}%  <color=#AAA>of each virus's</color>");
         }
-        ShowTicks(m_StrengthSlider, m_Draft.pocket ? " Å" : "%");
-        SetSlider(m_TimeSlider, m_Draft.bindingTime);
-        SetText(m_TimeText, $"Binding time: {(m_Draft.bindingTime >= 60f ? "1 min" : $"{m_Draft.bindingTime:0} s")}  <color=#AAA>each stays bound</color>");
+        ShowTicks(m_StrengthSlider, d.pocket ? " Å" : "%");
+        SetSlider(m_TimeSlider, d.bindingTime);
+        SetText(m_TimeText, $"Binding time: {(d.bindingTime >= 60f ? "1 min" : $"{d.bindingTime:0} s")}  <color=#AAA>each stays bound</color>");
 
-        bool shift = m_Draft.colourEffect == MovieColourEffect.ShiftBySitesTaken;
+        bool shift = d.colourEffect == MovieColourEffect.ShiftBySitesTaken;
         SetRow(m_ShiftRow, (shift ? "■" : "□") + "  Shift toward the colour  <color=#AAA>by sites taken</color>", true);
         SetRow(m_SolidRow, (!shift ? "■" : "□") + "  Solid colour  <color=#AAA>while bound</color>", true);
         for (int i = 0; i < m_Swatches.Length && i < k_Colours.Length; i++)
@@ -465,28 +628,31 @@ public class TunnelNewMoviePanel : MonoBehaviour
                 continue;
             if (swatch.targetGraphic != null)
                 swatch.targetGraphic.color = k_Colours[i];
-            bool chosen = ColourNear(m_Draft.colour, k_Colours[i]);
+            bool chosen = ColourNear(d.colour, k_Colours[i]);
             SetRow(swatch, chosen ? "<size=140%>■</size>" : "", true);
         }
 
-        SetSlider(m_ViscositySlider, Mathf.Round(m_Draft.viscosity * 10f));
-        SetText(m_ViscosityText, $"Viscosity: {m_Draft.viscosity:0.0}");
-        SetSlider(m_HeatSlider, m_Draft.temperature);
-        float kelvin = TunnelContainer.Kelvin(m_Draft.temperature);
-        SetText(m_HeatText, $"Heat: {kelvin - 273.15f:0} °C  <color=#AAA>{kelvin:0} K{(m_Draft.temperature <= 0f ? ", nothing moves" : "")}; scale in °C</color>");
-        bool ballistic = m_Draft.motion == nameof(TunnelContainer.Motion.Ballistic);
+        SetSlider(m_ViscositySlider, Mathf.Round(d.viscosity * 10f));
+        SetText(m_ViscosityText, $"Viscosity: {d.viscosity:0.0}");
+        SetSlider(m_HeatSlider, d.temperature);
+        float kelvin = TunnelContainer.Kelvin(d.temperature);
+        SetText(m_HeatText, $"Heat: {kelvin - 273.15f:0} °C  <color=#AAA>{kelvin:0} K{(d.temperature <= 0f ? ", nothing moves" : "")}; scale in °C</color>");
+        bool ballistic = d.motion == nameof(TunnelContainer.Motion.Ballistic);
         SetRow(m_MotionRow, (ballistic ? "□  Random motion   ■  Ballistic" : "■  Random motion   □  Ballistic") + "  <color=#AAA>tap to switch</color>", true);
 
         SetRow(m_CreateButton, "Create", any && m_Movie != null);
         SetRow(m_CloseButton, "Close", true);
         if (m_Status != null)
         {
-            string text = m_Note.Length > 0 ? m_Note
-                : $"Create fills the container with these at ×{m_Draft.sizeToUse}, scattered and moving; what is in it now goes. " +
+            string note = m_Movie.newMovieNote;
+            string startNote = m_Movie.newMovieStartNote;
+            string text = note.Length > 0 ? note
+                : $"Create fills the container with these at ×{d.sizeToUse}, scattered and moving; what is in it now goes. " +
                   "The movie is kept on the host and listed on every movie menu; choosing it sets the Molecules list to its magnification.";
-            if (m_StartNote.Length > 0)
-                text += "\n<color=#FD6>" + m_StartNote + "</color>";
-            m_Status.text = text;
+            if (startNote.Length > 0)
+                text += "\n<color=#FD6>" + startNote + "</color>";
+            if (m_Status.text != text)
+                m_Status.text = text;
         }
     }
 
@@ -542,19 +708,39 @@ public class TunnelNewMoviePanel : MonoBehaviour
     #region Placing and moving
 
     /// <summary>
-    /// Beside the movie menu, on its far side from the container, level with its top and turned as it is (so on the
-    /// wall when the movie menu is on the wall); its keyboard under it.
+    /// Beside the movie menu as this headset shows it, on its far side from the container, level with its top and
+    /// turned as it is (so on the wall when the movie menu is on the wall).
     /// </summary>
-    public void PlaceBesideMenu()
+    Pose BesidePose()
     {
         if (m_MoviePanel == null)
-            return;
+            return new Pose(transform.position, transform.rotation);
         var t = m_MoviePanel.transform;
         var away = m_MoviePanel.awayFromContainer;
         var position = t.position + away * (m_MoviePanel.width * 0.5f + m_Gap + m_Width * 0.5f)
             + t.up * ((m_MoviePanel.height - m_Height) * 0.5f);
-        transform.SetPositionAndRotation(position, t.rotation);
+        return new Pose(position, t.rotation);
+    }
+
+    /// <summary>Puts it beside the movie menu on this headset (see <see cref="BesidePose"/>), its keyboard under it.</summary>
+    public void PlaceBesideMenu()
+    {
+        var pose = BesidePose();
+        transform.SetPositionAndRotation(pose.position, pose.rotation);
         PlaceKeyboard();
+    }
+
+    /// <summary>
+    /// The movie menu was carried (or let go of) by a hand on this headset: unless someone has moved this one by hand,
+    /// it goes along beside the movie menu, for everyone.
+    /// </summary>
+    public void GoBesideMenu(bool final)
+    {
+        if (!gameObject.activeSelf || m_Movie == null || m_MoviePanel == null || m_Movie.newMovieMoved || m_Holding)
+            return;
+        PlaceBesideMenu();
+        m_OwnPoseUntil = Time.unscaledTime + 1f;
+        m_Movie.SetNewMoviePose(new Pose(transform.position, transform.rotation), final, false);
     }
 
     void PlaceKeyboard()
@@ -566,21 +752,43 @@ public class TunnelNewMoviePanel : MonoBehaviour
 
     void LateUpdate()
     {
-        // It keeps beside the movie menu (which turns toward whoever looks) until someone moves it.
-        if (!m_Moved && !m_Holding && !typing && m_MoviePanel != null && m_MoviePanel.isActiveAndEnabled)
-            PlaceBesideMenu();
+        // Where it is for everyone, unless this headset is placing it itself (carrying it, or just let go of it).
+        if (m_Movie == null || !m_Movie.newMovieOpen || ownPose)
+            return;
+        FollowSharedPose();
+    }
+
+    // Where it is for everyone (gliding there while someone else carries it).
+    void FollowSharedPose()
+    {
+        if (m_Movie == null)
+            return;
+        var pose = m_Movie.newMoviePose;
+        var t = transform;
+        if (!m_PlacedAtShared || (t.position - pose.position).sqrMagnitude > 1f)
+        {
+            m_PlacedAtShared = true;
+            t.SetPositionAndRotation(pose.position, pose.rotation);
+        }
+        else
+        {
+            float k = 1f - Mathf.Exp(-15f * Time.deltaTime);
+            t.SetPositionAndRotation(Vector3.Lerp(t.position, pose.position, k), Quaternion.Slerp(t.rotation, pose.rotation, k));
+        }
+        PlaceKeyboard();
     }
 
     void OnTaken(SelectEnterEventArgs args)
     {
         m_Holding = true;
-        m_Moved = true;
+        m_NextShare = 0f;
         Debug.Log("[Movie] New movie menu taken in hand");
     }
 
     void OnLetGo(SelectExitEventArgs args)
     {
         m_Holding = false;
+        m_OwnPoseUntil = Time.unscaledTime + 1f;
         if (isActiveAndEnabled)
             StartCoroutine(SettleAfterLetGo());
     }
@@ -592,15 +800,27 @@ public class TunnelNewMoviePanel : MonoBehaviour
             Settle();
     }
 
-    /// <summary>Let go of here: flat on a tunnel wall if one is within 25 cm, else where it is. True if it went onto a wall.</summary>
+    // While carried, everyone sees it move.
+    void ShareWhileHeld()
+    {
+        if (!m_Holding || m_Movie == null || Time.unscaledTime < m_NextShare)
+            return;
+        m_NextShare = Time.unscaledTime + 1f / 15f;
+        m_Movie.SetNewMoviePose(new Pose(transform.position, transform.rotation), false, true);
+    }
+
+    /// <summary>
+    /// Let go of here: flat on a tunnel wall if one is within 25 cm, else where it is; shared with everyone, and it
+    /// stays there. True if it went onto a wall.
+    /// </summary>
     public bool Settle()
     {
-        m_Moved = true;
         var t = transform;
         var middle = t.TransformPoint(new Vector3(0f, centreOffset, 0f));
-        if (!TunnelWallSnap.TryFind(middle, new Vector2(m_Width * 0.5f, totalHeight * 0.5f), back, 0.25f, out var onWall, out var wall))
-            return false;
-        var pose = new Pose(onWall.position - onWall.rotation * new Vector3(0f, centreOffset, 0f), onWall.rotation);
+        bool onWall = TunnelWallSnap.TryFind(middle, new Vector2(m_Width * 0.5f, totalHeight * 0.5f), back, 0.25f, out var wallPose, out var wall);
+        var pose = onWall
+            ? new Pose(wallPose.position - wallPose.rotation * new Vector3(0f, centreOffset, 0f), wallPose.rotation)
+            : new Pose(t.position, t.rotation);
         t.SetPositionAndRotation(pose.position, pose.rotation);
         if (TryGetComponent(out Rigidbody body))
         {
@@ -608,8 +828,11 @@ public class TunnelNewMoviePanel : MonoBehaviour
             body.rotation = pose.rotation;
         }
         PlaceKeyboard();
-        Debug.Log($"[Movie] New movie menu set flat on the wall of {wall.name}");
-        return true;
+        m_OwnPoseUntil = Time.unscaledTime + 1f;
+        m_Movie?.SetNewMoviePose(pose, true, true);
+        if (onWall)
+            Debug.Log($"[Movie] New movie menu set flat on the wall of {wall.name}");
+        return onWall;
     }
 
     #endregion

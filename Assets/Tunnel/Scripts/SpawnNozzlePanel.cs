@@ -5,8 +5,9 @@ using UnityEngine.UI;
 /// <summary>
 /// The small menu beside the spawn nozzle (see <see cref="SpawnNozzle"/>): what's attached to it, a Copies slider
 /// (1 to 100, shared by everyone), a Spawn button that sprays that many copies of the attached molecule (Stop while
-/// it sprays), and the nozzle's latest message. Each headset has its own copy, facing its player. Made by
-/// Tunnel > Molecules > Build Spawn Nozzle.
+/// it sprays), and the nozzle's latest message. In a session it is the same menu for everyone, in the same place:
+/// it faces whoever last took the nozzle in hand or pressed Spawn, and what it shows (what's attached, the count, the
+/// spray's progress, the message) is the same on every headset. Made by Tunnel > Molecules > Build Spawn Nozzle.
 /// </summary>
 public class SpawnNozzlePanel : MonoBehaviour
 {
@@ -57,8 +58,10 @@ public class SpawnNozzlePanel : MonoBehaviour
         if (m_SpawnButton != null)
             m_SpawnButton.onClick.AddListener(() =>
             {
-                if (m_Nozzle != null)
-                    m_Nozzle.SpawnOrStop();
+                if (m_Nozzle == null)
+                    return;
+                m_Nozzle.FaceMenuToMe();
+                m_Nozzle.SpawnOrStop();
             });
     }
 
@@ -72,6 +75,7 @@ public class SpawnNozzlePanel : MonoBehaviour
 
     void OnCountMoved(float value)
     {
+        // (The menu doesn't turn while its slider is being dragged; Spawn turns it.)
         if (m_Nozzle != null)
             m_Nozzle.SetCount(Mathf.RoundToInt(value));
         ShowCount(Mathf.RoundToInt(value));

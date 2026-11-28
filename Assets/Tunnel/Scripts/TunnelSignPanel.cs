@@ -9,8 +9,10 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 /// menu; Enter starts a new line, and every key shows on the sign for everyone), the list of fonts (each name written
 /// in its own font), Regular / Bold / Italic, Left / Centre / Right, Drop shadow, a colour chooser (hue, saturation,
 /// brightness, opacity) for the letters, the border or the background, and the Border section: Border on or off, its
-/// width and the space round the letters. Save keeps the sign in the TS Menu's Signage list. Each headset has its own
-/// copy, opened with the sign's Edit button. Made by Tunnel > Signage > Build Signage.
+/// width and the space round the letters. Save keeps the sign in the TS Menu's Signage list. In a session it is the
+/// same menu for everyone: the sign's Edit button on any headset opens or closes it on every headset, and the colour
+/// tab chosen, the keyboard being out (with the sign's text in it as anyone types) and where the font list is scrolled
+/// are the same on every headset. Made by Tunnel > Signage > Build Signage.
 /// </summary>
 public class TunnelSignPanel : MonoBehaviour
 {
@@ -50,9 +52,15 @@ public class TunnelSignPanel : MonoBehaviour
 
     TunnelSign m_Sign;
     readonly List<Button> m_FontRows = new();
-    SignStyle.Part m_Part = SignStyle.Part.Text;
     bool m_Editing;
+    bool m_ClosingHere; // the keyboard is being put away on this headset because it is away for everyone
+    bool m_SyncingText; // the keyboard is being given the sign's text (typed on another headset)
+    bool m_CheckText = true; // the sign's text may have changed: the keyboard's is checked against it
     float m_NextRefresh;
+    ScrollRect m_FontScroll;
+    bool m_ScrollingHere; // the font list is being scrolled to where it is for everyone
+    float m_ScrolledAt = float.NegativeInfinity, m_IgnoreScrollUntil, m_NextScrollShare;
+    float m_ScrollShared = -1f;
 
     // What the sliders show, so they follow another player's change but don't jump while being dragged here.
     SignStyle.Part m_SlidersFor = (SignStyle.Part)255;
@@ -66,8 +74,8 @@ public class TunnelSignPanel : MonoBehaviour
 
     public XRKeyboard keyboard => m_Keyboard;
 
-    /// <summary>Which part the colour chooser colours (the letters, the border or the background).</summary>
-    public SignStyle.Part colorPart => m_Part;
+    /// <summary>Which part the colour chooser colours (the letters, the border or the background), the same for everyone.</summary>
+    public SignStyle.Part colorPart => m_Sign != null ? m_Sign.menuPart : SignStyle.Part.Text;
 
     public IReadOnlyList<Button> fontRows => m_FontRows;
 
@@ -79,6 +87,7 @@ public class TunnelSignPanel : MonoBehaviour
         if (m_Sign != null)
             m_Sign.changed += OnSignChanged;
         BuildFontList();
+        m_IgnoreScrollUntil = Time.unscaledTime + 0.5f; // the list laying itself out isn't anyone scrolling it
         Refresh(true);
     }
 
@@ -100,6 +109,9 @@ public class TunnelSignPanel : MonoBehaviour
         Listen(m_TextTab, () => ChoosePart(SignStyle.Part.Text));
         Listen(m_BorderTab, () => ChoosePart(SignStyle.Part.Border));
         Listen(m_BackgroundTab, () => ChoosePart(SignStyle.Part.Background));
+        m_FontScroll = m_FontContent != null ? m_FontContent.GetComponentInParent<ScrollRect>(true) : null;
+        if (m_FontScroll != null)
+            m_FontScroll.onValueChanged.AddListener(OnFontListScrolled);
 
         foreach (var slider in new[] { m_Hue, m_Saturation, m_Value, m_Opacity })
             if (slider != null)
@@ -138,6 +150,7 @@ public class TunnelSignPanel : MonoBehaviour
             m_Keyboard.onTextUpdated.AddListener(OnKeyboardText);
             m_Keyboard.onClosed.AddListener(OnKeyboardClosed);
         }
+        m_IgnoreScrollUntil = Time.unscaledTime + 0.5f;
     }
 
     void OnDisable()
@@ -147,7 +160,7 @@ public class TunnelSignPanel : MonoBehaviour
             m_Keyboard.onTextUpdated.RemoveListener(OnKeyboardText);
             m_Keyboard.onClosed.RemoveListener(OnKeyboardClosed);
         }
-        CloseKeyboard();
+        CloseKeyboardHere();
     }
 
     void OnDestroy()
@@ -156,14 +169,24 @@ public class TunnelSignPanel : MonoBehaviour
             m_Sign.changed -= OnSignChanged;
     }
 
-    void OnSignChanged() => Refresh();
+    void OnSignChanged()
+    {
+        m_CheckText = true;
+        Refresh();
+    }
 
     void Update()
     {
+        // The keyboard and the font list follow everyone's at once (the keyboard's text when the sign's changed, and a
+        // few times a second).
+        SyncKeyboard();
+        m_CheckText = false;
+        SyncFontScroll();
         // A few times a second is plenty for a menu that follows the sign's state.
         if (Time.unscaledTime < m_NextRefresh)
             return;
         m_NextRefresh = Time.unscaledTime + 0.25f;
+        m_CheckText = true;
         Refresh();
     }
 
@@ -202,13 +225,50 @@ public class TunnelSignPanel : MonoBehaviour
         m_FontContent.sizeDelta = new Vector2(m_FontContent.sizeDelta.x, Mathf.Max(1, n) * m_RowSpacing);
     }
 
+    // Scrolled by a hand on this headset (not by following everyone's).
+    void OnFontListScrolled(Vector2 position)
+    {
+        if (!m_ScrollingHere && Time.unscaledTime >= m_IgnoreScrollUntil)
+            m_ScrolledAt = Time.unscaledTime;
+    }
+
+    /// <summary>
+    /// The font list scrolled on this headset is shared (a few times a second, and where it comes to rest); otherwise
+    /// it goes to where it is for everyone.
+    /// </summary>
+    void SyncFontScroll()
+    {
+        if (m_FontScroll == null || m_Sign == null)
+            return;
+        float here = m_FontScroll.verticalNormalizedPosition;
+        if (Time.unscaledTime - m_ScrolledAt < 1f)
+        {
+            if (Mathf.Abs(here - m_ScrollShared) > 0.002f && Time.unscaledTime >= m_NextScrollShare)
+            {
+                m_ScrollShared = here;
+                m_NextScrollShare = Time.unscaledTime + 0.1f;
+                m_Sign.SetFontScroll(here);
+            }
+            return;
+        }
+        float shared = m_Sign.fontScroll;
+        if (Mathf.Abs(here - shared) <= 0.002f)
+            return;
+        m_ScrollingHere = true;
+        m_FontScroll.StopMovement();
+        m_FontScroll.verticalNormalizedPosition = shared;
+        m_ScrollingHere = false;
+        m_ScrollShared = shared;
+    }
+
     #endregion
 
     #region Colour
 
+    // Chosen for everyone; the sliders show the part's colour once it is chosen (see ShowColorSliders).
     void ChoosePart(SignStyle.Part part)
     {
-        m_Part = part;
+        m_Sign?.SetMenuPart(part);
         m_SlidersFor = (SignStyle.Part)255;
         Refresh();
     }
@@ -223,7 +283,7 @@ public class TunnelSignPanel : MonoBehaviour
         var color = Color.HSVToRGB(m_Hue.value, m_Saturation.value, m_Value.value);
         color.a = m_Opacity.value;
         m_SlidersShow = color;
-        m_Sign.SetColor(m_Part, color);
+        m_Sign.SetColor(colorPart, color);
         ShowSwatch(color);
     }
 
@@ -241,10 +301,11 @@ public class TunnelSignPanel : MonoBehaviour
     {
         if (m_Hue == null)
             return;
-        Color32 shared = style.ColorOf(m_Part);
-        if (m_SlidersFor == m_Part && Close(shared, m_SlidersShow))
+        var part = colorPart;
+        Color32 shared = style.ColorOf(part);
+        if (m_SlidersFor == part && Close(shared, m_SlidersShow))
             return;
-        m_SlidersFor = m_Part;
+        m_SlidersFor = part;
         m_SlidersShow = shared;
         Color color = shared;
         Color.RGBToHSV(color, out float h, out float s, out float v);
@@ -287,43 +348,89 @@ public class TunnelSignPanel : MonoBehaviour
 
     #region Keyboard
 
+    // Edit text / Done editing: the keyboard comes out, or goes away, on every headset.
     void ToggleKeyboard()
     {
-        if (keyboardOpen)
-            CloseKeyboard();
-        else
-            OpenKeyboard();
-    }
-
-    /// <summary>Opens the keyboard under the menu with the sign's text in it; what's typed shows on the sign for everyone.</summary>
-    public void OpenKeyboard()
-    {
-        if (m_Keyboard == null || m_Sign == null)
+        if (m_Sign == null)
             return;
-        m_Keyboard.submitOnEnter = false; // Enter starts a new line
-        m_Editing = true;
-        m_Keyboard.Open(m_Sign.text);
-        Debug.Log("[Sign] keyboard opened to edit the text");
+        m_Sign.SetKeyboardOpen(!m_Sign.keyboardOpenForAll);
+        SyncKeyboard();
         Refresh();
     }
 
+    /// <summary>Brings the keyboard out under the menu, on every headset, with the sign's text in it; what's typed shows on the sign for everyone.</summary>
+    public void OpenKeyboard()
+    {
+        if (m_Sign == null)
+            return;
+        m_Sign.SetKeyboardOpen(true);
+        SyncKeyboard();
+    }
+
+    /// <summary>Puts the keyboard away, on every headset.</summary>
     public void CloseKeyboard()
     {
+        m_Sign?.SetKeyboardOpen(false);
+        SyncKeyboard();
+    }
+
+    /// <summary>
+    /// The keyboard on this headset as it is for everyone: out or away, and holding the sign's text (so what another
+    /// player types shows in it too).
+    /// </summary>
+    void SyncKeyboard()
+    {
+        if (m_Keyboard == null || m_Sign == null)
+            return;
+        bool want = m_Sign.keyboardOpenForAll && isActiveAndEnabled;
+        if (want && !keyboardOpen)
+            OpenKeyboardHere();
+        else if (!want && keyboardOpen)
+            CloseKeyboardHere();
+        else if (want && m_CheckText && m_Keyboard.text != m_Sign.text)
+        {
+            // Typed on another headset (this player's own typing is already the sign's text here).
+            m_SyncingText = true;
+            m_Keyboard.Open(m_Sign.text);
+            m_SyncingText = false;
+        }
+    }
+
+    void OpenKeyboardHere()
+    {
+        m_Keyboard.submitOnEnter = false; // Enter starts a new line
+        m_Editing = true;
+        m_SyncingText = true;
+        m_Keyboard.Open(m_Sign.text);
+        m_SyncingText = false;
+        Debug.Log("[Sign] keyboard out to edit the text");
+        Refresh();
+    }
+
+    /// <summary>Puts the keyboard away on this headset only (the menu closing, or the keyboard away for everyone).</summary>
+    public void CloseKeyboardHere()
+    {
         m_Editing = false;
-        if (m_Keyboard != null && m_Keyboard.isOpen)
-            m_Keyboard.Close(false);
+        if (m_Keyboard == null || !m_Keyboard.isOpen)
+            return;
+        m_ClosingHere = true;
+        m_Keyboard.Close(false);
+        m_ClosingHere = false;
     }
 
     void OnKeyboardText(KeyboardTextEventArgs args)
     {
-        if (!m_Editing || m_Sign == null)
+        if (!m_Editing || m_SyncingText || m_Sign == null)
             return;
         m_Sign.SetText(args.keyboardText ?? "");
     }
 
+    // Closed by its own key on this headset: away for everyone.
     void OnKeyboardClosed(KeyboardTextEventArgs args)
     {
         m_Editing = false;
+        if (!m_ClosingHere && m_Sign != null && m_Sign.keyboardOpenForAll)
+            m_Sign.SetKeyboardOpen(false);
         Refresh();
     }
 
@@ -361,9 +468,10 @@ public class TunnelSignPanel : MonoBehaviour
         SetLabel(m_RightButton, Check(s.align == SignStyle.Align.Right) + "Right");
         SetLabel(m_ShadowRow, Check(s.shadow) + "Drop shadow  <color=#AAA>under the letters</color>");
         SetLabel(m_BorderRow, Check(s.border) + "Border");
-        SetLabel(m_TextTab, Check(m_Part == SignStyle.Part.Text) + "Text");
-        SetLabel(m_BorderTab, Check(m_Part == SignStyle.Part.Border) + "Border");
-        SetLabel(m_BackgroundTab, Check(m_Part == SignStyle.Part.Background) + "Background");
+        var part = colorPart;
+        SetLabel(m_TextTab, Check(part == SignStyle.Part.Text) + "Text");
+        SetLabel(m_BorderTab, Check(part == SignStyle.Part.Border) + "Border");
+        SetLabel(m_BackgroundTab, Check(part == SignStyle.Part.Background) + "Background");
         SetLabel(m_EditTextButton, keyboardOpen ? "Done editing" : "Edit text");
         if (m_SaveButton != null)
             SetLabel(m_SaveButton, string.IsNullOrEmpty(m_Sign.saveName) ? "Save" : "Save  <color=#AAA>(replaces its stored copy)</color>");

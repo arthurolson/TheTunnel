@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
 
@@ -38,7 +39,7 @@ using UnityEngine;
 /// before it has), under a name typed on the menu's keyboard, as a file in the 3D Movies folder (see
 /// <see cref="folder"/>).
 /// In a session everyone shares its state, the movie chosen, the sliders, the sites' visibility, the menu's place and
-/// its messages; the host decides bindings, releases and the restart, and keeps the movies people make; each player
+/// its messages, and the New movie menu (open or not, where it is, and everything set on it as it is set); the host decides bindings, releases and the restart, and keeps the movies people make; each player
 /// saves starting states to their own headset.
 /// </summary>
 public class TunnelMovie : NetworkBehaviour
@@ -125,6 +126,17 @@ public class TunnelMovie : NetworkBehaviour
     readonly NetworkVariable<bool> m_PanelMoved = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<Vector3> m_PanelPosition = new(Vector3.zero, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<Quaternion> m_PanelRotation = new(Quaternion.identity, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    // The New movie menu, the same for everyone: open or not, the movie being set on it, whether its name has been
+    // typed, its keyboard out, its notes, where it is and whether someone has moved it by hand.
+    readonly NetworkVariable<bool> m_NewMovieOpen = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<MovieEntry> m_NewMovieDraft = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<bool> m_NewMovieNameTyped = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<bool> m_NewMovieTyping = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<FixedString128Bytes> m_NewMovieNote = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<FixedString128Bytes> m_NewMovieStartNote = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<bool> m_NewMovieMoved = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<Vector3> m_NewMoviePosition = new(Vector3.zero, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<Quaternion> m_NewMovieRotation = new(Quaternion.identity, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     float m_LocalSiteDiameter = k_DefaultSiteDiameter;
     float m_LocalBindingTime = k_DefaultBindingTime;
     MovieDefinition m_LocalMovie = MovieDefinition.AntibodyAction;
@@ -137,6 +149,14 @@ public class TunnelMovie : NetworkBehaviour
     int m_LocalCountdown;
     bool m_LocalPanelMoved;
     Pose m_LocalPanelPose = Pose.identity;
+    bool m_LocalNewMovieOpen, m_LocalNewMovieNameTyped, m_LocalNewMovieTyping, m_LocalNewMovieMoved;
+    MovieEntry m_LocalNewMovieDraft;
+    string m_LocalNewMovieNote = "", m_LocalNewMovieStartNote = "";
+    Pose m_LocalNewMoviePose = Pose.identity;
+    // This player's latest changes to the New movie menu, shown at once until the host's copy comes back with them.
+    MovieEntry m_PendingDraft;
+    ushort m_PendingDraftFields;
+    float m_PendingDraftUntil;
 
     TunnelContainer m_Container;
     TunnelMoviePanel m_Panel;
@@ -321,17 +341,25 @@ public class TunnelMovie : NetworkBehaviour
         {
             m_LocalControls = on;
             if (!on)
+            {
                 m_LocalPanelMoved = false;
+                m_LocalNewMovieOpen = false;
+                m_LocalNewMovieTyping = false;
+            }
         }
     }
 
-    // Hidden, its menu goes back beside the container next time it's shown.
+    // Hidden, its menu goes back beside the container next time it's shown, and the New movie menu closes.
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     void SetControlsRpc(bool on)
     {
         m_Controls.Value = on;
         if (!on)
+        {
             m_PanelMoved.Value = false;
+            m_NewMovieOpen.Value = false;
+            m_NewMovieTyping.Value = false;
+        }
     }
 
     public void SetShowSites(bool on)
@@ -1388,6 +1416,271 @@ public class TunnelMovie : NetworkBehaviour
         m_Panel.transform.SetPositionAndRotation(t.position + side * (Extent(side) + m_PanelGap + halfWidth),
             Quaternion.LookRotation(-facing, Vector3.up));
         m_Panel.PlaceKeyboard(0.12f);
+    }
+
+    #endregion
+
+    #region New movie menu
+
+    /// <summary>Whether the New movie menu is open, for everyone (New movie... on any headset opens and closes it).</summary>
+    public bool newMovieOpen => IsSpawned ? m_NewMovieOpen.Value : m_LocalNewMovieOpen;
+
+    /// <summary>
+    /// The movie being set on the New movie menu, the same for everyone (this player's own latest change shown at once,
+    /// until the host's copy has it).
+    /// </summary>
+    public MovieEntry newMovieDraft
+    {
+        get
+        {
+            if (!IsSpawned)
+                return m_LocalNewMovieDraft;
+            var shared = m_NewMovieDraft.Value;
+            if (m_PendingDraftFields == 0 || Time.unscaledTime >= m_PendingDraftUntil)
+                return shared;
+            var shown = MergeDraft(shared, m_PendingDraft, m_PendingDraftFields);
+            if (shown.Equals(shared))
+                m_PendingDraftFields = 0; // the host has it
+            return shown;
+        }
+    }
+
+    /// <summary>Whether someone has typed the New movie's name (choosing another receptor then keeps it).</summary>
+    public bool newMovieNameTyped => IsSpawned ? m_NewMovieNameTyped.Value : m_LocalNewMovieNameTyped;
+
+    /// <summary>Whether the New movie menu's keyboard is out for its name, on every headset.</summary>
+    public bool newMovieTyping => newMovieOpen && (IsSpawned ? m_NewMovieTyping.Value : m_LocalNewMovieTyping);
+
+    /// <summary>The New movie menu's latest note (or ""), and its note about the starting conditions (or "").</summary>
+    public string newMovieNote => IsSpawned ? m_NewMovieNote.Value.ToString() : m_LocalNewMovieNote;
+
+    public string newMovieStartNote => IsSpawned ? m_NewMovieStartNote.Value.ToString() : m_LocalNewMovieStartNote;
+
+    /// <summary>Whether someone has taken the New movie menu by its bar and moved it (it then stays where they put it).</summary>
+    public bool newMovieMoved => IsSpawned ? m_NewMovieMoved.Value : m_LocalNewMovieMoved;
+
+    /// <summary>Where the New movie menu is, for everyone.</summary>
+    public Pose newMoviePose => IsSpawned ? new Pose(m_NewMoviePosition.Value, m_NewMovieRotation.Value) : m_LocalNewMoviePose;
+
+    /// <summary>
+    /// Opens the New movie menu for everyone, set to this movie, with this note about its starting conditions, at
+    /// this place (beside the movie menu as whoever opened it sees it).
+    /// </summary>
+    public void OpenNewMovie(MovieEntry draft, string startNote, Pose pose)
+    {
+        Debug.Log($"[Movie] {name}: New movie menu opened ({(IsSpawned ? "for everyone" : "not connected, here only")})");
+        m_PendingDraftFields = 0;
+        if (IsSpawned)
+        {
+            OpenNewMovieRpc(draft, startNote ?? "", pose.position, pose.rotation);
+            return;
+        }
+        m_LocalNewMovieDraft = draft;
+        m_LocalNewMovieNameTyped = false;
+        m_LocalNewMovieTyping = false;
+        m_LocalNewMovieNote = "";
+        m_LocalNewMovieStartNote = startNote ?? "";
+        m_LocalNewMovieMoved = false;
+        m_LocalNewMoviePose = pose;
+        m_LocalNewMovieOpen = true;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void OpenNewMovieRpc(MovieEntry draft, string startNote, Vector3 position, Quaternion rotation)
+    {
+        m_NewMovieDraft.Value = draft;
+        m_NewMovieNameTyped.Value = false;
+        m_NewMovieTyping.Value = false;
+        m_NewMovieNote.Value = default;
+        m_NewMovieStartNote.Value = Fixed128(startNote);
+        m_NewMovieMoved.Value = false;
+        m_NewMoviePosition.Value = position;
+        m_NewMovieRotation.Value = rotation;
+        m_NewMovieOpen.Value = true;
+    }
+
+    /// <summary>Closes the New movie menu (and its keyboard), for everyone.</summary>
+    public void CloseNewMovie()
+    {
+        Debug.Log($"[Movie] {name}: New movie menu closed ({(IsSpawned ? "for everyone" : "not connected, here only")})");
+        if (IsSpawned)
+            CloseNewMovieRpc();
+        else
+        {
+            m_LocalNewMovieOpen = false;
+            m_LocalNewMovieTyping = false;
+        }
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void CloseNewMovieRpc()
+    {
+        m_NewMovieOpen.Value = false;
+        m_NewMovieTyping.Value = false;
+    }
+
+    /// <summary>
+    /// Changes what is set on the New movie menu, for everyone: only the settings named in <paramref name="fields"/>
+    /// (see <see cref="TunnelNewMoviePanel.DraftFields"/>) are taken from <paramref name="edited"/>, so two players
+    /// changing different settings at once both keep their change.
+    /// </summary>
+    public void EditNewMovie(MovieEntry edited, ushort fields)
+    {
+        if (fields == 0)
+            return;
+        if (!IsSpawned)
+        {
+            m_LocalNewMovieDraft = MergeDraft(m_LocalNewMovieDraft, edited, fields);
+            return;
+        }
+        if (Time.unscaledTime >= m_PendingDraftUntil)
+            m_PendingDraftFields = 0;
+        m_PendingDraft = MergeDraft(m_PendingDraft, edited, fields);
+        m_PendingDraftFields |= fields;
+        m_PendingDraftUntil = Time.unscaledTime + 1.5f;
+        EditNewMovieRpc(edited, fields);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void EditNewMovieRpc(MovieEntry edited, ushort fields)
+    {
+        if (m_NewMovieOpen.Value)
+            m_NewMovieDraft.Value = MergeDraft(m_NewMovieDraft.Value, edited, fields);
+    }
+
+    /// <summary>The settings named in <paramref name="fields"/> taken from <paramref name="from"/>, the rest as in <paramref name="into"/>.</summary>
+    public static MovieEntry MergeDraft(MovieEntry into, MovieEntry from, ushort fields)
+    {
+        var f = (TunnelNewMoviePanel.DraftFields)fields;
+        if ((f & TunnelNewMoviePanel.DraftFields.Name) != 0)
+            into.name = from.name;
+        if ((f & TunnelNewMoviePanel.DraftFields.Receptor) != 0)
+        {
+            into.receptor = from.receptor;
+            into.binder = from.binder;
+            into.pocket = from.pocket;
+        }
+        if ((f & TunnelNewMoviePanel.DraftFields.Magnification) != 0)
+            into.magnification = from.magnification;
+        if ((f & TunnelNewMoviePanel.DraftFields.Receptors) != 0)
+            into.receptors = from.receptors;
+        if ((f & TunnelNewMoviePanel.DraftFields.Binders) != 0)
+            into.binders = from.binders;
+        if ((f & TunnelNewMoviePanel.DraftFields.CaptureRadius) != 0)
+            into.captureRadius = from.captureRadius;
+        if ((f & TunnelNewMoviePanel.DraftFields.SiteDiameter) != 0)
+            into.siteDiameter = from.siteDiameter;
+        if ((f & TunnelNewMoviePanel.DraftFields.BindingTime) != 0)
+            into.bindingTime = from.bindingTime;
+        if ((f & TunnelNewMoviePanel.DraftFields.ColourEffect) != 0)
+            into.colourEffect = from.colourEffect;
+        if ((f & TunnelNewMoviePanel.DraftFields.Colour) != 0)
+            into.colour = from.colour;
+        if ((f & TunnelNewMoviePanel.DraftFields.Viscosity) != 0)
+            into.viscosity = from.viscosity;
+        if ((f & TunnelNewMoviePanel.DraftFields.Temperature) != 0)
+            into.temperature = from.temperature;
+        if ((f & TunnelNewMoviePanel.DraftFields.Motion) != 0)
+            into.motion = from.motion;
+        return into;
+    }
+
+    /// <summary>Marks the New movie's name as typed by someone (or not), for everyone.</summary>
+    public void SetNewMovieNameTyped(bool typed)
+    {
+        if (IsSpawned)
+            NewMovieNameTypedRpc(typed);
+        else
+            m_LocalNewMovieNameTyped = typed;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void NewMovieNameTypedRpc(bool typed) => m_NewMovieNameTyped.Value = typed;
+
+    /// <summary>Brings the New movie menu's keyboard out for its name, or puts it away, on every headset.</summary>
+    public void SetNewMovieTyping(bool typing)
+    {
+        Debug.Log($"[Movie] {name}: New movie keyboard {(typing ? "out" : "put away")} ({(IsSpawned ? "for everyone" : "not connected, here only")})");
+        if (IsSpawned)
+            NewMovieTypingRpc(typing);
+        else
+            m_LocalNewMovieTyping = typing && m_LocalNewMovieOpen;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void NewMovieTypingRpc(bool typing) => m_NewMovieTyping.Value = typing && m_NewMovieOpen.Value;
+
+    /// <summary>A note on the New movie menu (or "" for none), on every headset.</summary>
+    public void SetNewMovieNote(string note)
+    {
+        note ??= "";
+        if (note == newMovieNote)
+            return;
+        if (IsSpawned)
+            NewMovieNoteRpc(note);
+        else
+            m_LocalNewMovieNote = note;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void NewMovieNoteRpc(string note) => m_NewMovieNote.Value = Fixed128(note);
+
+    /// <summary>The New movie menu's note about its starting conditions (or "" for none), on every headset.</summary>
+    public void SetNewMovieStartNote(string note)
+    {
+        note ??= "";
+        if (note == newMovieStartNote)
+            return;
+        if (IsSpawned)
+            NewMovieStartNoteRpc(note);
+        else
+            m_LocalNewMovieStartNote = note;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void NewMovieStartNoteRpc(string note) => m_NewMovieStartNote.Value = Fixed128(note);
+
+    /// <summary>
+    /// Shares where the New movie menu is now, for everyone: while it's carried (often, and it may be skipped) and where
+    /// it's let go (always arrives). <paramref name="byHand"/>: someone took it by its bar (it then no longer goes with
+    /// the movie menu when that is moved).
+    /// </summary>
+    public void SetNewMoviePose(Pose pose, bool final, bool byHand)
+    {
+        if (!IsSpawned)
+        {
+            m_LocalNewMoviePose = pose;
+            if (byHand)
+                m_LocalNewMovieMoved = true;
+            return;
+        }
+        if (final)
+            NewMoviePoseRpc(pose.position, pose.rotation, byHand);
+        else
+            NewMoviePoseMovingRpc(pose.position, pose.rotation, byHand);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void NewMoviePoseRpc(Vector3 position, Quaternion rotation, bool byHand) => StoreNewMoviePose(position, rotation, byHand);
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone, Delivery = RpcDelivery.Unreliable)]
+    void NewMoviePoseMovingRpc(Vector3 position, Quaternion rotation, bool byHand) => StoreNewMoviePose(position, rotation, byHand);
+
+    void StoreNewMoviePose(Vector3 position, Quaternion rotation, bool byHand)
+    {
+        m_NewMoviePosition.Value = position;
+        m_NewMovieRotation.Value = rotation;
+        if (byHand)
+            m_NewMovieMoved.Value = true;
+    }
+
+    // At most 125 bytes of UTF-8 fit in a shared note: cut by characters until it does.
+    static FixedString128Bytes Fixed128(string text)
+    {
+        text ??= "";
+        while (System.Text.Encoding.UTF8.GetByteCount(text) > 125)
+            text = text.Substring(0, text.Length - 1);
+        return new FixedString128Bytes(text);
     }
 
     #endregion

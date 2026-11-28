@@ -20,10 +20,11 @@ using UnityEngine;
 /// The portrait always fills the box, a small margin all round, and keeps its own proportions: scaling the box scales
 /// it with it, never stretched. Choosing another gives the box its proportions, keeping its largest side (set into a
 /// wall, its front stays on the wall), or making it a set height for assets captured at no particular scale.
-/// In a session only the asset's id and height are shared, and the box's size and pose come from its network
-/// transform; each headset loads the model itself, from the app, its own copy or a download, and shows the asset's
-/// picture and how the download is going until then. If it can't be loaded on one headset, that headset says why in
-/// the box, and the box still moves and scales with everyone else's. Works locally when not connected.
+/// In a session the asset's id and height are shared, and so is its menu (shown or hidden, and where it is: facing
+/// whoever last used it), and the box's size and pose come from its network transform; each headset loads the model
+/// itself, from the app, its own copy or a download, and shows the asset's picture and how the download is going
+/// until then. If it can't be loaded on one headset, that headset says why in the box, and the box still moves and
+/// scales with everyone else's. Works locally when not connected.
 /// </summary>
 [RequireComponent(typeof(TunnelContainer))]
 public class SplatBox : NetworkBehaviour
@@ -53,10 +54,16 @@ public class SplatBox : NetworkBehaviour
     readonly NetworkVariable<bool> m_VideoPaused = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<double> m_VideoAnchor = new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<double> m_VideoPausedAt = new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    // Its menu, the same for everyone: hidden beside a box set into a wall, and the way it faces (in the box's own
+    // frame, so it turns with the box; zero: out of the box's front).
+    readonly NetworkVariable<bool> m_MenuHidden = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<Vector3> m_MenuFacing = new(Vector3.zero, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     bool m_LocalVideoPaused;
     double m_LocalVideoAnchor, m_LocalVideoPausedAt;
     string m_LocalAsset = "";
     float m_LocalHeight;
+    bool m_LocalMenuHidden;
+    Vector3 m_LocalMenuFacing;
 
     TunnelContainer m_Container;
     Transform m_Content;
@@ -108,6 +115,12 @@ public class SplatBox : NetworkBehaviour
     /// <summary>Snapped into a tunnel wall (a mixed reality box): its menu can then be hidden (see <see cref="SplatBoxPanel"/>).</summary>
     public bool isSetInWall => m_Container != null && m_Container.isSetInWall;
 
+    /// <summary>Its menu is hidden (only the small button beside the box shows, while it is set into a wall), for everyone.</summary>
+    public bool menuHidden => IsSpawned ? m_MenuHidden.Value : m_LocalMenuHidden;
+
+    /// <summary>The way its menu faces, in the box's own frame (zero: out of the box's front), the same for everyone.</summary>
+    Vector3 menuFacing => IsSpawned ? m_MenuFacing.Value : m_LocalMenuFacing;
+
     /// <summary>It shows a video (loaded and ready to play).</summary>
     public bool hasVideo => m_Video != null;
 
@@ -155,6 +168,8 @@ public class SplatBox : NetworkBehaviour
             ShareCatalog();
             m_VideoPaused.Value = false;
             m_VideoAnchor.Value = Now;
+            m_MenuHidden.Value = m_LocalMenuHidden;
+            m_MenuFacing.Value = m_LocalMenuFacing;
         }
         else
             FollowCatalog();
@@ -250,6 +265,59 @@ public class SplatBox : NetworkBehaviour
         }
     }
 
+    /// <summary>Hides its menu (only the small button beside the box stays) or brings it back, for everyone.</summary>
+    public void SetMenuHidden(bool hidden)
+    {
+        Debug.Log($"[Splat] {name}: menu {(hidden ? "hidden" : "shown")} ({(IsSpawned ? "for everyone" : "not connected, here only")})");
+        if (IsSpawned)
+            MenuHiddenRpc(hidden);
+        else
+            m_LocalMenuHidden = hidden;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void MenuHiddenRpc(bool hidden) => m_MenuHidden.Value = hidden;
+
+    /// <summary>
+    /// Turns its menu to face this headset's player, for everyone: called when they use the menu, so it faces whoever
+    /// used it last. (Set into a wall, the menu lies on the wall whatever this says.)
+    /// </summary>
+    public void FaceMenuToMe()
+    {
+        var head = Camera.main != null ? Camera.main.transform.position : transform.position - transform.forward;
+        var toHead = head - transform.position;
+        toHead.y = 0f;
+        if (toHead.sqrMagnitude < 1e-4f)
+            return;
+        var local = transform.InverseTransformDirection(toHead.normalized);
+        // Barely turned: not worth sending.
+        if (Vector3.Angle(MenuFacingWorld(), toHead) < 10f)
+            return;
+        if (IsSpawned)
+            MenuFacingRpc(local);
+        else
+            m_LocalMenuFacing = local;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void MenuFacingRpc(Vector3 local) => m_MenuFacing.Value = local;
+
+    // The way its menu faces, level, in the world: as shared, or out of the box's front until someone has used it.
+    Vector3 MenuFacingWorld()
+    {
+        var t = transform;
+        var local = menuFacing;
+        var facing = local.sqrMagnitude > 1e-6f ? t.TransformDirection(local) : t.forward;
+        facing.y = 0f;
+        if (facing.sqrMagnitude < 1e-6f)
+        {
+            // The box is tipped so its front points up or down: its top or bottom, level, instead.
+            facing = t.up;
+            facing.y = 0f;
+        }
+        return facing.sqrMagnitude > 1e-6f ? facing.normalized : Vector3.forward;
+    }
+
     void OnHeightChanged(float previous, float current)
     {
         if (IsOwner)
@@ -317,6 +385,8 @@ public class SplatBox : NetworkBehaviour
         if (id == m_ContentFor)
             return;
         m_ContentFor = id;
+        // Every headset's menu says the same (how loading goes on this headset is the status, shown first until then).
+        message = string.IsNullOrEmpty(id) ? "" : $"Showing {TunnelAssets.DisplayName(id)}";
         int loading = ++m_Loading;
         if (m_Content != null)
             Destroy(m_Content.gameObject);
@@ -553,8 +623,9 @@ public class SplatBox : NetworkBehaviour
     }
 
     /// <summary>
-    /// Its menu beside the box, on its right as whoever looks at it sees it, half way up, facing them (turning to face
-    /// them smoothly). On a mixed reality box set into a wall it lies flat on the wall, right of the box's front.
+    /// Its menu beside the box, half way up, in the same place for everyone: facing whoever last used it (out of the
+    /// box's front until someone has), on the box's right as they see it, turning with the box and turning smoothly to
+    /// a new player. On a mixed reality box set into a wall it lies flat on the wall, right of the box's front.
     /// </summary>
     void PlacePanel(bool snap)
     {
@@ -575,16 +646,10 @@ public class SplatBox : NetworkBehaviour
             return;
         }
 
-        var head = Camera.main != null ? Camera.main.transform.position : t.position - t.forward;
-        var toHead = head - t.position;
-        toHead.y = 0f;
-        if (toHead.sqrMagnitude > 1e-4f)
-        {
-            toHead.Normalize();
-            m_Facing = snap || m_Facing == Vector3.zero ? toHead : Vector3.Slerp(m_Facing, toHead, 1f - Mathf.Exp(-3f * Time.deltaTime)).normalized;
-        }
-        var facing = m_Facing != Vector3.zero ? m_Facing : -t.forward;
-        var side = -Vector3.Cross(Vector3.up, facing).normalized; // their right
+        var target = MenuFacingWorld();
+        m_Facing = snap || m_Facing == Vector3.zero ? target : Vector3.Slerp(m_Facing, target, 1f - Mathf.Exp(-6f * Time.deltaTime)).normalized;
+        var facing = m_Facing != Vector3.zero ? m_Facing : target;
+        var side = -Vector3.Cross(Vector3.up, facing).normalized; // the right of whoever it faces
         m_Panel.transform.SetPositionAndRotation(t.position + side * (Extent(side) + m_PanelGap + halfWidth),
             Quaternion.LookRotation(-facing, Vector3.up));
     }

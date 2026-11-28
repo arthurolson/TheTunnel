@@ -11,10 +11,12 @@ using UnityEngine.UI;
 /// TS Menu's Molecules list, and its images and videos in the Viewer's. Pressing a row shows that portrait in the box,
 /// for everyone. A row says how large a download is the first time, and when a mesh has so many triangles the headset may
 /// slow down. Under the rows: how loading is going on this headset, and the credit an asset's license asks for.
-/// Its rows are made from the library and the repository's list, so an asset added to the repository appears here with
-/// no new build. Each headset has its own copy, facing its player. While the box is snapped into a tunnel wall, a
-/// small button beside the box hides the menu and brings it back (on this headset). Made by Tunnel > Containers > Build
-/// Containers.
+/// Its rows are made from the library and the repository's list (the host's, in a session), so an asset added to the
+/// repository appears here with no new build. In a session it is the same menu for everyone, in the same place: it
+/// faces whoever last used it (see <see cref="SplatBox.FaceMenuToMe"/>), and its rows, the one checked and the video
+/// button are the same on every headset; only the loading line can differ, as each headset loads the portrait itself.
+/// While the box is snapped into a tunnel wall, a small button beside the box hides the menu and brings it back, for
+/// everyone. Made by Tunnel > Containers > Build Containers.
 /// </summary>
 public class SplatBoxPanel : MonoBehaviour
 {
@@ -63,7 +65,6 @@ public class SplatBoxPanel : MonoBehaviour
     TMP_Text m_VideoLabel;
     RectTransform m_ToggleCanvas;
     TMP_Text m_ToggleLabel;
-    bool m_Hidden;
     bool? m_ToggleShownFor;
     bool? m_VideoShownFor;
     readonly List<Row> m_Rows = new();
@@ -84,13 +85,19 @@ public class SplatBoxPanel : MonoBehaviour
         MakeHideToggle();
     }
 
-    /// <summary>Hides the menu (only the small button beside the box stays) or brings it back, on this headset.</summary>
+    /// <summary>Hides the menu (only the small button beside the box stays) or brings it back, for everyone.</summary>
     public void SetHidden(bool hidden)
     {
-        m_Hidden = hidden;
+        if (m_Box == null)
+            return;
+        m_Box.SetMenuHidden(hidden);
         m_ToggleShownFor = null;
-        Debug.Log($"[Splat] {name}: menu {(hidden ? "hidden" : "shown")}");
     }
+
+    bool hidden => m_Box != null && m_Box.menuHidden;
+
+    // A row or button pressed on this headset: the menu turns to face this player, for everyone.
+    void Used() => m_Box?.FaceMenuToMe();
 
     /// <summary>
     /// The small button that hides and shows the menu: a little canvas of the menu's own look (its background), with
@@ -118,7 +125,7 @@ public class SplatBoxPanel : MonoBehaviour
         rect.anchoredPosition = Vector2.zero;
         rect.sizeDelta = new Vector2(166f, 50f);
         button.onClick.RemoveAllListeners();
-        button.onClick.AddListener(() => SetHidden(!m_Hidden));
+        button.onClick.AddListener(() => SetHidden(!hidden));
         m_ToggleLabel = button.GetComponentInChildren<TMP_Text>(true);
         if (m_ToggleLabel != null)
         {
@@ -136,15 +143,16 @@ public class SplatBoxPanel : MonoBehaviour
         bool inWall = m_Box.isSetInWall;
         if (m_ToggleCanvas.gameObject.activeSelf != inWall)
             m_ToggleCanvas.gameObject.SetActive(inWall);
-        bool showMenu = !inWall || !m_Hidden;
+        bool isHidden = hidden;
+        bool showMenu = !inWall || !isHidden;
         if (m_Canvas.gameObject.activeSelf != showMenu)
             m_Canvas.gameObject.SetActive(showMenu);
         if (!inWall)
             return;
-        if (m_ToggleShownFor != m_Hidden && m_ToggleLabel != null)
+        if (m_ToggleShownFor != isHidden && m_ToggleLabel != null)
         {
-            m_ToggleShownFor = m_Hidden;
-            m_ToggleLabel.text = m_Hidden ? "Show menu" : "Hide menu"; // the menu's font has no arrows
+            m_ToggleShownFor = isHidden;
+            m_ToggleLabel.text = isHidden ? "Show menu" : "Hide menu"; // the menu's font has no arrows
         }
         // At the menu's top corner nearest the box (its left, as the menu is on the box's right).
         float s = m_Canvas.localScale.x;
@@ -197,7 +205,11 @@ public class SplatBoxPanel : MonoBehaviour
                 var rect = (RectTransform)button.transform;
                 rect.anchoredPosition = new Vector2(0f, -(m_Top + m_RowHeight * (i + 0.5f)));
                 string id = row.assetId;
-                button.onClick.AddListener(() => m_Box?.Choose(id));
+                button.onClick.AddListener(() =>
+                {
+                    Used();
+                    m_Box?.Choose(id);
+                });
                 row.button = button;
                 row.label = button.GetComponentInChildren<TMP_Text>(true);
                 if (row.label != null)
@@ -215,7 +227,11 @@ public class SplatBoxPanel : MonoBehaviour
         {
             m_VideoButton = Instantiate(m_RowTemplate, m_RowTemplate.transform.parent, false);
             m_VideoButton.name = "Video Play Pause";
-            m_VideoButton.onClick.AddListener(() => m_Box?.SetVideoPaused(!m_Box.videoPaused));
+            m_VideoButton.onClick.AddListener(() =>
+            {
+                Used();
+                m_Box?.SetVideoPaused(!m_Box.videoPaused);
+            });
             m_VideoLabel = m_VideoButton.GetComponentInChildren<TMP_Text>(true);
         }
         if (m_VideoButton != null)

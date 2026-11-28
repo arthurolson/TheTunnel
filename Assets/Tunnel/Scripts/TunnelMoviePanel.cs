@@ -10,9 +10,9 @@ using UnityEngine.XR.Interaction.Toolkit.Samples.SpatialKeyboard;
 /// A container's 3D movie menu (see <see cref="TunnelMovie"/>), shown beside the container. Its top row chooses the
 /// movie from every one there is (the two built in, Antibody action and Ligand binding, then those people made), with ◄
 /// and ► (or a tap on the name for the next); choosing another while one plays stops it. Under it, New movie... opens
-/// the New movie menu beside this one (see <see cref="TunnelNewMoviePanel"/>), and Delete movie deletes the movie
-/// chosen, for everyone, if someone made it (a second tap confirms; the built-in two can't be deleted). The picker shows
-/// each movie's magnification (Ligand binding ×20); choosing a movie sets the Molecules list's Magnification to it, and
+/// the New movie menu beside this one, for everyone (see <see cref="TunnelNewMoviePanel"/>), and Delete movie deletes
+/// the movie chosen, for everyone, if someone made it (a second tap confirms; the built-in two can't be deleted). The
+/// picker shows each movie's magnification (Ligand binding ×20); choosing a movie sets the Molecules list's Magnification to it, and
 /// when molecules in the container are at another size the status says so ("EGFR here is ×10; this movie is ×20") and
 /// Match size, between New movie... and Delete, makes them the movie's size for everyone (before Start). Then Start,
 /// Pause, Play, Play again
@@ -250,8 +250,9 @@ public class TunnelMoviePanel : MonoBehaviour
 
     void OnDisable()
     {
+        // Put away here only (the controls hidden for everyone close it for everyone; see TunnelMovie.SetControls).
         if (m_NewMovie != null)
-            m_NewMovie.Close();
+            m_NewMovie.HideHere();
         if (m_Keyboard != null && m_Keyboard.isOpen)
             m_Keyboard.Close(false);
         m_Saving = null;
@@ -301,6 +302,8 @@ public class TunnelMoviePanel : MonoBehaviour
         PlaceKeyboard(0.12f);
         m_Movie.SetPanelPose(pose, true);
         m_OwnPoseUntil = Time.unscaledTime + 1f;
+        if (m_NewMovie != null)
+            m_NewMovie.GoBesideMenu(true);
         if (onWall)
             XRMultiplayer.PlayerHudNotification.Instance?.ShowText($"{m_Movie.title} menu on the wall: take it by its bar to move it", 2f);
         return onWall;
@@ -313,6 +316,8 @@ public class TunnelMoviePanel : MonoBehaviour
             return;
         m_NextShare = Time.unscaledTime + 1f / 15f;
         m_Movie.SetPanelPose(new Pose(transform.position, transform.rotation), false);
+        if (m_NewMovie != null)
+            m_NewMovie.GoBesideMenu(false);
     }
 
     #endregion
@@ -339,28 +344,46 @@ public class TunnelMoviePanel : MonoBehaviour
         m_NextRefresh = 0f;
     }
 
-    /// <summary>Opens the New movie menu beside this one (or puts it away if it is open).</summary>
+    /// <summary>Opens the New movie menu beside this one, for everyone (or puts it away for everyone if it is open).</summary>
     public void ToggleNewMovie()
     {
         if (m_Movie == null)
             return;
-        if (m_NewMovie != null && m_NewMovie.gameObject.activeSelf)
+        if (m_Movie.newMovieOpen)
+            m_Movie.CloseNewMovie();
+        else if (MakeNewMovie())
+            m_NewMovie.Open(m_Movie, this);
+        SyncNewMovie();
+        m_NextRefresh = 0f;
+    }
+
+    // The New movie menu on this headset, made (hidden) the first time it's wanted.
+    bool MakeNewMovie()
+    {
+        if (m_NewMovie != null)
+            return true;
+        if (m_NewMoviePrefab == null)
         {
-            m_NewMovie.Close();
-            m_NextRefresh = 0f;
+            m_Note = "No New movie menu in this build.";
+            return false;
+        }
+        m_NewMovie = Instantiate(m_NewMoviePrefab);
+        m_NewMovie.name = $"{name} New Movie Menu";
+        m_NewMovie.gameObject.SetActive(false);
+        return true;
+    }
+
+    // The New movie menu shown or hidden on this headset as it is for everyone.
+    void SyncNewMovie()
+    {
+        bool want = m_Movie != null && m_Movie.newMovieOpen && isActiveAndEnabled;
+        bool shown = m_NewMovie != null && m_NewMovie.gameObject.activeSelf;
+        if (want == shown)
             return;
-        }
-        if (m_NewMovie == null)
-        {
-            if (m_NewMoviePrefab == null)
-            {
-                m_Note = "No New movie menu in this build.";
-                return;
-            }
-            m_NewMovie = Instantiate(m_NewMoviePrefab);
-            m_NewMovie.name = $"{name} New Movie Menu";
-        }
-        m_NewMovie.Open(m_Movie, this);
+        if (!want)
+            m_NewMovie.HideHere();
+        else if (MakeNewMovie())
+            m_NewMovie.ShowHere(m_Movie, this);
         m_NextRefresh = 0f;
     }
 
@@ -460,6 +483,7 @@ public class TunnelMoviePanel : MonoBehaviour
 
     void Update()
     {
+        SyncNewMovie();
         ShareWhileHeld();
         if (m_Movie != null && (m_Movie.definition.id != m_MovieShown || m_Movie.definition.pocket != m_PocketShown))
         {
@@ -495,7 +519,7 @@ public class TunnelMoviePanel : MonoBehaviour
         SetRow(m_ScenarioRow, $"<b>{movie.name}{size}</b>  <color=#AAA>· {where}{(running ? ", ◄ ► stops it" : "")}</color>", list.Count > 1);
         SetRow(m_PrevMovieButton, "◄", list.Count > 1);
         SetRow(m_NextMovieButton, "►", list.Count > 1);
-        bool menuOpen = m_NewMovie != null && m_NewMovie.gameObject.activeSelf;
+        bool menuOpen = m_Movie.newMovieOpen;
         SetRow(m_NewMovieRow, menuOpen ? "<color=#7F7>New movie...</color>" : "New movie...", true);
         bool canMatch = m_Movie.canMatchSize;
         SetRow(m_MatchSizeRow, canMatch ? $"Match {movie.sizeLabel}" : "Match size", canMatch);

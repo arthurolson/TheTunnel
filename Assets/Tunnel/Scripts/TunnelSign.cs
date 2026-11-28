@@ -18,7 +18,9 @@ using UnityEngine.XR.Templates.MRTTabletopAssets;
 /// off again). Its text can run over several lines; its font, regular / bold / italic, drop shadow, colours, border
 /// and background are set on its own menu (see <see cref="TunnelSignPanel"/>), opened by the small Edit button at its
 /// lower right corner. Save keeps its text and style on the host (see <see cref="SignStore"/>) to call up again later.
-/// In a session everyone sees the same sign: text, style, size and place. Works locally when not connected.
+/// In a session everyone sees the same sign: text, style, size and place, and the same menu: the Edit button on any
+/// headset opens or closes it for everyone, and what is chosen on it (the colour tab, the keyboard being out, where
+/// the font list is scrolled) is the same on every headset. Works locally when not connected.
 /// </summary>
 public class TunnelSign : NetworkBehaviour
 {
@@ -71,12 +73,21 @@ public class TunnelSign : NetworkBehaviour
     readonly NetworkVariable<FixedString4096Bytes> m_SharedText = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<SignStyle> m_SharedStyle = new(SignStyle.Default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<FixedString128Bytes> m_SharedSaveName = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    readonly NetworkVariable<ulong> m_SharedMenuFor = new(ulong.MaxValue, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    // Its menu, the same for everyone: open or not, the colour chooser's part, the keyboard out, the font list's scroll.
+    readonly NetworkVariable<bool> m_SharedMenuOpen = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<byte> m_SharedMenuPart = new((byte)SignStyle.Part.Text, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<bool> m_SharedKeyboardOpen = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<float> m_SharedFontScroll = new(1f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<FixedString512Bytes> m_SharedMessage = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
     string m_LocalText = "New sign";
     SignStyle m_LocalStyle = SignStyle.Default;
     string m_LocalSaveName = "";
-    ulong m_LocalMenuFor = ulong.MaxValue;
+    bool m_LocalMenuOpen;
+    SignStyle.Part m_LocalMenuPart = SignStyle.Part.Text;
+    bool m_LocalKeyboardOpen;
+    float m_LocalFontScroll = 1f;
+    string m_LocalMessage = "";
 
     // This player's latest change, shown at once until the host's copy comes back with it.
     string m_PendingText;
@@ -119,10 +130,23 @@ public class TunnelSign : NetworkBehaviour
     /// <summary>The name it's stored under in the Signage list ("" until it's first saved).</summary>
     public string saveName => IsSpawned ? m_SharedSaveName.Value.ToString() : m_LocalSaveName;
 
-    /// <summary>Its latest message, for its menu.</summary>
-    public string message { get; private set; } = "";
+    /// <summary>Its latest message, for its menu, the same on every headset.</summary>
+    public string message => IsSpawned ? m_SharedMessage.Value.ToString() : m_LocalMessage;
 
+    /// <summary>Whether its menu is shown on this headset.</summary>
     public bool menuOpen => m_Menu != null && m_Menu.gameObject.activeSelf;
+
+    /// <summary>Whether its menu is open for everyone (the Edit button on any headset opens and closes it).</summary>
+    public bool menuOpenForAll => IsSpawned ? m_SharedMenuOpen.Value : m_LocalMenuOpen;
+
+    /// <summary>Which part its menu's colour chooser colours, the same on every headset.</summary>
+    public SignStyle.Part menuPart => IsSpawned ? (SignStyle.Part)m_SharedMenuPart.Value : m_LocalMenuPart;
+
+    /// <summary>Whether its menu's keyboard is out, on every headset.</summary>
+    public bool keyboardOpenForAll => menuOpenForAll && (IsSpawned ? m_SharedKeyboardOpen.Value : m_LocalKeyboardOpen);
+
+    /// <summary>Where its menu's font list is scrolled (1 the top, 0 the bottom), the same on every headset.</summary>
+    public float fontScroll => IsSpawned ? m_SharedFontScroll.Value : m_LocalFontScroll;
 
     public TunnelSignPanel menu => m_Menu;
 
@@ -161,18 +185,13 @@ public class TunnelSign : NetworkBehaviour
         if (!all.Contains(this))
             all.Add(this);
         Apply();
-        if (m_Menu != null && m_MenuWasOpen)
-            m_Menu.gameObject.SetActive(true);
+        SyncMenu(); // its menu comes back if it is open for everyone
     }
-
-    bool m_MenuWasOpen;
 
     void OnDisable()
     {
         all.Remove(this);
-        m_MenuWasOpen = menuOpen;
-        if (m_Menu != null)
-            m_Menu.gameObject.SetActive(false);
+        HideMenuHere();
     }
 
     public override void OnNetworkSpawn()
@@ -184,14 +203,18 @@ public class TunnelSign : NetworkBehaviour
             m_SharedText.Value = ToShared(m_LocalText);
             m_SharedStyle.Value = m_LocalStyle;
             m_SharedSaveName.Value = new FixedString128Bytes(Fit(m_LocalSaveName, 120));
-            m_SharedMenuFor.Value = m_LocalMenuFor;
+            m_SharedMenuOpen.Value = m_LocalMenuOpen;
+            m_SharedMenuPart.Value = (byte)m_LocalMenuPart;
+            m_SharedKeyboardOpen.Value = m_LocalMenuOpen && m_LocalKeyboardOpen;
+            m_SharedFontScroll.Value = m_LocalFontScroll;
         }
         m_SharedText.OnValueChanged += OnTextChanged;
         m_SharedStyle.OnValueChanged += OnStyleChanged;
         m_SharedSaveName.OnValueChanged += OnSaveNameChanged;
-        m_SharedMenuFor.OnValueChanged += OnMenuForChanged;
+        m_SharedMenuOpen.OnValueChanged += OnMenuOpenChanged;
+        m_SharedMessage.OnValueChanged += OnMessageChanged;
         Apply();
-        OpenMenuIfMine(m_SharedMenuFor.Value);
+        SyncMenu();
         Debug.Log($"[Sign] \"{FirstLine(text)}\" appeared for everyone at {transform.position:F2}");
     }
 
@@ -200,7 +223,8 @@ public class TunnelSign : NetworkBehaviour
         m_SharedText.OnValueChanged -= OnTextChanged;
         m_SharedStyle.OnValueChanged -= OnStyleChanged;
         m_SharedSaveName.OnValueChanged -= OnSaveNameChanged;
-        m_SharedMenuFor.OnValueChanged -= OnMenuForChanged;
+        m_SharedMenuOpen.OnValueChanged -= OnMenuOpenChanged;
+        m_SharedMessage.OnValueChanged -= OnMessageChanged;
         base.OnNetworkDespawn();
     }
 
@@ -236,26 +260,21 @@ public class TunnelSign : NetworkBehaviour
 
     void OnSaveNameChanged(FixedString128Bytes previous, FixedString128Bytes current) => changed?.Invoke();
 
-    void OnMenuForChanged(ulong previous, ulong current) => OpenMenuIfMine(current);
-
-    void OpenMenuIfMine(ulong player)
-    {
-        if (IsSpawned && player != ulong.MaxValue && NetworkManager != null && player == NetworkManager.LocalClientId)
-            OpenMenu();
-    }
+    void OnMenuOpenChanged(bool previous, bool current) => SyncMenu();
 
     #region Setting up and changing
 
     /// <summary>
     /// Sets a new sign's text, style, stored name and size before it appears (by the Signage list, on the host or
-    /// when not connected); <paramref name="menuFor"/> is the player whose menu opens on it (ulong.MaxValue: nobody).
+    /// when not connected); <paramref name="menuFor"/> is the player who made it (ulong.MaxValue: nobody), and its menu
+    /// then opens, for everyone.
     /// </summary>
     public void Configure(string newText, SignStyle newStyle, string newSaveName, float scale, ulong menuFor)
     {
         m_LocalText = Limit(newText);
         m_LocalStyle = newStyle.Clamped();
         m_LocalSaveName = newSaveName ?? "";
-        m_LocalMenuFor = menuFor;
+        m_LocalMenuOpen = menuFor != ulong.MaxValue;
         transform.localScale = Vector3.one * Mathf.Clamp(scale, 0.05f, 50f);
         if (isActiveAndEnabled)
             Apply();
@@ -531,6 +550,7 @@ public class TunnelSign : NetworkBehaviour
 
     void LateUpdate()
     {
+        SyncMenu();
         RideWithWall();
         PlaceEditButton();
         bool show = TunnelSignageMenu.editButtonsShown || menuOpen;
@@ -668,16 +688,88 @@ public class TunnelSign : NetworkBehaviour
 
     #region Menu
 
-    public void ToggleMenu()
+    /// <summary>The Edit button: opens its menu for everyone, or closes it for everyone.</summary>
+    public void ToggleMenu() => SetMenuOpen(!menuOpenForAll);
+
+    /// <summary>Opens its menu beside it, for everyone.</summary>
+    public void OpenMenu() => SetMenuOpen(true);
+
+    /// <summary>Closes its menu (and its keyboard), for everyone.</summary>
+    public void CloseMenu() => SetMenuOpen(false);
+
+    void SetMenuOpen(bool open)
     {
-        if (menuOpen)
-            CloseMenu();
+        Debug.Log($"[Sign] \"{FirstLine(text)}\": menu {(open ? "opened" : "closed")} ({(IsSpawned ? "for everyone" : "not connected, here only")})");
+        if (IsSpawned)
+            MenuOpenRpc(open);
         else
-            OpenMenu();
+        {
+            m_LocalMenuOpen = open;
+            if (!open)
+                m_LocalKeyboardOpen = false;
+            SyncMenu();
+        }
     }
 
-    /// <summary>Opens its menu beside it, on this headset only.</summary>
-    public void OpenMenu()
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void MenuOpenRpc(bool open)
+    {
+        m_SharedMenuOpen.Value = open;
+        if (!open)
+            m_SharedKeyboardOpen.Value = false;
+    }
+
+    /// <summary>Chooses what its menu's colour chooser colours (the letters, the border or the background), for everyone.</summary>
+    public void SetMenuPart(SignStyle.Part part)
+    {
+        if (IsSpawned)
+            MenuPartRpc((byte)part);
+        else
+            m_LocalMenuPart = part;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void MenuPartRpc(byte part) => m_SharedMenuPart.Value = (byte)Mathf.Clamp(part, (int)SignStyle.Part.Text, (int)SignStyle.Part.Background);
+
+    /// <summary>Brings its menu's keyboard out (to edit the text) or puts it away, on every headset.</summary>
+    public void SetKeyboardOpen(bool open)
+    {
+        Debug.Log($"[Sign] \"{FirstLine(text)}\": keyboard {(open ? "out" : "put away")} ({(IsSpawned ? "for everyone" : "not connected, here only")})");
+        if (IsSpawned)
+            KeyboardOpenRpc(open);
+        else
+            m_LocalKeyboardOpen = open && m_LocalMenuOpen;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void KeyboardOpenRpc(bool open) => m_SharedKeyboardOpen.Value = open && m_SharedMenuOpen.Value;
+
+    /// <summary>Scrolls its menu's font list to here (1 the top, 0 the bottom), on every headset.</summary>
+    public void SetFontScroll(float position)
+    {
+        position = Mathf.Clamp01(position);
+        if (IsSpawned)
+            FontScrollRpc(position);
+        else
+            m_LocalFontScroll = position;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void FontScrollRpc(float position) => m_SharedFontScroll.Value = Mathf.Clamp01(position);
+
+    // Shows or hides its menu on this headset as it is for everyone.
+    void SyncMenu()
+    {
+        bool want = menuOpenForAll && isActiveAndEnabled;
+        if (want == menuOpen)
+            return;
+        if (want)
+            ShowMenuHere();
+        else
+            HideMenuHere();
+    }
+
+    void ShowMenuHere()
     {
         if (m_MenuPrefab == null)
             return;
@@ -692,13 +784,12 @@ public class TunnelSign : NetworkBehaviour
         m_Menu.Refresh(true);
     }
 
-    public void CloseMenu()
+    void HideMenuHere()
     {
-        if (m_Menu != null)
-        {
-            m_Menu.CloseKeyboard();
-            m_Menu.gameObject.SetActive(false);
-        }
+        if (m_Menu == null)
+            return;
+        m_Menu.CloseKeyboardHere();
+        m_Menu.gameObject.SetActive(false);
     }
 
     /// <summary>Its menu on its right, in its plane, just in front of it (so on a wall it lies on the wall too).</summary>
@@ -750,21 +841,30 @@ public class TunnelSign : NetworkBehaviour
 
     #endregion
 
-    /// <summary>A message on everyone's copy of its menu.</summary>
+    /// <summary>A message on its menu, on every headset (and for a player who joins later).</summary>
     public void ShareMessage(string value)
     {
-        if (IsSpawned)
-            StatusRpc(value);
-        else
+        value = Fit(value, 500);
+        if (!IsSpawned)
             SetMessage(value);
+        else if (IsServer)
+            m_SharedMessage.Value = new FixedString512Bytes(value);
+        else
+            MessageRpc(value);
     }
 
-    [Rpc(SendTo.Everyone, InvokePermission = RpcInvokePermission.Everyone)]
-    void StatusRpc(string value) => SetMessage(value);
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void MessageRpc(string value) => m_SharedMessage.Value = new FixedString512Bytes(Fit(value, 500));
+
+    void OnMessageChanged(FixedString512Bytes previous, FixedString512Bytes current)
+    {
+        if (m_Menu != null)
+            m_Menu.Refresh();
+    }
 
     void SetMessage(string value)
     {
-        message = value;
+        m_LocalMessage = value;
         if (m_Menu != null)
             m_Menu.Refresh();
     }

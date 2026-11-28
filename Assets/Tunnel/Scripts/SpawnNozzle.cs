@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.XR.Interaction.Toolkit;
@@ -20,8 +21,9 @@ using XRMultiplayer;
 /// the Molecules list). A copy waits while the last one still fills the mouth, so they never start inside each
 /// other. Large models are capped so one spray stays within a triangle budget the headsets can draw (the menu says
 /// "at most N of these"). Pressing the button again while it sprays stops it.
-/// In a session everyone sees the same attached molecule, count, progress and messages. Works locally when not
-/// connected.
+/// In a session everyone sees the same attached molecule, count, progress and messages (a player who joins later
+/// too), and the same menu in the same place: it faces whoever last took the nozzle in hand or pressed Spawn. Works
+/// locally when not connected.
 /// </summary>
 public class SpawnNozzle : NetworkBehaviour
 {
@@ -89,10 +91,16 @@ public class SpawnNozzle : NetworkBehaviour
     readonly NetworkVariable<byte> m_SharedCount = new(k_DefaultCount, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<ushort> m_SharedMade = new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     readonly NetworkVariable<ushort> m_SharedTarget = new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    // Its menu's latest message, and the way the menu faces (level, in the tunnel; zero until it has been set).
+    readonly NetworkVariable<FixedString512Bytes> m_SharedMessage = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    readonly NetworkVariable<Vector3> m_SharedFacing = new(Vector3.zero, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
     MoleculeGravity m_LocalLoaded;
     int m_LocalCount = k_DefaultCount;
     int m_LocalMade, m_LocalTarget;
+    string m_LocalMessage = "";
+    Vector3 m_LocalFacing;
+    float m_NextFacingShare;
 
     // This headset's view of the attached molecule: the one it pins to the cup, and how it sits there.
     MoleculeGravity m_Pinned;
@@ -155,8 +163,11 @@ public class SpawnNozzle : NetworkBehaviour
     /// <summary>The most copies of the attached molecule one spray makes (the triangle budget's limit, at most 100).</summary>
     public int maxCopies => MaxCopies(loaded, PrefabOf(loaded));
 
-    /// <summary>Its latest message, for its menu.</summary>
-    public string message { get; private set; } = "";
+    /// <summary>Its latest message, for its menu, the same on every headset.</summary>
+    public string message => IsSpawned ? m_SharedMessage.Value.ToString() : m_LocalMessage;
+
+    /// <summary>The way its menu faces, level (zero until someone has called it up or used it).</summary>
+    Vector3 menuFacing => IsSpawned ? m_SharedFacing.Value : m_LocalFacing;
 
     void Awake()
     {
@@ -186,6 +197,8 @@ public class SpawnNozzle : NetworkBehaviour
 
     void Start()
     {
+        if (!IsSpawned)
+            FaceMenuToMe(); // here alone, its menu faces this player
         if (m_PanelPrefab != null && m_Panel == null)
         {
             m_Panel = Instantiate(m_PanelPrefab);
@@ -199,13 +212,25 @@ public class SpawnNozzle : NetworkBehaviour
     public override void OnNetworkSpawn()
     {
         base.OnNetworkSpawn();
+        // Its menu faces the way it did when it appeared (toward its back, where whoever called it up stands) until
+        // someone uses it.
+        if (IsServer && m_SharedFacing.Value == Vector3.zero)
+            m_SharedFacing.Value = m_LocalFacing != Vector3.zero ? m_LocalFacing : Level(-transform.forward);
         m_SharedCount.OnValueChanged += OnCountChanged;
+        m_SharedMessage.OnValueChanged += OnMessageChanged;
     }
 
     public override void OnNetworkDespawn()
     {
         m_SharedCount.OnValueChanged -= OnCountChanged;
+        m_SharedMessage.OnValueChanged -= OnMessageChanged;
         base.OnNetworkDespawn();
+    }
+
+    void OnMessageChanged(FixedString512Bytes previous, FixedString512Bytes current)
+    {
+        if (m_Panel != null)
+            m_Panel.Refresh();
     }
 
     public override void OnDestroy()
@@ -228,6 +253,8 @@ public class SpawnNozzle : NetworkBehaviour
     {
         if (TunnelMenu.deleteMode && !(args.interactorObject is XRSocketInteractor))
             TunnelMenu.DeleteGrabbed(this, m_Grab);
+        else if (!(args.interactorObject is XRSocketInteractor))
+            FaceMenuToMe();
     }
 
     #region Attaching
@@ -298,7 +325,7 @@ public class SpawnNozzle : NetworkBehaviour
         var holding = loaded;
         if (holding != null && holding != molecule)
         {
-            StatusRpc($"The nozzle already holds {NameOf(holding)}: pull it off first.");
+            ShareMessage($"The nozzle already holds {NameOf(holding)}: pull it off first.");
             return;
         }
         m_SharedLoaded.Value = reference;
@@ -350,7 +377,7 @@ public class SpawnNozzle : NetworkBehaviour
             return;
         string name = loadedName;
         m_SharedLoaded.Value = default;
-        StatusRpc($"{name} pulled off. Let go of a molecule at the cup to attach it.");
+        ShareMessage($"{name} pulled off. Let go of a molecule at the cup to attach it.");
     }
 
     // The molecule pinned here was taken in hand: it's off the cup.
@@ -705,6 +732,7 @@ public class SpawnNozzle : NetworkBehaviour
         Pin(Wanted());
         HoldPinned();
         ShowRing();
+        FaceHolder();
         if (m_Panel != null && m_Panel.gameObject.activeSelf)
             PlacePanel(false);
     }
@@ -731,44 +759,106 @@ public class SpawnNozzle : NetworkBehaviour
     }
 
     /// <summary>
-    /// Its menu beside it, on its right as whoever looks at it sees it, level with it, upright and facing them
-    /// (turning to face them smoothly), so it reads well however the nozzle is aimed.
+    /// Its menu beside it, level with it, upright, in the same place for everyone: facing whoever last used it (took
+    /// the nozzle in hand or pressed Spawn), on its right as they see it, so it reads well however the
+    /// nozzle is aimed; it turns smoothly when someone else uses it.
     /// </summary>
     void PlacePanel(bool snap)
     {
         var t = transform;
-        var head = Camera.main != null ? Camera.main.transform.position : t.position - t.forward;
-        var toHead = head - t.position;
-        toHead.y = 0f;
-        if (toHead.sqrMagnitude > 1e-4f)
-        {
-            toHead.Normalize();
-            m_Facing = snap || m_Facing == Vector3.zero ? toHead : Vector3.Slerp(m_Facing, toHead, 1f - Mathf.Exp(-3f * Time.deltaTime)).normalized;
-        }
-        var facing = m_Facing != Vector3.zero ? m_Facing : -t.forward;
-        var side = -Vector3.Cross(Vector3.up, facing).normalized; // their right
+        var target = menuFacing;
+        if (target.sqrMagnitude < 1e-6f)
+            target = Level(-t.forward);
+        m_Facing = snap || m_Facing == Vector3.zero ? target : Vector3.Slerp(m_Facing, target, 1f - Mathf.Exp(-6f * Time.deltaTime)).normalized;
+        var facing = m_Facing != Vector3.zero ? m_Facing : target;
+        var side = -Vector3.Cross(Vector3.up, facing).normalized; // the right of whoever it faces
         float reach = 0.1f; // the nozzle's half-length, so the menu clears it however it's turned
         m_Panel.transform.SetPositionAndRotation(t.position + side * (reach + m_PanelGap + m_Panel.width * 0.5f),
             Quaternion.LookRotation(-facing, Vector3.up));
     }
 
-    /// <summary>A message on everyone's copy of its menu.</summary>
-    void ShareMessage(string text)
+    // A direction made level (forward if it points straight up or down).
+    static Vector3 Level(Vector3 direction)
     {
-        if (IsSpawned)
-            StatusRpc(text);
-        else
-            SetMessage(text);
+        direction.y = 0f;
+        return direction.sqrMagnitude > 1e-6f ? direction.normalized : Vector3.forward;
     }
 
-    [Rpc(SendTo.Everyone, InvokePermission = RpcInvokePermission.Everyone)]
-    void StatusRpc(string text) => SetMessage(text);
+    /// <summary>
+    /// Turns its menu to face this headset's player, for everyone: when they take the nozzle in hand or press Spawn
+    /// (and now and then while they carry it about), so it faces whoever used it last.
+    /// </summary>
+    public void FaceMenuToMe()
+    {
+        if (Camera.main == null)
+            return;
+        var toHead = Camera.main.transform.position - transform.position;
+        toHead.y = 0f;
+        if (toHead.sqrMagnitude < 1e-4f)
+            return;
+        toHead.Normalize();
+        // Barely turned: not worth sending.
+        if (menuFacing.sqrMagnitude > 1e-6f && Vector3.Angle(menuFacing, toHead) < 10f)
+            return;
+        if (IsSpawned)
+            FacingRpc(toHead);
+        else
+            m_LocalFacing = toHead;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void FacingRpc(Vector3 facing) => m_SharedFacing.Value = Level(facing);
+
+    // While a hand on this headset carries it about, its menu keeps turning to that player (a few times a second).
+    void FaceHolder()
+    {
+        if (m_Grab == null || !m_Grab.isSelected || Time.unscaledTime < m_NextFacingShare)
+            return;
+        foreach (var interactor in m_Grab.interactorsSelecting)
+            if (interactor is XRSocketInteractor)
+                return;
+        m_NextFacingShare = Time.unscaledTime + 0.3f;
+        FaceMenuToMe();
+    }
+
+    /// <summary>A message on its menu, on every headset (and for a player who joins later).</summary>
+    void ShareMessage(string text)
+    {
+        text = Fit(text ?? "", 500);
+        if (!IsSpawned)
+            SetMessage(text);
+        else if (IsServer)
+            m_SharedMessage.Value = new FixedString512Bytes(text);
+        else
+            MessageRpc(text);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    void MessageRpc(string text) => m_SharedMessage.Value = new FixedString512Bytes(Fit(text ?? "", 500));
 
     void SetMessage(string text)
     {
-        message = text;
+        m_LocalMessage = text;
         if (m_Panel != null)
             m_Panel.Refresh();
+    }
+
+    // Cut to whole characters that fit in this many bytes of UTF-8 (what a shared message holds).
+    static string Fit(string value, int bytes)
+    {
+        if (System.Text.Encoding.UTF8.GetByteCount(value) <= bytes)
+            return value;
+        var sb = new System.Text.StringBuilder();
+        int used = 0;
+        foreach (char c in value)
+        {
+            int n = System.Text.Encoding.UTF8.GetByteCount(c.ToString());
+            if (used + n > bytes)
+                break;
+            sb.Append(c);
+            used += n;
+        }
+        return sb.ToString();
     }
 
 #if UNITY_EDITOR
